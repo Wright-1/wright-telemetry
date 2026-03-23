@@ -1,0 +1,115 @@
+"""Braiins OS REST API collector adapter.
+
+Endpoints used (Braiins OS Public REST API v1.2.0):
+    GET /api/v1/cooling/state        -> CoolingData
+    GET /api/v1/miner/stats          -> HashrateData
+    GET /api/v1/miner/details        -> UptimeData + MinerIdentity
+    GET /api/v1/miner/hw/hashboards  -> HashboardData
+    GET /api/v1/miner/errors         -> ErrorData
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+import requests
+
+from wright_telemetry.collectors.base import MinerCollector
+from wright_telemetry.collectors.factory import CollectorFactory
+from wright_telemetry.models import (
+    CoolingData,
+    ErrorData,
+    HashboardData,
+    HashrateData,
+    MinerIdentity,
+    UptimeData,
+)
+
+logger = logging.getLogger(__name__)
+
+_REQUEST_TIMEOUT = 15  # seconds
+
+
+@CollectorFactory.register("braiins")
+class BraiinsCollector(MinerCollector):
+    """Adapter for miners running Braiins OS / BOS+."""
+
+    def __init__(self, url: str, username: Optional[str] = None, password: Optional[str] = None):
+        super().__init__(url, username, password)
+        self._session = requests.Session()
+        self._token: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Authentication
+    # ------------------------------------------------------------------
+
+    def authenticate(self) -> None:
+        if not self.username:
+            logger.debug("No Braiins credentials configured -- skipping auth for %s", self.url)
+            return
+
+        login_url = f"{self.url}/api/v1/auth/login"
+        payload = {"username": self.username, "password": self.password or ""}
+        try:
+            resp = self._session.post(login_url, json=payload, timeout=_REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            self._token = data.get("token")
+            if self._token:
+                self._session.headers["Authorization"] = f"Bearer {self._token}"
+                logger.info("Authenticated with Braiins miner at %s", self.url)
+            else:
+                logger.warning("Auth response missing token for %s -- continuing without auth", self.url)
+        except requests.RequestException as exc:
+            logger.warning("Auth failed for %s (%s) -- will try requests without auth", self.url, exc)
+
+    def _get(self, path: str) -> dict:
+        """Issue a GET request with automatic 401 retry."""
+        url = f"{self.url}{path}"
+        resp = self._session.get(url, timeout=_REQUEST_TIMEOUT)
+
+        if resp.status_code == 401 and self.username:
+            logger.info("Got 401 from %s -- re-authenticating", url)
+            self.authenticate()
+            resp = self._session.get(url, timeout=_REQUEST_TIMEOUT)
+
+        resp.raise_for_status()
+        return resp.json()
+
+    # ------------------------------------------------------------------
+    # Identity
+    # ------------------------------------------------------------------
+
+    def fetch_identity(self) -> MinerIdentity:
+        raw = self._get("/api/v1/miner/details")
+        return MinerIdentity(
+            uid=raw.get("uid", ""),
+            serial_number=raw.get("serial_number", ""),
+            hostname=raw.get("hostname", ""),
+            mac_address=raw.get("mac_address", ""),
+        )
+
+    # ------------------------------------------------------------------
+    # Metric fetchers
+    # ------------------------------------------------------------------
+
+    def fetch_cooling(self) -> CoolingData:
+        raw = self._get("/api/v1/cooling/state")
+        return CoolingData.from_braiins(raw)
+
+    def fetch_hashrate(self) -> HashrateData:
+        raw = self._get("/api/v1/miner/stats")
+        return HashrateData.from_braiins(raw)
+
+    def fetch_uptime(self) -> UptimeData:
+        raw = self._get("/api/v1/miner/details")
+        return UptimeData.from_braiins(raw)
+
+    def fetch_hashboards(self) -> HashboardData:
+        raw = self._get("/api/v1/miner/hw/hashboards")
+        return HashboardData.from_braiins(raw)
+
+    def fetch_errors(self) -> ErrorData:
+        raw = self._get("/api/v1/miner/errors")
+        return ErrorData.from_braiins(raw)
