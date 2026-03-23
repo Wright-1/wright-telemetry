@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "wright-telemetry"
+version = "0.1.0"
+description = "Collects miner telemetry and sends it to the Wright Fan dashboard"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.31.0",
+    "cryptography>=41.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=6.0",
+    "pytest>=7.0",
+]
+
+[project.scripts]
+wright-telemetry = "wright_telemetry.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["wright_telemetry*"]
