@@ -57,7 +57,6 @@ class BraiinsCollector(MinerCollector):
             data = resp.json()
             self._token = data.get("token")
             if self._token:
-                self._session.headers["Authorization"] = f"Bearer {self._token}"
                 logger.info("Authenticated with Braiins miner at %s", self.url)
             else:
                 logger.warning("Auth response missing token for %s -- continuing without auth", self.url)
