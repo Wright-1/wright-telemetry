@@ -52,14 +52,17 @@ class BraiinsCollector(MinerCollector):
         login_url = f"{self.url}/api/v1/auth/login"
         payload = {"username": self.username, "password": self.password or ""}
         try:
+            # Clear any stale token before logging in so it doesn't ride along
+            # on the login request itself and confuse the miner's session logic.
+            self._session.headers.pop("Authorization", None)
             resp = self._session.post(login_url, json=payload, timeout=_REQUEST_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
-            logger.info("Auth response from %s -- body keys: %s, cookies: %s",
-                        self.url, list(data.keys()), list(self._session.cookies.keys()))
             self._token = data.get("token")
             if self._token:
-                logger.info("Authenticated with Braiins miner at %s", self.url)
+                self._session.headers["Authorization"] = f"Bearer {self._token}"
+                logger.info("Authenticated with Braiins miner at %s (token timeout: %ss)",
+                            self.url, data.get("timeout_s", "?"))
             else:
                 logger.warning("Auth response missing token for %s -- body: %s -- continuing without auth",
                                self.url, data)
