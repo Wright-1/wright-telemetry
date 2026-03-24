@@ -54,13 +54,13 @@ class BraiinsCollector(MinerCollector):
         try:
             # Clear any stale token before logging in so it doesn't ride along
             # on the login request itself and confuse the miner's session logic.
-            self._session.headers.pop("Authorization", None)
+            self._session.headers.pop("authorization", None)
             resp = self._session.post(login_url, json=payload, timeout=_REQUEST_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
             self._token = data.get("token")
             if self._token:
-                self._session.headers["Authorization"] = f"Bearer {self._token}"
+                self._session.headers["authorization"] = self._token
                 logger.info("Authenticated with Braiins miner at %s (token timeout: %ss)",
                             self.url, data.get("timeout_s", "?"))
             else:
