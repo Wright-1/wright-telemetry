@@ -55,11 +55,14 @@ class BraiinsCollector(MinerCollector):
             resp = self._session.post(login_url, json=payload, timeout=_REQUEST_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
+            logger.info("Auth response from %s -- body keys: %s, cookies: %s",
+                        self.url, list(data.keys()), list(self._session.cookies.keys()))
             self._token = data.get("token")
             if self._token:
                 logger.info("Authenticated with Braiins miner at %s", self.url)
             else:
-                logger.warning("Auth response missing token for %s -- continuing without auth", self.url)
+                logger.warning("Auth response missing token for %s -- body: %s -- continuing without auth",
+                               self.url, data)
         except requests.RequestException as exc:
             logger.warning("Auth failed for %s (%s) -- will try requests without auth", self.url, exc)
 
