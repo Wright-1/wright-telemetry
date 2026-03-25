@@ -62,8 +62,10 @@ def _fetch_identities(
     identities: dict[str, MinerIdentity] = {}
     for miner_cfg, collector in collectors:
         name = miner_cfg.get("name", miner_cfg["url"])
+        wright_fans = bool(miner_cfg.get("wright_fans", False))
         try:
             identity = collector.fetch_identity()
+            identity.wright_fans = wright_fans
             identities[miner_cfg["url"]] = identity
             logger.info(
                 "Identified miner '%s': uid=%s, serial=%s",
@@ -74,6 +76,7 @@ def _fetch_identities(
             identities[miner_cfg["url"]] = MinerIdentity(
                 uid="unknown", serial_number="unknown",
                 hostname=name, mac_address="unknown",
+                wright_fans=wright_fans,
             )
     return identities
 

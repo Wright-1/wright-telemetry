@@ -13,6 +13,7 @@ class MinerIdentity:
     serial_number: str
     hostname: str
     mac_address: str
+    wright_fans: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
