@@ -1,7 +1,7 @@
 """Network discovery of mining hardware.
 
 Scans local subnets for miners running known firmware APIs.
-Currently supports Braiins OS; Luxor and Vnish probes can be added to
+Currently supports Braiins OS and LuxOS; Vnish probes can be added to
 ``_PROBES`` as they become available.
 """
 
@@ -88,12 +88,57 @@ def _probe_braiins(ip: str) -> Optional[DiscoveredMiner]:
     return None
 
 
-# Future probes go here:
-# def _probe_luxos(ip: str) -> Optional[DiscoveredMiner]: ...
-# def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]: ...
+def _probe_luxos(ip: str) -> Optional[DiscoveredMiner]:
+    """Send a ``version`` command to port 4028; a LUXminer response means LuxOS."""
+    import json as _json
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(_PROBE_TIMEOUT)
+            sock.connect((ip, 4028))
+            sock.sendall(b'{"command": "version"}')
+            chunks: list[bytes] = []
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        body = b"".join(chunks).decode("utf-8").rstrip("\x00")
+        data = _json.loads(body)
+        version_list = data.get("VERSION", [])
+        if not version_list:
+            return None
+        ver = version_list[0]
+        if "LUXminer" not in ver:
+            return None
+        hostname = ""
+        mac = ""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock2:
+                sock2.settimeout(_PROBE_TIMEOUT)
+                sock2.connect((ip, 4028))
+                sock2.sendall(b'{"command": "config"}')
+                cfg_chunks: list[bytes] = []
+                while True:
+                    c = sock2.recv(4096)
+                    if not c:
+                        break
+                    cfg_chunks.append(c)
+            cfg_body = b"".join(cfg_chunks).decode("utf-8").rstrip("\x00")
+            cfg = _json.loads(cfg_body)
+            cfg_data = (cfg.get("CONFIG") or [{}])[0]
+            hostname = cfg_data.get("Hostname", "")
+            mac = cfg_data.get("MACAddr", "")
+        except Exception:
+            pass
+        return DiscoveredMiner(ip=ip, firmware="luxos", hostname=hostname, mac_address=mac)
+    except (socket.error, ValueError, _json.JSONDecodeError):
+        pass
+    return None
+
 
 _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
     "braiins": _probe_braiins,
+    "luxos": _probe_luxos,
 }
 
 
