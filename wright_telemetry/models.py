@@ -40,7 +40,7 @@ class TelemetryPayload:
 
 
 # ---------------------------------------------------------------------------
-# Per-metric data containers (typed wrappers around raw Braiins responses)
+# Per-metric data containers (firmware-agnostic, with from_* factory methods)
 # ---------------------------------------------------------------------------
 
 
@@ -68,6 +68,29 @@ class CoolingData:
         ]
         return cls(fans=fans, highest_temperature=raw.get("highest_temperature"))
 
+    @classmethod
+    def from_luxos(cls, fans_raw: dict[str, Any], temps_raw: dict[str, Any]) -> CoolingData:
+        fans = [
+            FanReading(
+                position=f.get("ID", 0),
+                rpm=f.get("RPM", 0),
+                target_speed_ratio=f.get("Speed", 0) / 100.0,
+            )
+            for f in fans_raw.get("FANS", [])
+        ]
+        highest_temp: Optional[dict[str, Any]] = None
+        temps_list = temps_raw.get("TEMPS", [])
+        if temps_list:
+            all_temps: list[float] = []
+            for t in temps_list:
+                for key in ("Board", "Chip", "TopLeft", "TopRight", "BottomLeft", "BottomRight"):
+                    val = t.get(key)
+                    if isinstance(val, (int, float)) and val > 0:
+                        all_temps.append(float(val))
+            if all_temps:
+                highest_temp = {"value": max(all_temps), "unit": "C"}
+        return cls(fans=fans, highest_temperature=highest_temp)
+
 
 @dataclass
 class HashrateData:
@@ -82,6 +105,47 @@ class HashrateData:
             pool_stats=raw.get("pool_stats", {}),
             power_stats=raw.get("power_stats", {}),
         )
+
+    @classmethod
+    def from_luxos(
+        cls,
+        summary_raw: dict[str, Any],
+        pools_raw: dict[str, Any],
+        power_raw: dict[str, Any],
+    ) -> HashrateData:
+        summary = (summary_raw.get("SUMMARY") or [{}])[0]
+        miner_stats = {
+            "ghs_5s": summary.get("GHS 5s", 0),
+            "ghs_30m": summary.get("GHS 30m", 0),
+            "ghs_av": summary.get("GHS av", 0),
+            "total_mh": summary.get("Total MH", 0),
+            "hardware_errors": summary.get("Hardware Errors", 0),
+            "utility": summary.get("Utility", 0),
+            "work_utility": summary.get("Work Utility", 0),
+        }
+        pools = pools_raw.get("POOLS", [])
+        pool_stats = {
+            "pools": [
+                {
+                    "url": p.get("URL", ""),
+                    "user": p.get("User", ""),
+                    "status": p.get("Status", ""),
+                    "accepted": p.get("Accepted", 0),
+                    "rejected": p.get("Rejected", 0),
+                    "stale": p.get("Stale", 0),
+                    "difficulty_accepted": p.get("Difficulty Accepted", 0),
+                    "pool_rejected_pct": p.get("Pool Rejected%", 0),
+                    "pool_stale_pct": p.get("Pool Stale%", 0),
+                }
+                for p in pools
+            ],
+        }
+        power = (power_raw.get("POWER") or [{}])[0]
+        power_stats = {
+            "watts": power.get("Watts", 0),
+            "psu_reporting": power.get("PSU", False),
+        }
+        return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
 
 @dataclass
@@ -102,6 +166,30 @@ class UptimeData:
             bos_version=raw.get("bos_version", {}),
             platform=raw.get("platform", 0),
             status=raw.get("status", 0),
+        )
+
+    @classmethod
+    def from_luxos(
+        cls,
+        summary_raw: dict[str, Any],
+        version_raw: dict[str, Any],
+        config_raw: dict[str, Any],
+    ) -> UptimeData:
+        summary = (summary_raw.get("SUMMARY") or [{}])[0]
+        version = (version_raw.get("VERSION") or [{}])[0]
+        config = (config_raw.get("CONFIG") or [{}])[0]
+        elapsed = summary.get("Elapsed", 0)
+        return cls(
+            bosminer_uptime_s=elapsed,
+            system_uptime_s=elapsed,
+            hostname=config.get("Hostname", ""),
+            bos_version={
+                "luxminer": version.get("LUXminer", ""),
+                "api": version.get("API", ""),
+                "type": version.get("Type", ""),
+            },
+            platform=0,
+            status=0,
         )
 
 
@@ -140,6 +228,53 @@ class HashboardData:
         ]
         return cls(hashboards=boards)
 
+    @classmethod
+    def from_luxos(cls, devs_raw: dict[str, Any], temps_raw: dict[str, Any]) -> HashboardData:
+        temps_by_id: dict[int, dict[str, Any]] = {}
+        for t in temps_raw.get("TEMPS", []):
+            temps_by_id[t.get("ID", t.get("TEMP", -1))] = t
+
+        boards: list[HashboardReading] = []
+        for dev in devs_raw.get("DEVS", []):
+            board_id = dev.get("ASC", dev.get("ID", 0))
+            temp_info = temps_by_id.get(board_id, {})
+            board_temp_val = dev.get("Temperature")
+            board_temp = {"value": board_temp_val, "unit": "C"} if board_temp_val else temp_info.get("Board")
+            chip_temps = [
+                temp_info.get(k)
+                for k in ("Chip", "TopLeft", "TopRight", "BottomLeft", "BottomRight")
+                if temp_info.get(k) is not None
+            ]
+            highest_chip = {"value": max(chip_temps), "unit": "C"} if chip_temps else None
+            inlet_temps = [temp_info[k] for k in ("TopLeft",) if k in temp_info]
+            lowest_inlet = {"value": min(inlet_temps), "unit": "C"} if inlet_temps else None
+            outlet_temps = [temp_info[k] for k in ("BottomLeft",) if k in temp_info]
+            highest_outlet = {"value": max(outlet_temps), "unit": "C"} if outlet_temps else None
+
+            boards.append(HashboardReading(
+                board_name=dev.get("Board", dev.get("Connector", f"ASC {board_id}")),
+                board_temp=board_temp,
+                highest_chip_temp=highest_chip,
+                lowest_inlet_temp=lowest_inlet,
+                highest_outlet_temp=highest_outlet,
+                chips_count=0,
+                id=str(board_id),
+                enabled=dev.get("Enabled", "N") == "Y",
+                stats={
+                    "mhs_av": dev.get("MHS av", 0),
+                    "mhs_5s": dev.get("MHS 5s", 0),
+                    "mhs_15m": dev.get("MHS 15m", 0),
+                    "accepted": dev.get("Accepted", 0),
+                    "rejected": dev.get("Rejected", 0),
+                    "hardware_errors": dev.get("Hardware Errors", 0),
+                    "status": dev.get("Status", ""),
+                    "serial_number": dev.get("SerialNumber", ""),
+                    "nominal_mhs": dev.get("Nominal MHS", 0),
+                    "profile": dev.get("Profile", ""),
+                },
+            ))
+        return cls(hashboards=boards)
+
 
 @dataclass
 class ErrorEntry:
@@ -163,5 +298,18 @@ class ErrorData:
                 components=e.get("components", []),
             )
             for e in raw.get("errors", [])
+        ]
+        return cls(errors=entries)
+
+    @classmethod
+    def from_luxos(cls, events_raw: dict[str, Any]) -> ErrorData:
+        entries = [
+            ErrorEntry(
+                message=e.get("Description", ""),
+                timestamp=e.get("CreatedAt", ""),
+                error_codes=[{"code": e.get("Code", ""), "doc_url": e.get("DocUrl", "")}],
+                components=[{"target": e.get("Target", ""), "id": e.get("ID", "")}],
+            )
+            for e in events_raw.get("EVENTS", [])
         ]
         return cls(errors=entries)

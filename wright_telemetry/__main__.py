@@ -69,8 +69,9 @@ def main() -> None:
         print("  You can also run the collector manually: wright-telemetry")
         sys.exit(0)
 
-    # Import here to avoid circular imports and to ensure braiins adapter registers
+    # Import here to avoid circular imports and to ensure collector adapters register
     import wright_telemetry.collectors.braiins  # noqa: F401  -- triggers @register
+    import wright_telemetry.collectors.luxos    # noqa: F401  -- triggers @register
     from wright_telemetry.scheduler import run
 
     run(cfg)
