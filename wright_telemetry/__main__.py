@@ -3,6 +3,7 @@
 Usage:
     wright-telemetry              Run the collector (starts setup if first time)
     wright-telemetry --setup      Re-run the setup wizard
+    wright-telemetry --discover   Scan the local network for miners and exit
     wright-telemetry --install    Register as a background service (auto-start on boot)
     wright-telemetry --uninstall  Remove the background service
     wright-telemetry --version    Print version and exit
@@ -26,6 +27,7 @@ def _parse_args() -> argparse.Namespace:
         description="Collects miner telemetry and sends it to the Wright Fan dashboard.",
     )
     parser.add_argument("--setup", action="store_true", help="Re-run the setup wizard")
+    parser.add_argument("--discover", action="store_true", help="Scan the local network for miners and exit")
     parser.add_argument("--install", action="store_true", help="Install as a background service")
     parser.add_argument("--uninstall", action="store_true", help="Remove the background service")
     parser.add_argument("--version", action="store_true", help="Print version and exit")
@@ -43,6 +45,24 @@ def main() -> None:
     if args.loki_auth:
         import os
         os.environ["WRIGHT_LOKI_AUTH"] = args.loki_auth
+
+    if args.discover:
+        from wright_telemetry.discovery import default_subnet, run_interactive_discovery
+        subnet = default_subnet()
+        if subnet is None:
+            print("Could not detect local network.")
+            sys.exit(1)
+        print(f"\nScanning {subnet} for miners…\n")
+        found = run_interactive_discovery([subnet])
+        if not found:
+            print("No miners found.")
+        else:
+            print(f"Found {len(found)} miner(s):\n")
+            for m in found:
+                host = f"  hostname: {m.hostname}" if m.hostname else ""
+                mac = f"  mac: {m.mac_address}" if m.mac_address else ""
+                print(f"  {m.ip:<16} {m.firmware:<10}{host}{mac}")
+        sys.exit(0)
 
     if args.uninstall:
         uninstall_service()
