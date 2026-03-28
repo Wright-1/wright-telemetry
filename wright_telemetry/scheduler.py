@@ -29,6 +29,7 @@ from wright_telemetry.models import MinerIdentity, TelemetryPayload
 logger = logging.getLogger(__name__)
 
 _MAX_BACKOFF = 300  # 5 minutes
+_FAN_CHECK_INTERVAL = 5  # seconds -- dedicated Wright fan RPM monitoring interval
 
 
 def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -112,6 +113,80 @@ def _fetch_identities(
     return identities
 
 
+def _check_fan_rpm_changes(
+    name: str,
+    data_obj: Any,
+    miner_url: str,
+    fan_prev_rpm: dict[tuple[str, int], int],
+    fan_drop_events: list[dict],
+) -> None:
+    """Detect RPM transitions, append independent drop events, and print to terminal.
+
+    fan_prev_rpm: last known RPM per (miner_url, fan_position).
+    fan_drop_events: append-only list of drop event dicts:
+        {miner, miner_url, fan_position, prev_rpm,
+         detected_at, recovered_at, duration_s}
+    """
+    from wright_telemetry.models import CoolingData
+    if not isinstance(data_obj, CoolingData):
+        return
+
+    now = time.time()
+    for fan in data_obj.fans:
+        key = (miner_url, fan.position)
+        prev_rpm = fan_prev_rpm.get(key)
+        curr_rpm = fan.rpm
+
+        if prev_rpm is not None:
+            if prev_rpm > 0 and curr_rpm == 0:
+                event = {
+                    "miner": name,
+                    "miner_url": miner_url,
+                    "fan_position": fan.position,
+                    "prev_rpm": prev_rpm,
+                    "detected_at": now,
+                    "recovered_at": None,
+                    "duration_s": None,
+                }
+                fan_drop_events.append(event)
+                print(
+                    f"[WRIGHT FAN] Fan #{fan.position} on '{name}' switched OFF "
+                    f"(RPM: {prev_rpm} → 0) | detection latency: ≤{_FAN_CHECK_INTERVAL}s"
+                )
+
+            elif prev_rpm == 0 and curr_rpm > 0:
+                # Close the most recent open event for this fan.
+                for event in reversed(fan_drop_events):
+                    if event["miner_url"] == miner_url and event["fan_position"] == fan.position and event["recovered_at"] is None:
+                        event["recovered_at"] = now
+                        event["duration_s"] = now - event["detected_at"]
+                        print(
+                            f"[WRIGHT FAN] Fan #{fan.position} on '{name}' switched ON "
+                            f"(RPM: 0 → {curr_rpm}) | was OFF for {event['duration_s']:.1f}s"
+                        )
+                        break
+
+        fan_prev_rpm[key] = curr_rpm
+
+
+def _monitor_fans(
+    collectors: list[tuple[dict[str, Any], MinerCollector]],
+    fan_prev_rpm: dict[tuple[str, int], int],
+    fan_drop_events: list[dict],
+) -> None:
+    """Fetch cooling data every 5s for all miners and check for RPM changes."""
+    for miner_cfg, collector in collectors:
+        name = miner_cfg.get("name", miner_cfg["url"])
+        fetcher = collector.get_fetcher("cooling")
+        if fetcher is None:
+            continue
+        try:
+            data_obj = fetcher()
+            _check_fan_rpm_changes(name, data_obj, miner_cfg["url"], fan_prev_rpm, fan_drop_events)
+        except Exception as exc:
+            logger.warning("Error fetching cooling from '%s': %s", name, exc)
+
+
 def _poll_cycle(
     collectors: list[tuple[dict[str, Any], MinerCollector]],
     identities: dict[str, MinerIdentity],
@@ -183,9 +258,14 @@ def run(cfg: dict[str, Any]) -> None:
             consecutive_crashes = 0
             last_scan = time.time()
             known_urls = {m["url"] for m in miners}
+            fan_prev_rpm: dict[tuple[str, int], int] = {}
+            fan_drop_events: list[dict] = []
+            last_telemetry_at = 0.0
 
             while True:
-                if discovery_enabled and (time.time() - last_scan) >= scan_interval:
+                now = time.time()
+
+                if discovery_enabled and (now - last_scan) >= scan_interval:
                     logger.info("Running periodic miner re-discovery…")
                     refreshed = _resolve_miners(cfg)
                     new_urls = {m["url"] for m in refreshed} - known_urls
@@ -201,10 +281,17 @@ def run(cfg: dict[str, Any]) -> None:
                         known_urls |= new_urls
                         logger.info("Discovered %d new miner(s): %s", len(new_urls), ", ".join(sorted(new_urls)))
 
-                    last_scan = time.time()
+                    last_scan = now
 
-                _poll_cycle(collectors, identities, api_client, metrics, facility_id)
-                time.sleep(poll_interval)
+                # Always check fan RPMs at the 5s interval.
+                _monitor_fans(collectors, fan_prev_rpm, fan_drop_events)
+
+                # Send full telemetry at the configured poll interval.
+                if now - last_telemetry_at >= poll_interval:
+                    _poll_cycle(collectors, identities, api_client, metrics, facility_id)
+                    last_telemetry_at = now
+
+                time.sleep(_FAN_CHECK_INTERVAL)
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")
