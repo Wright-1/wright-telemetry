@@ -136,9 +136,36 @@ def _probe_luxos(ip: str) -> Optional[DiscoveredMiner]:
     return None
 
 
+def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
+    """Hit the Vnish REST API; 200 or 401 means it's a Vnish miner."""
+    url = f"http://{ip}/api/v1/info"
+    try:
+        resp = requests.get(url, timeout=_PROBE_TIMEOUT)
+        if resp.status_code in (200, 401):
+            hostname = ""
+            mac = ""
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                    hostname = data.get("hostname", "")
+                    mac = data.get("mac", "")
+                    if not data.get("firmware_version"):
+                        return None
+                except Exception:
+                    pass
+            return DiscoveredMiner(
+                ip=ip, firmware="vnish",
+                hostname=hostname, mac_address=mac,
+            )
+    except (requests.ConnectionError, requests.Timeout, OSError):
+        pass
+    return None
+
+
 _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
     "braiins": _probe_braiins,
     "luxos": _probe_luxos,
+    "vnish": _probe_vnish,
 }
 
 

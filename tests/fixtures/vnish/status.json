@@ -1,0 +1,67 @@
+{
+  "fans": [
+    {"id": 0, "rpm": 4200, "speed_pct": 65},
+    {"id": 1, "rpm": 4150, "speed_pct": 65},
+    {"id": 2, "rpm": 4180, "speed_pct": 65},
+    {"id": 3, "rpm": 4210, "speed_pct": 65}
+  ],
+  "chains": [
+    {
+      "id": 0,
+      "name": "Chain 0",
+      "temp_board": 58.0,
+      "temp_chip": 72.5,
+      "chips": 114,
+      "status": "ok",
+      "hashrate": 48410.2,
+      "accepted": 19477,
+      "rejected": 5,
+      "hw_errors": 4,
+      "serial": "HB0-VN91CX-A"
+    },
+    {
+      "id": 1,
+      "name": "Chain 1",
+      "temp_board": 60.0,
+      "temp_chip": 74.0,
+      "chips": 114,
+      "status": "ok",
+      "hashrate": 48400.1,
+      "accepted": 19480,
+      "rejected": 6,
+      "hw_errors": 5,
+      "serial": "HB1-VN91CX-B"
+    },
+    {
+      "id": 2,
+      "name": "Chain 2",
+      "temp_board": 57.0,
+      "temp_chip": 71.0,
+      "chips": 114,
+      "status": "ok",
+      "hashrate": 48420.2,
+      "accepted": 19475,
+      "rejected": 4,
+      "hw_errors": 3,
+      "serial": "HB2-VN91CX-C"
+    }
+  ],
+  "errors": [
+    {
+      "message": "Chain 1 temperature exceeds warning threshold",
+      "timestamp": "2024-03-15T10:23:45Z",
+      "code": "TEMP_WARNING",
+      "severity": "warning",
+      "component_type": "hashboard",
+      "component_id": "1"
+    },
+    {
+      "message": "Fan 2 RPM below expected minimum",
+      "timestamp": "2024-03-15T09:15:30Z",
+      "code": "FAN_RPM_LOW",
+      "severity": "error",
+      "component_type": "fan",
+      "component_id": "2"
+    }
+  ]
+}

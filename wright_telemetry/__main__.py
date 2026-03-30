@@ -111,6 +111,7 @@ def main() -> None:
     # Import here to avoid circular imports and to ensure collector adapters register
     import wright_telemetry.collectors.braiins  # noqa: F401  -- triggers @register
     import wright_telemetry.collectors.luxos    # noqa: F401  -- triggers @register
+    import wright_telemetry.collectors.vnish    # noqa: F401  -- triggers @register
 
     # After setup: collect baselines and show help (fan detection: use --detect-wright-fans)
     if ran_setup and not args.detect_wright_fans:

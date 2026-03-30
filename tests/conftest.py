@@ -12,8 +12,10 @@ import responses
 
 BRAIINS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "braiins"
 LUXOS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "luxos"
+VNISH_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "vnish"
 MINER_URL = "http://192.168.1.100"
 LUXOS_HOST = "192.168.1.200"
+VNISH_URL = "http://192.168.1.150"
 
 
 def _load_braiins(name: str) -> dict[str, Any]:
@@ -22,6 +24,10 @@ def _load_braiins(name: str) -> dict[str, Any]:
 
 def _load_luxos(name: str) -> dict[str, Any]:
     return json.loads((LUXOS_FIXTURES_DIR / name).read_text())
+
+
+def _load_vnish(name: str) -> dict[str, Any]:
+    return json.loads((VNISH_FIXTURES_DIR / name).read_text())
 
 
 @pytest.fixture()
@@ -135,3 +141,64 @@ def luxos_collector():
     """Return a LuxOSCollector pointed at the test host."""
     from wright_telemetry.collectors.luxos import LuxOSCollector
     return LuxOSCollector(url=LUXOS_HOST)
+
+
+# ---------------------------------------------------------------------------
+# Vnish fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def vnish_fixtures() -> dict[str, Any]:
+    """All Vnish fixture data keyed by endpoint name."""
+    return {
+        "unlock": _load_vnish("unlock.json"),
+        "info": _load_vnish("info.json"),
+        "summary": _load_vnish("summary.json"),
+        "status": _load_vnish("status.json"),
+    }
+
+
+@pytest.fixture()
+def mock_vnish_api(vnish_fixtures) -> responses.RequestsMock:
+    """Activate ``responses`` with all Vnish endpoints returning fixture data."""
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(
+            responses.POST,
+            f"{VNISH_URL}/api/v1/unlock",
+            json=vnish_fixtures["unlock"],
+            status=200,
+        )
+        rsps.add(
+            responses.GET,
+            f"{VNISH_URL}/api/v1/info",
+            json=vnish_fixtures["info"],
+            status=200,
+        )
+        rsps.add(
+            responses.GET,
+            f"{VNISH_URL}/api/v1/summary",
+            json=vnish_fixtures["summary"],
+            status=200,
+        )
+        rsps.add(
+            responses.GET,
+            f"{VNISH_URL}/api/v1/status",
+            json=vnish_fixtures["status"],
+            status=200,
+        )
+        yield rsps
+
+
+@pytest.fixture()
+def vnish_collector():
+    """Return an unauthenticated VnishCollector pointed at the test URL."""
+    from wright_telemetry.collectors.vnish import VnishCollector
+    return VnishCollector(url=VNISH_URL, password="test123")
+
+
+@pytest.fixture()
+def vnish_collector_no_auth():
+    """Return a VnishCollector with no credentials."""
+    from wright_telemetry.collectors.vnish import VnishCollector
+    return VnishCollector(url=VNISH_URL)

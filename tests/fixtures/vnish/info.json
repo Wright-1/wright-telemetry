@@ -1,0 +1,10 @@
+{
+  "uid": "VN42391CX0044",
+  "serial": "VN42391CX0044",
+  "hostname": "vnish-rack2-slot5",
+  "mac": "AA:BB:CC:11:22:33",
+  "model": "Antminer S19j Pro+",
+  "firmware_version": "1.2.6",
+  "build_uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "build_name": "vnish-1.2.6-stable"
+}
