@@ -1,0 +1,54 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1710504225, "Code": 9, "Msg": "3 ASC(s)", "Description": "LUXminer 2024.3.12.120000"}],
+  "DEVS": [
+    {
+      "ASC": 0,
+      "Board": "Hashboard 0",
+      "Enabled": "Y",
+      "Status": "Alive",
+      "Temperature": 58.0,
+      "MHS av": 48410200.0,
+      "MHS 5s": 48410200.0,
+      "MHS 15m": 48300000.0,
+      "Accepted": 19477,
+      "Rejected": 5,
+      "Hardware Errors": 4,
+      "SerialNumber": "HB0-LX91BX-A",
+      "Nominal MHS": 48500000.0,
+      "Profile": "normal"
+    },
+    {
+      "ASC": 1,
+      "Board": "Hashboard 1",
+      "Enabled": "Y",
+      "Status": "Alive",
+      "Temperature": 60.0,
+      "MHS av": 48400100.0,
+      "MHS 5s": 48400100.0,
+      "MHS 15m": 48350000.0,
+      "Accepted": 19480,
+      "Rejected": 6,
+      "Hardware Errors": 5,
+      "SerialNumber": "HB1-LX91BX-B",
+      "Nominal MHS": 48500000.0,
+      "Profile": "normal"
+    },
+    {
+      "ASC": 2,
+      "Board": "Hashboard 2",
+      "Enabled": "Y",
+      "Status": "Alive",
+      "Temperature": 57.0,
+      "MHS av": 48420200.0,
+      "MHS 5s": 48420200.0,
+      "MHS 15m": 48330000.0,
+      "Accepted": 19475,
+      "Rejected": 4,
+      "Hardware Errors": 3,
+      "SerialNumber": "HB2-LX91BX-C",
+      "Nominal MHS": 48500000.0,
+      "Profile": "normal"
+    }
+  ],
+  "id": 1
+}

@@ -1,0 +1,21 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1710504225, "Code": 7, "Msg": "3 Pool(s)", "Description": "LUXminer 2024.3.12.120000"}],
+  "POOLS": [
+    {
+      "POOL": 0,
+      "URL": "stratum+tcp://pool.example.com:3333",
+      "User": "miner_worker.001",
+      "Status": "Alive",
+      "Accepted": 58432,
+      "Rejected": 15,
+      "Stale": 3,
+      "Difficulty Accepted": 934912000.0,
+      "Pool Rejected%": 0.026,
+      "Pool Stale%": 0.005,
+      "Priority": 0,
+      "Getworks": 11234,
+      "Last Share Time": 1710504200
+    }
+  ],
+  "id": 1
+}

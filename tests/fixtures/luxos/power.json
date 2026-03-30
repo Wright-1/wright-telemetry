@@ -1,0 +1,11 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1710504225, "Code": 140, "Msg": "POWER", "Description": "LUXminer 2024.3.12.120000"}],
+  "POWER": [
+    {
+      "Watts": 3245,
+      "PSU": true,
+      "Efficiency": 22.35
+    }
+  ],
+  "id": 1
+}

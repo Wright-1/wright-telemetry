@@ -1,0 +1,12 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1710504225, "Code": 33, "Msg": "CONFIG", "Description": "LUXminer 2024.3.12.120000"}],
+  "CONFIG": [
+    {
+      "SerialNumber": "LX42391BX0089",
+      "Hostname": "luxminer-rack5-slot2",
+      "MACAddr": "11:22:33:44:55:66",
+      "Model": "Antminer S19j Pro+"
+    }
+  ],
+  "id": 1
+}

@@ -1,0 +1,21 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1710504225, "Code": 11, "Msg": "Summary", "Description": "LUXminer 2024.3.12.120000"}],
+  "SUMMARY": [
+    {
+      "Elapsed": 1728000,
+      "GHS 5s": 145230.5,
+      "GHS 30m": 144980.2,
+      "GHS av": 145100.0,
+      "Total MH": 8752619400000,
+      "Hardware Errors": 12,
+      "Utility": 8.45,
+      "Work Utility": 145230.5,
+      "Found Blocks": 0,
+      "Accepted": 58432,
+      "Rejected": 15,
+      "Stale": 3,
+      "Best Share": 4921750000
+    }
+  ],
+  "id": 1
+}

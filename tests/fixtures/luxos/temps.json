@@ -1,0 +1,9 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1710504225, "Code": 201, "Msg": "3 Temp(s)", "Description": "LUXminer 2024.3.12.120000"}],
+  "TEMPS": [
+    {"ID": 0, "Board": 58.0, "Chip": 72.5, "TopLeft": 32.0, "TopRight": 33.5, "BottomLeft": 55.0, "BottomRight": 54.0},
+    {"ID": 1, "Board": 60.0, "Chip": 74.0, "TopLeft": 33.0, "TopRight": 34.0, "BottomLeft": 57.0, "BottomRight": 56.0},
+    {"ID": 2, "Board": 57.0, "Chip": 71.0, "TopLeft": 31.5, "TopRight": 32.5, "BottomLeft": 54.0, "BottomRight": 53.0}
+  ],
+  "id": 1
+}

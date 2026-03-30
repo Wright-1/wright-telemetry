@@ -1,0 +1,22 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1710504225, "Code": 160, "Msg": "2 Event(s)", "Description": "LUXminer 2024.3.12.120000"}],
+  "EVENTS": [
+    {
+      "Description": "Hashboard 1 temperature exceeds warning threshold",
+      "CreatedAt": "2024-03-15T10:23:45Z",
+      "Code": "TEMP_WARNING",
+      "DocUrl": "https://docs.luxor.tech/errors/TEMP_WARNING",
+      "Target": "hashboard",
+      "ID": "1"
+    },
+    {
+      "Description": "Fan 2 RPM below expected minimum",
+      "CreatedAt": "2024-03-15T09:15:30Z",
+      "Code": "FAN_RPM_LOW",
+      "DocUrl": "https://docs.luxor.tech/errors/FAN_RPM_LOW",
+      "Target": "fan",
+      "ID": "2"
+    }
+  ],
+  "id": 1
+}

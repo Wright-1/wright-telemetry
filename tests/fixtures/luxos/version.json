@@ -1,0 +1,11 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1710504225, "Code": 22, "Msg": "VERSION", "Description": "LUXminer 2024.3.12.120000"}],
+  "VERSION": [
+    {
+      "LUXminer": "2024.3.12.120000",
+      "API": "4.0",
+      "Type": "Antminer S19j Pro+"
+    }
+  ],
+  "id": 1
+}

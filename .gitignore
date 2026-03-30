@@ -35,6 +35,7 @@ Thumbs.db
 
 # Wright Telemetry local config (contains credentials)
 config.json
+!tests/fixtures/**/config.json
 *.log
 
 # Environment variables / secrets

@@ -29,8 +29,12 @@ That's it. The tests don't need a real miner, network access, or any config file
 # Run just the Braiins collector tests
 pytest tests/test_braiins_collector.py -v
 
+# Run just the LuxOS collector tests
+pytest tests/test_luxos_collector.py -v
+
 # Run a single test class
 pytest tests/test_braiins_collector.py::TestAuthentication -v
+pytest tests/test_luxos_collector.py::TestFetchHashboards -v
 
 # Stop on first failure
 pytest tests/ -x
@@ -58,9 +62,24 @@ Full regression of `BraiinsCollector` against simulated Braiins OS REST API endp
 | Errors | Error entries with codes, timestamps, components |
 | Edge cases | Empty responses, missing fields, HTTP 500, connection errors |
 
+### LuxOS API Simulator (`test_luxos_collector.py`)
+
+Full regression of `LuxOSCollector` against simulated LuxOS CGMiner-compatible TCP API responses. The `_send_command` method is patched via `unittest.mock` so no real miner or socket connection is needed.
+
+| Area | What's tested |
+|------|--------------|
+| Authentication | No-op (LuxOS read-only queries don't require auth) |
+| Identity | SerialNumber, Hostname, MACAddr from `config` command |
+| Cooling | Fan list parsing (4 fans), highest temperature from `fans` + `temps` |
+| Hashrate | miner_stats from `summary`, pool_stats from `pools`, power_stats from `power` |
+| Uptime | Elapsed seconds, firmware version, hostname from `summary` + `version` + `config` |
+| Hashboards | 3 boards with temps merged from `devs` + `temps`, stats, serial numbers |
+| Errors | Event entries from `events` with codes, timestamps, targets |
+| Edge cases | Empty responses, missing fields, empty CONFIG list, socket timeout, connection refused, real socket error |
+
 ### Model Parsing (`test_models.py`)
 
-Unit tests for every `from_braiins()` factory method on the data models. Each model is tested with:
+Unit tests for every `from_braiins()` and `from_luxos()` factory method on the data models. Each model is tested with:
 
 - Full realistic data (from fixture files)
 - Empty data (`{}`)
@@ -112,7 +131,9 @@ Tests the polling loop and fan monitoring logic without any network calls (uses 
 
 ## Fixture Data
 
-Realistic JSON responses live in `tests/fixtures/braiins/`. These mirror the Braiins OS REST API v1.2.0:
+### Braiins (`tests/fixtures/braiins/`)
+
+Realistic JSON responses mirroring the Braiins OS REST API v1.2.0:
 
 | File | Endpoint | Contents |
 |------|----------|----------|
@@ -123,13 +144,30 @@ Realistic JSON responses live in `tests/fixtures/braiins/`. These mirror the Bra
 | `hashboards.json` | `GET /api/v1/miner/hw/hashboards` | 3 boards with temps and chip counts |
 | `miner_errors.json` | `GET /api/v1/miner/errors` | 2 errors (temp warning + fan RPM low) |
 
+### LuxOS (`tests/fixtures/luxos/`)
+
+Realistic JSON responses mirroring the LuxOS CGMiner-compatible TCP API on port 4028:
+
+| File | Command | Contents |
+|------|---------|----------|
+| `config.json` | `config` | Serial number, hostname, MAC address, model |
+| `version.json` | `version` | LUXminer version, API version, miner type |
+| `summary.json` | `summary` | Elapsed uptime, hashrate (GHS 5s/30m/av), share stats |
+| `pools.json` | `pools` | Pool URL, user, accepted/rejected/stale, difficulty |
+| `power.json` | `power` | Watts, PSU reporting status |
+| `fans.json` | `fans` | 4 fans with RPM and speed percentage |
+| `temps.json` | `temps` | 3 boards with Board, Chip, and per-corner temperatures |
+| `devs.json` | `devs` | 3 hashboards with MHS, accepted/rejected, serial, profile |
+| `events.json` | `events` | 2 events (temp warning + fan RPM low) |
+
 To update fixture data: edit the JSON files directly. The test suite loads them at runtime, so changes take effect immediately.
 
 ---
 
 ## CI Integration
 
-Tests run automatically in two places:
+Tests run automatically in three places:
 
-1. **`braiins-test.yml`** -- dedicated test workflow, runs on every PR and push to main, tests against Python 3.11
-2. **Build workflows** (`build-linux.yml`, `build-macos.yml`, `build-windows.yml`) -- tests run before each build, so a failing test blocks the release
+1. **`braiins-test.yml`** -- Braiins collector test workflow, runs on every PR and push to main, tests against Python 3.11
+2. **`luxos-test.yml`** -- LuxOS collector test workflow, runs on every PR and push to main, tests against Python 3.11
+3. **Build workflows** (`build-linux.yml`, `build-macos.yml`, `build-windows.yml`) -- tests run before each build, so a failing test blocks the release

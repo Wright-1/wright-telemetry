@@ -1,32 +1,39 @@
-"""Shared pytest fixtures for the Braiins API test simulator."""
+"""Shared pytest fixtures for miner API test simulators."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import responses
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures" / "braiins"
+BRAIINS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "braiins"
+LUXOS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "luxos"
 MINER_URL = "http://192.168.1.100"
+LUXOS_HOST = "192.168.1.200"
 
 
-def _load(name: str) -> dict[str, Any]:
-    return json.loads((FIXTURES_DIR / name).read_text())
+def _load_braiins(name: str) -> dict[str, Any]:
+    return json.loads((BRAIINS_FIXTURES_DIR / name).read_text())
+
+
+def _load_luxos(name: str) -> dict[str, Any]:
+    return json.loads((LUXOS_FIXTURES_DIR / name).read_text())
 
 
 @pytest.fixture()
 def braiins_fixtures() -> dict[str, Any]:
     """All Braiins fixture data keyed by endpoint name."""
     return {
-        "auth_login": _load("auth_login.json"),
-        "cooling_state": _load("cooling_state.json"),
-        "miner_stats": _load("miner_stats.json"),
-        "miner_details": _load("miner_details.json"),
-        "hashboards": _load("hashboards.json"),
-        "miner_errors": _load("miner_errors.json"),
+        "auth_login": _load_braiins("auth_login.json"),
+        "cooling_state": _load_braiins("cooling_state.json"),
+        "miner_stats": _load_braiins("miner_stats.json"),
+        "miner_details": _load_braiins("miner_details.json"),
+        "hashboards": _load_braiins("hashboards.json"),
+        "miner_errors": _load_braiins("miner_errors.json"),
     }
 
 
@@ -85,3 +92,46 @@ def braiins_collector_no_auth():
     """Return a BraiinsCollector with no credentials."""
     from wright_telemetry.collectors.braiins import BraiinsCollector
     return BraiinsCollector(url=MINER_URL)
+
+
+# ---------------------------------------------------------------------------
+# LuxOS fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def luxos_fixtures() -> dict[str, Any]:
+    """All LuxOS fixture data keyed by CGMiner command name."""
+    return {
+        "config": _load_luxos("config.json"),
+        "version": _load_luxos("version.json"),
+        "summary": _load_luxos("summary.json"),
+        "pools": _load_luxos("pools.json"),
+        "power": _load_luxos("power.json"),
+        "fans": _load_luxos("fans.json"),
+        "temps": _load_luxos("temps.json"),
+        "devs": _load_luxos("devs.json"),
+        "events": _load_luxos("events.json"),
+    }
+
+
+@pytest.fixture()
+def mock_luxos_api(luxos_fixtures):
+    """Patch ``LuxOSCollector._send_command`` to return fixture data by command name."""
+    def _fake_send(self, command, parameter=""):
+        if command in luxos_fixtures:
+            return luxos_fixtures[command]
+        return {"STATUS": [{"STATUS": "E", "Msg": f"Unknown command: {command}"}]}
+
+    with patch(
+        "wright_telemetry.collectors.luxos.LuxOSCollector._send_command",
+        _fake_send,
+    ):
+        yield
+
+
+@pytest.fixture()
+def luxos_collector():
+    """Return a LuxOSCollector pointed at the test host."""
+    from wright_telemetry.collectors.luxos import LuxOSCollector
+    return LuxOSCollector(url=LUXOS_HOST)
