@@ -306,6 +306,100 @@ def _poll_cycle(
                 logger.warning("Error updating baseline for '%s': %s", name, exc)
 
 
+_FAN_DETECTION_POLL_INTERVAL = 1  # seconds
+
+
+def run_fan_detection(cfg: dict[str, Any]) -> None:
+    """Poll fan RPM every second on Wright Fan machines and send RPM drop events.
+
+    Only miners with ``wright_fans: true`` in their config are monitored.
+    Only ``cooling`` data is fetched on each cycle.
+    """
+    facility_id = cfg.get("facility_id", "unknown")
+    default_collector_type = cfg.get("collector_type", "braiins")
+
+    wright_fan_miners = [m for m in cfg.get("miners", []) if m.get("wright_fans")]
+    if not wright_fan_miners:
+        logger.warning(
+            "No miners with wright_fans=true found in config. "
+            "Mark miners as Wright Fan machines in --setup to use --detect-wright-fans."
+        )
+        print("[WRIGHT FAN] No Wright Fan machines configured. Exiting.")
+        return
+
+    logger.info(
+        "Starting Wright Fan detection mode: %d machine(s), polling every %ds",
+        len(wright_fan_miners), _FAN_DETECTION_POLL_INTERVAL,
+    )
+    print(
+        f"[WRIGHT FAN] Monitoring {len(wright_fan_miners)} machine(s) — "
+        f"polling fan RPM every {_FAN_DETECTION_POLL_INTERVAL}s"
+    )
+    for m in wright_fan_miners:
+        print(f"  • {m.get('name', m['url'])} ({m['url']})")
+
+    api_client = WrightAPIClient(
+        api_url=cfg.get("wright_api_url", ""),
+        api_key=cfg.get("wright_api_key", ""),
+        facility_id=facility_id,
+    )
+
+    consecutive_crashes = 0
+
+    while True:
+        try:
+            collectors = _build_collectors(wright_fan_miners, default_collector_type)
+            _authenticate_all(collectors)
+            identities = _fetch_identities(collectors)
+
+            consecutive_crashes = 0
+            fan_prev_rpm: dict[tuple[str, int], int] = {}
+            fan_drop_events: list[dict] = []
+
+            while True:
+                for miner_cfg, collector in collectors:
+                    name = miner_cfg.get("name", miner_cfg["url"])
+                    identity = identities.get(miner_cfg["url"])
+                    fan_fetcher = collector.get_fetcher("cooling")
+                    if fan_fetcher is None:
+                        continue
+                    try:
+                        cooling_data_obj = fan_fetcher()
+                    except Exception as exc:
+                        logger.warning("Error fetching cooling from '%s': %s", name, exc)
+                        continue
+
+                    try:
+                        new_events = _check_fan_rpm_changes(
+                            name, cooling_data_obj, miner_cfg["url"],
+                            fan_prev_rpm, fan_drop_events,
+                        )
+                        if new_events:
+                            api_client.send(TelemetryPayload(
+                                metric_type="fan_events",
+                                facility_id=facility_id,
+                                miner_identity=identity,
+                                data={"events": new_events},
+                            ))
+                    except Exception as exc:
+                        logger.warning("Error checking fan RPMs for '%s': %s", name, exc)
+
+                time.sleep(_FAN_DETECTION_POLL_INTERVAL)
+
+        except KeyboardInterrupt:
+            logger.info("Wright Fan detection shutting down (keyboard interrupt)")
+            print("\n[WRIGHT FAN] Stopped.")
+            break
+        except Exception:
+            consecutive_crashes += 1
+            backoff = min(10 * (2 ** (consecutive_crashes - 1)), _MAX_BACKOFF)
+            logger.exception(
+                "Unexpected error in fan detection (crash #%d). Restarting in %ds...",
+                consecutive_crashes, backoff,
+            )
+            time.sleep(backoff)
+
+
 def run(cfg: dict[str, Any]) -> None:
     """Main entry point -- runs forever with crash recovery."""
     poll_interval = cfg.get("poll_interval_seconds", 30)

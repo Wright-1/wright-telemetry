@@ -41,7 +41,7 @@ _ASSET_NAMES: dict[str, str] = {
 }
 
 
-_DEFAULT_INTERVAL = 3600  # 1 hour
+_DEFAULT_INTERVAL = 60  # 1 minute
 
 
 def check_for_update(cfg: dict) -> None:
