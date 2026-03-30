@@ -19,6 +19,7 @@ from wright_telemetry import __version__
 from wright_telemetry.config import load_config, run_setup_wizard
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
+from wright_telemetry.updater import check_for_update
 
 
 def _parse_args() -> argparse.Namespace:
@@ -82,6 +83,8 @@ def main() -> None:
     configure_logging(facility_id=cfg.get("facility_id", "unknown"))
     logger = logging.getLogger(__name__)
     logger.info("Wright Telemetry Collector v%s starting", __version__)
+
+    check_for_update(cfg)
 
     if args.install:
         install_service()
