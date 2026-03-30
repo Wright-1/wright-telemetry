@@ -41,17 +41,24 @@ jobs:
       - name: Create zip
         run: cd dist && zip wright-telemetry-macos.zip wright-telemetry
 
+      - name: Generate SHA256 checksum
+        run: cd dist && shasum -a 256 wright-telemetry-macos.zip > wright-telemetry-macos.zip.sha256
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: wright-telemetry-macos
-          path: dist/wright-telemetry-macos.zip
+          path: |
+            dist/wright-telemetry-macos.zip
+            dist/wright-telemetry-macos.zip.sha256
           if-no-files-found: error
 
       - name: Upload release asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/wright-telemetry-macos.zip
+          files: |
+            dist/wright-telemetry-macos.zip
+            dist/wright-telemetry-macos.zip.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

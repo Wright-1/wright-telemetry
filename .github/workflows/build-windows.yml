@@ -38,17 +38,27 @@ jobs:
       - name: Verify executable runs
         run: dist\wright-telemetry.exe --version
 
+      - name: Generate SHA256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\wright-telemetry.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  wright-telemetry.exe" | Out-File -Encoding ascii dist\wright-telemetry.exe.sha256
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: wright-telemetry-windows
-          path: dist/wright-telemetry.exe
+          path: |
+            dist/wright-telemetry.exe
+            dist/wright-telemetry.exe.sha256
           if-no-files-found: error
 
       - name: Upload release asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/wright-telemetry.exe
+          files: |
+            dist/wright-telemetry.exe
+            dist/wright-telemetry.exe.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

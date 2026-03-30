@@ -38,17 +38,24 @@ jobs:
       - name: Verify binary runs
         run: ./dist/wright-telemetry --version
 
+      - name: Generate SHA256 checksum
+        run: cd dist && sha256sum wright-telemetry > wright-telemetry.sha256
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: wright-telemetry-linux
-          path: dist/wright-telemetry
+          path: |
+            dist/wright-telemetry
+            dist/wright-telemetry.sha256
           if-no-files-found: error
 
       - name: Upload release asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/wright-telemetry
+          files: |
+            dist/wright-telemetry
+            dist/wright-telemetry.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
