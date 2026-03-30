@@ -29,7 +29,6 @@ from wright_telemetry.models import MinerIdentity, TelemetryPayload
 logger = logging.getLogger(__name__)
 
 _MAX_BACKOFF = 300  # 5 minutes
-_FAN_CHECK_INTERVAL = 5  # seconds -- dedicated Wright fan RPM monitoring interval
 
 
 def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -119,19 +118,25 @@ def _check_fan_rpm_changes(
     miner_url: str,
     fan_prev_rpm: dict[tuple[str, int], int],
     fan_drop_events: list[dict],
-) -> None:
+) -> list[dict]:
     """Detect RPM transitions, append independent drop events, and print to terminal.
 
     fan_prev_rpm: last known RPM per (miner_url, fan_position).
     fan_drop_events: append-only list of drop event dicts:
         {miner, miner_url, fan_position, prev_rpm,
          detected_at, recovered_at, duration_s}
+
+    Returns a list of new transition events ready for the fan_events telemetry payload.
+    Each entry: {fan_position, prev_rpm, curr_rpm, transition_type, occurred_at}
     """
     from wright_telemetry.models import CoolingData
     if not isinstance(data_obj, CoolingData):
-        return
+        return []
 
     now = time.time()
+    occurred_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    new_events: list[dict] = []
+
     for fan in data_obj.fans:
         key = (miner_url, fan.position)
         prev_rpm = fan_prev_rpm.get(key)
@@ -151,8 +156,15 @@ def _check_fan_rpm_changes(
                 fan_drop_events.append(event)
                 print(
                     f"[WRIGHT FAN] Fan #{fan.position} on '{name}' switched OFF "
-                    f"(RPM: {prev_rpm} → 0) | detection latency: ≤{_FAN_CHECK_INTERVAL}s"
+                    f"(RPM: {prev_rpm} → 0)"
                 )
+                new_events.append({
+                    "fan_position": fan.position,
+                    "prev_rpm": prev_rpm,
+                    "curr_rpm": 0,
+                    "transition_type": "off",
+                    "occurred_at": occurred_at,
+                })
 
             elif prev_rpm == 0 and curr_rpm > 0:
                 # Close the most recent open event for this fan.
@@ -165,26 +177,17 @@ def _check_fan_rpm_changes(
                             f"(RPM: 0 → {curr_rpm}) | was OFF for {event['duration_s']:.1f}s"
                         )
                         break
+                new_events.append({
+                    "fan_position": fan.position,
+                    "prev_rpm": 0,
+                    "curr_rpm": curr_rpm,
+                    "transition_type": "on",
+                    "occurred_at": occurred_at,
+                })
 
         fan_prev_rpm[key] = curr_rpm
 
-
-def _monitor_fans(
-    collectors: list[tuple[dict[str, Any], MinerCollector]],
-    fan_prev_rpm: dict[tuple[str, int], int],
-    fan_drop_events: list[dict],
-) -> None:
-    """Fetch cooling data every 5s for all miners and check for RPM changes."""
-    for miner_cfg, collector in collectors:
-        name = miner_cfg.get("name", miner_cfg["url"])
-        fetcher = collector.get_fetcher("cooling")
-        if fetcher is None:
-            continue
-        try:
-            data_obj = fetcher()
-            _check_fan_rpm_changes(name, data_obj, miner_cfg["url"], fan_prev_rpm, fan_drop_events)
-        except Exception as exc:
-            logger.warning("Error fetching cooling from '%s': %s", name, exc)
+    return new_events
 
 
 def _poll_cycle(
@@ -193,18 +196,26 @@ def _poll_cycle(
     api_client: WrightAPIClient,
     metrics: list[str],
     facility_id: str,
+    fan_prev_rpm: dict[tuple[str, int], int],
+    fan_drop_events: list[dict],
 ) -> None:
-    """Run one polling cycle across all miners and all consented metrics."""
+    """Run one polling cycle across all miners and all consented metrics.
+
+    Also checks for fan RPM transitions and sends fan_events payloads when found.
+    """
     for miner_cfg, collector in collectors:
         name = miner_cfg.get("name", miner_cfg["url"])
         identity = identities.get(miner_cfg["url"])
 
+        cooling_data_obj = None
         for metric in metrics:
             fetcher = collector.get_fetcher(metric)
             if fetcher is None:
                 continue
             try:
                 data_obj = fetcher()
+                if metric == "cooling":
+                    cooling_data_obj = data_obj
                 payload = TelemetryPayload(
                     metric_type=metric,
                     facility_id=facility_id,
@@ -216,6 +227,29 @@ def _poll_cycle(
                 logger.warning(
                     "Error fetching %s from '%s': %s", metric, name, exc,
                 )
+
+        # Fan RPM transition check — reuses cooling data if already fetched,
+        # otherwise fetches it now.
+        if cooling_data_obj is None:
+            fan_fetcher = collector.get_fetcher("cooling")
+            if fan_fetcher is not None:
+                try:
+                    cooling_data_obj = fan_fetcher()
+                except Exception as exc:
+                    logger.warning("Error fetching cooling from '%s': %s", name, exc)
+
+        if cooling_data_obj is not None:
+            try:
+                new_events = _check_fan_rpm_changes(name, cooling_data_obj, miner_cfg["url"], fan_prev_rpm, fan_drop_events)
+                if new_events:
+                    api_client.send(TelemetryPayload(
+                        metric_type="fan_events",
+                        facility_id=facility_id,
+                        miner_identity=identity,
+                        data={"events": new_events},
+                    ))
+            except Exception as exc:
+                logger.warning("Error checking fan RPMs for '%s': %s", name, exc)
 
 
 def run(cfg: dict[str, Any]) -> None:
@@ -260,7 +294,6 @@ def run(cfg: dict[str, Any]) -> None:
             known_urls = {m["url"] for m in miners}
             fan_prev_rpm: dict[tuple[str, int], int] = {}
             fan_drop_events: list[dict] = []
-            last_telemetry_at = 0.0
 
             while True:
                 now = time.time()
@@ -283,20 +316,14 @@ def run(cfg: dict[str, Any]) -> None:
 
                     last_scan = now
 
-                # Always check fan RPMs at the 5s interval.
-                _monitor_fans(collectors, fan_prev_rpm, fan_drop_events)
+                _poll_cycle(collectors, identities, api_client, metrics, facility_id, fan_prev_rpm, fan_drop_events)
 
-                # Send full telemetry at the configured poll interval.
-                if now - last_telemetry_at >= poll_interval:
-                    _poll_cycle(collectors, identities, api_client, metrics, facility_id)
-                    last_telemetry_at = now
-
-                time.sleep(_FAN_CHECK_INTERVAL)
+                time.sleep(poll_interval)
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")
             break
-        except Exception as exc:
+        except Exception:
             consecutive_crashes += 1
             backoff = min(10 * (2 ** (consecutive_crashes - 1)), _MAX_BACKOFF)
             logger.exception(
