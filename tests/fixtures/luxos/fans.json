@@ -1,0 +1,10 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1710504225, "Code": 202, "Msg": "4 Fan(s)", "Description": "LUXminer 2024.3.12.120000"}],
+  "FANS": [
+    {"ID": 0, "RPM": 4200, "Speed": 65},
+    {"ID": 1, "RPM": 4150, "Speed": 65},
+    {"ID": 2, "RPM": 4180, "Speed": 65},
+    {"ID": 3, "RPM": 4210, "Speed": 65}
+  ],
+  "id": 1
+}

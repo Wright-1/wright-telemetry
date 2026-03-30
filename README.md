@@ -6,7 +6,7 @@ A small tool that runs on your local network, reads data from your mining rigs, 
 
 ## What Does This Thing Do?
 
-You run this on any spare computer that's on the **same local network** as your miners.  It connects to each miner's built-in API (Braiins OS to start, more coming), reads the metrics you choose to share, encrypts everything, and sends it to your Wright Fan account.
+You run this on any spare computer that's on the **same local network** as your miners.  It connects to each miner's built-in API (Braiins OS, LuxOS, and more coming), reads the metrics you choose to share, encrypts everything, and sends it to your Wright Fan account.
 
 **You choose exactly what data to share.**  Every category is off by default.  The setup wizard explains what each one does and asks you before turning anything on.
 
@@ -198,7 +198,7 @@ The collector checks for updates at every startup and restarts automatically whe
 
 ## Running the Tests
 
-If you're poking around the code or contributing, you can run the test suite locally. It simulates the Braiins API with fake responses so you don't need a real miner plugged in.
+If you're poking around the code or contributing, you can run the test suite locally. It simulates the Braiins and LuxOS APIs with fake responses so you don't need a real miner plugged in.
 
 ```bash
 pip install -r requirements.txt # if you haven't already installed the requirements
@@ -206,7 +206,7 @@ pip install pytest responses
 pytest tests/ -v
 ```
 
-81 tests cover the full pipeline: talking to the miner API, parsing the responses, detecting fan failures, encrypting data, and sending it to Wright. If something breaks, the tests will catch it.
+Tests cover the full pipeline for both firmware types: talking to the miner API, parsing the responses, detecting fan failures, encrypting data, and sending it to Wright. If something breaks, the tests will catch it.
 
 More details in [docs/tests.md](docs/tests.md).
 
