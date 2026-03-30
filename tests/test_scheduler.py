@@ -174,10 +174,11 @@ class TestPollCycle:
         fan_prev: dict[tuple[str, int], int] = {}
         fan_drops: list[dict] = []
 
+        from wright_telemetry.baseline import BaselineTracker
         _poll_cycle(
             [(miner_cfg, stub_collector)],
             identities, api_client, metrics, "fac-1",
-            fan_prev, fan_drops,
+            fan_prev, fan_drops, BaselineTracker(),
         )
 
         sent_types = [call.args[0].metric_type for call in api_client.send.call_args_list]
@@ -203,10 +204,11 @@ class TestPollCycle:
         fan_prev: dict[tuple[str, int], int] = {}
         fan_drops: list[dict] = []
 
+        from wright_telemetry.baseline import BaselineTracker
         _poll_cycle(
             [(miner_cfg, collector)],
             identities, api_client, metrics, "fac-1",
-            fan_prev, fan_drops,
+            fan_prev, fan_drops, BaselineTracker(),
         )
 
         sent_types = [call.args[0].metric_type for call in api_client.send.call_args_list]
