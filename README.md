@@ -191,6 +191,7 @@ If you installed it as a background service, check the logs at `~/.wright-teleme
 If you're poking around the code or contributing, you can run the test suite locally. It simulates the Braiins API with fake responses so you don't need a real miner plugged in.
 
 ```bash
+pip install -r requirements.txt # if you haven't already installed the requirements
 pip install pytest responses
 pytest tests/ -v
 ```
