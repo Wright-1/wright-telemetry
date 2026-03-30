@@ -31,17 +31,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--discover", action="store_true", help="Scan the local network for miners and exit")
     parser.add_argument("--install", action="store_true", help="Install as a background service")
     parser.add_argument("--uninstall", action="store_true", help="Remove the background service")
-    parser.add_argument("--version", action="store_true", help="Print version and exit")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--loki-auth", help="Override Loki auth (Basic base64)")
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-
-    if args.version:
-        print(f"wright-telemetry {__version__}")
-        sys.exit(0)
 
     if args.loki_auth:
         import os
