@@ -14,6 +14,7 @@ class MinerIdentity:
     hostname: str
     mac_address: str
     wright_fans: bool = False
+    ip_address: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

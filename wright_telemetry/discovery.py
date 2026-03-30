@@ -269,6 +269,8 @@ def discovered_to_miner_cfgs(
             "discovered": True,
             "firmware": m.firmware,
         }
+        if m.mac_address:
+            entry["mac_address"] = m.mac_address
         if default_password_b64:
             entry["password_b64"] = default_password_b64
         cfgs.append(entry)
@@ -279,12 +281,42 @@ def merge_miners(
     manual: list[dict[str, Any]],
     discovered: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Merge manually-configured miners with discovered ones (manual wins)."""
-    manual_urls = {m["url"] for m in manual}
-    merged = list(manual)
+    """Merge manually-configured miners with discovered ones.
+
+    MAC address is the primary deduplication key; URL is the fallback.
+    When a discovered miner's MAC matches an existing entry at a different
+    URL, the existing entry's URL is updated to reflect the new IP so that
+    a miner that obtained a new DHCP lease is not treated as a new device.
+    """
+    merged = [dict(m) for m in manual]
+
+    # Build MAC → index map for fast lookup (only entries that have a MAC)
+    mac_to_idx: dict[str, int] = {
+        m["mac_address"]: i
+        for i, m in enumerate(merged)
+        if m.get("mac_address")
+    }
+    known_urls = {m["url"] for m in merged}
+
     for d in discovered:
-        if d["url"] not in manual_urls:
+        d_mac = d.get("mac_address")
+        if d_mac and d_mac in mac_to_idx:
+            # Known miner — update its URL if the IP changed
+            idx = mac_to_idx[d_mac]
+            if merged[idx]["url"] != d["url"]:
+                logger.info(
+                    "Miner %s (%s) moved: %s → %s",
+                    merged[idx].get("name", d_mac), d_mac,
+                    merged[idx]["url"], d["url"],
+                )
+                merged[idx]["url"] = d["url"]
+                known_urls = {m["url"] for m in merged}  # refresh after update
+        elif d["url"] not in known_urls:
             merged.append(d)
+            if d_mac:
+                mac_to_idx[d_mac] = len(merged) - 1
+            known_urls.add(d["url"])
+
     return merged
 
 

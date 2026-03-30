@@ -89,25 +89,38 @@ def _authenticate_all(collectors: list[tuple[dict[str, Any], MinerCollector]]) -
 def _fetch_identities(
     collectors: list[tuple[dict[str, Any], MinerCollector]],
 ) -> dict[str, MinerIdentity]:
-    """Fetch and cache miner identities keyed by miner URL."""
+    """Fetch and cache miner identities keyed by miner URL.
+
+    Also back-propagates the discovered MAC address into the miner config dict
+    so that subsequent re-discovery cycles can use it for deduplication.
+    """
     identities: dict[str, MinerIdentity] = {}
     for miner_cfg, collector in collectors:
-        name = miner_cfg.get("name", miner_cfg["url"])
+        url = miner_cfg["url"]
+        name = miner_cfg.get("name", url)
         wright_fans = bool(miner_cfg.get("wright_fans", False))
+        # Derive the IP from the URL for storage in the identity
+        ip = url.removeprefix("http://").removeprefix("https://").split("/")[0].split(":")[0]
         try:
             identity = collector.fetch_identity()
             identity.wright_fans = wright_fans
-            identities[miner_cfg["url"]] = identity
+            identity.ip_address = ip
+            identities[url] = identity
+            # Back-propagate MAC into config so re-discovery can match by MAC
+            if identity.mac_address and identity.mac_address != "unknown":
+                miner_cfg["mac_address"] = identity.mac_address
             logger.info(
-                "Identified miner '%s': uid=%s, serial=%s",
+                "Identified miner '%s': uid=%s, serial=%s, mac=%s, ip=%s",
                 name, identity.uid, identity.serial_number,
+                identity.mac_address, ip,
             )
         except Exception as exc:
             logger.warning("Could not fetch identity for '%s': %s", name, exc)
-            identities[miner_cfg["url"]] = MinerIdentity(
+            identities[url] = MinerIdentity(
                 uid="unknown", serial_number="unknown",
                 hostname=name, mac_address="unknown",
                 wright_fans=wright_fans,
+                ip_address=ip,
             )
     return identities
 
@@ -292,6 +305,8 @@ def run(cfg: dict[str, Any]) -> None:
             consecutive_crashes = 0
             last_scan = time.time()
             known_urls = {m["url"] for m in miners}
+            # Include MACs back-propagated from identity fetch
+            known_macs = {m["mac_address"] for m in miners if m.get("mac_address")}
             fan_prev_rpm: dict[tuple[str, int], int] = {}
             fan_drop_events: list[dict] = []
 
@@ -301,18 +316,61 @@ def run(cfg: dict[str, Any]) -> None:
                 if discovery_enabled and (now - last_scan) >= scan_interval:
                     logger.info("Running periodic miner re-discovery…")
                     refreshed = _resolve_miners(cfg)
-                    new_urls = {m["url"] for m in refreshed} - known_urls
 
-                    if new_urls:
-                        new_miner_cfgs = [m for m in refreshed if m["url"] in new_urls]
+                    # Detect miners that moved to a new IP (MAC known, URL changed)
+                    refreshed_by_mac = {
+                        m["mac_address"]: m for m in refreshed if m.get("mac_address")
+                    }
+                    for i, (miner_cfg, _) in enumerate(collectors):
+                        mac = miner_cfg.get("mac_address")
+                        if not mac or mac not in refreshed_by_mac:
+                            continue
+                        new_cfg = refreshed_by_mac[mac]
+                        if new_cfg["url"] == miner_cfg["url"]:
+                            continue
+                        old_url = miner_cfg["url"]
+                        logger.info(
+                            "Miner '%s' (%s) changed IP: %s → %s",
+                            miner_cfg.get("name", mac), mac, old_url, new_cfg["url"],
+                        )
+                        password = decode_password(new_cfg["password_b64"]) if new_cfg.get("password_b64") else ""
+                        new_collector = CollectorFactory.create(
+                            name=new_cfg.get("firmware", default_collector_type),
+                            url=new_cfg["url"],
+                            username=new_cfg.get("username"),
+                            password=password,
+                        )
+                        try:
+                            new_collector.authenticate()
+                        except Exception as exc:
+                            logger.warning("Auth failed for moved miner '%s': %s", new_cfg.get("name", mac), exc)
+                        # Move identity to new URL and update collector
+                        old_identity = identities.pop(old_url, None)
+                        if old_identity:
+                            old_identity.ip_address = new_cfg["url"].removeprefix("http://").removeprefix("https://").split("/")[0].split(":")[0]
+                            identities[new_cfg["url"]] = old_identity
+                        collectors[i] = (new_cfg, new_collector)
+                        known_urls.discard(old_url)
+                        known_urls.add(new_cfg["url"])
+
+                    # Genuinely new miners (new URL and new or absent MAC)
+                    new_urls = {m["url"] for m in refreshed} - known_urls
+                    new_miner_cfgs = [
+                        m for m in refreshed
+                        if m["url"] in new_urls
+                        and (not m.get("mac_address") or m["mac_address"] not in known_macs)
+                    ]
+
+                    if new_miner_cfgs:
                         new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
                         _authenticate_all(new_collectors)
                         new_ids = _fetch_identities(new_collectors)
 
                         collectors.extend(new_collectors)
                         identities.update(new_ids)
-                        known_urls |= new_urls
-                        logger.info("Discovered %d new miner(s): %s", len(new_urls), ", ".join(sorted(new_urls)))
+                        known_urls |= {m["url"] for m in new_miner_cfgs}
+                        known_macs |= {m["mac_address"] for m in new_miner_cfgs if m.get("mac_address")}
+                        logger.info("Discovered %d new miner(s): %s", len(new_miner_cfgs), ", ".join(m["url"] for m in new_miner_cfgs))
 
                     last_scan = now
 
