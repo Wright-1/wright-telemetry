@@ -278,7 +278,7 @@ Four workflows in `.github/workflows/`:
 
 | Workflow | Runner | Purpose |
 |----------|--------|---------|
-| `braiins-test.yml` | `ubuntu-latest` (Python 3.9 + 3.11) | Runs the Braiins test suite on every PR and push to main |
+| `braiins-test.yml` | `ubuntu-latest` (Python 3.11) | Runs the Braiins test suite on every PR and push to main |
 | `build-linux.yml` | `ubuntu-latest` | Tests + build Linux binary |
 | `build-macos.yml` | `macos-latest` | Tests + build macOS binary |
 | `build-windows.yml` | `windows-latest` | Tests + build Windows binary |

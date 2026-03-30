@@ -6,7 +6,7 @@ How to run the test suite and what it covers.
 
 ## Running Tests Locally
 
-You need Python 3.9+ and a virtual environment. From the project root:
+You need Python 3.11+ and a virtual environment. From the project root:
 
 ```bash
 # Create a venv (skip if you already have one)
@@ -131,5 +131,5 @@ To update fixture data: edit the JSON files directly. The test suite loads them 
 
 Tests run automatically in two places:
 
-1. **`braiins-test.yml`** -- dedicated test workflow, runs on every PR and push to main, tests against Python 3.9 and 3.11
+1. **`braiins-test.yml`** -- dedicated test workflow, runs on every PR and push to main, tests against Python 3.11
 2. **Build workflows** (`build-linux.yml`, `build-macos.yml`, `build-windows.yml`) -- tests run before each build, so a failing test blocks the release
