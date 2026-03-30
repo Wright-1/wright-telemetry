@@ -54,6 +54,18 @@ def save_config(cfg: dict[str, Any]) -> None:
         pass
 
 
+def mark_miner_wright_fans(miner_url: str, wright_fans: bool = True) -> None:
+    """Set ``wright_fans`` on the miner matching *miner_url* and persist."""
+    cfg = load_config()
+    if cfg is None:
+        return
+    for miner in cfg.get("miners", []):
+        if miner.get("url") == miner_url:
+            miner["wright_fans"] = wright_fans
+            break
+    save_config(cfg)
+
+
 # ------------------------------------------------------------------
 # Setup wizard
 # ------------------------------------------------------------------
