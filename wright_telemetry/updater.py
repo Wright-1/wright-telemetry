@@ -11,6 +11,7 @@ Flow:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -91,10 +92,19 @@ def _perform_update_check() -> None:
         )
         return
 
+    checksum_asset = _find_checksum_asset(release["assets"], asset["name"])
+    if checksum_asset is None:
+        logger.warning("No checksum asset found for %s — skipping update", asset["name"])
+        return
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        download_path = Path(tmpdir) / asset["name"]
+        tmppath = Path(tmpdir)
+        download_path = tmppath / asset["name"]
+        checksum_path = tmppath / checksum_asset["name"]
         _download(asset["browser_download_url"], download_path)
-        new_binary = _extract_binary(download_path, Path(tmpdir))
+        _download(checksum_asset["browser_download_url"], checksum_path)
+        _verify_checksum(download_path, checksum_path)
+        new_binary = _extract_binary(download_path, tmppath)
         if new_binary is None:
             logger.warning("Could not extract binary from downloaded asset")
             return
@@ -129,6 +139,26 @@ def _find_asset(assets: list[dict]) -> dict | None:
         if asset["name"] == target:
             return asset
     return None
+
+
+def _find_checksum_asset(assets: list[dict], asset_name: str) -> dict | None:
+    target = asset_name + ".sha256"
+    for asset in assets:
+        if asset["name"] == target:
+            return asset
+    return None
+
+
+def _verify_checksum(download_path: Path, checksum_path: Path) -> None:
+    """Raise ValueError if the SHA256 of download_path doesn't match checksum_path."""
+    # .sha256 files use sha256sum format: "<hex>  <filename>"
+    expected_hex = checksum_path.read_text().split()[0].lower()
+    actual_hex = hashlib.sha256(download_path.read_bytes()).hexdigest()
+    if actual_hex != expected_hex:
+        raise ValueError(
+            f"Checksum mismatch for {download_path.name}: "
+            f"expected {expected_hex}, got {actual_hex}"
+        )
 
 
 def _download(url: str, dest: Path) -> None:
