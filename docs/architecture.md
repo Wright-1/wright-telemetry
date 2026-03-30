@@ -41,6 +41,7 @@ wright_telemetry/
     __main__.py          # CLI entry point (argparse)
     config.py            # load/save config + interactive setup wizard
     consent.py           # per-metric consent management
+    discovery.py         # network scanning & miner auto-discovery
     encryption.py        # AES-256-GCM with HKDF key derivation
     api_client.py        # Wright Fan API HTTP client
     models.py            # dataclass models for all metric types
@@ -183,6 +184,47 @@ The `miner_identity` block is included in every POST so the portal can map fan s
 
 ---
 
+## Discovery & Auto-Scan
+
+The collector can find miners on the network automatically so operators don't have to punch in IPs by hand.
+
+```mermaid
+flowchart TD
+    Start["Setup wizard starts"] --> AutoDisc{"Auto-discover?"}
+    AutoDisc -->|yes| Subnet["Scan subnet(s) via<br/>Braiins + LuxOS probes"]
+    AutoDisc -->|no| Manual{"Add manually?"}
+    Subnet --> Found["Discovered miners added<br/>with default credentials"]
+    Found --> RuntimeRescan["Runtime re-scan timer<br/>(default 300s)"]
+    Manual -->|yes| RangePrompt["Prompt for CIDR / IP range"]
+    RangePrompt --> RangeScan["Scan the range"]
+    RangeScan --> RangeFound{"Miners found?"}
+    RangeFound -->|yes| Done["Done — skip individual prompt"]
+    RangeFound -->|no| Individual["Prompt for individual IPs"]
+    Individual --> Done
+    Manual -->|no| Done
+```
+
+### How probing works
+
+Each IP in the target range is probed concurrently (up to 128 threads). Two probe functions run per IP:
+
+| Probe | Method | Positive signal |
+|-------|--------|-----------------|
+| Braiins | `GET /api/v1/miner/details` | HTTP 200 or 401 |
+| LuxOS | TCP 4028 `{"command":"version"}` | Response contains `LUXminer` |
+
+Probes time out after 2 seconds. Results are sorted by IP and deduplicated by MAC address when merging with existing config.
+
+### Runtime re-scan
+
+When `discovery.scan_interval_seconds > 0`, the scheduler periodically re-scans the configured subnets and merges new miners into the live config. MAC address is the primary dedup key; if a miner's DHCP lease changes, the existing entry's URL is updated rather than creating a duplicate.
+
+### Wizard flow for manual/range entry
+
+When the user opts to add miners manually, the wizard first offers a CIDR or IP range scan. If that scan discovers miners, they are added automatically and the individual-IP prompt is skipped entirely — no reason to type IPs one by one when the scan already found them. The individual-IP fallback only appears if the range scan found nothing or was skipped.
+
+---
+
 ## Config File Schema
 
 Location: `~/.wright-telemetry/config.json`
@@ -201,12 +243,23 @@ Location: `~/.wright-telemetry/config.json`
         "errors": false
     },
     "collector_type": "braiins",
+    "discovery": {
+        "enabled": true,
+        "subnets": ["192.168.1.0/24"],
+        "scan_interval_seconds": 300,
+        "default_username": "root",
+        "default_password_b64": "string (base64, optional)"
+    },
     "miners": [
         {
-            "name": "string (friendly label)",
+            "name": "string (friendly label or hostname)",
             "url": "string (e.g. http://192.168.1.100)",
             "username": "string (optional)",
-            "password_b64": "string (base64, optional)"
+            "password_b64": "string (base64, optional)",
+            "discovered": "boolean (true if found by auto-scan)",
+            "firmware": "string (braiins, luxos, etc.)",
+            "mac_address": "string (optional, used for dedup)",
+            "wright_fans": "boolean (optional)"
         }
     ]
 }

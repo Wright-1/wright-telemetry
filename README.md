@@ -60,7 +60,6 @@ The first time you run it, a setup wizard walks you through everything:
   your Wright Fan dashboard.  You'll need:
     1. Your Wright Fan API key   (from the customer portal)
     2. Your Facility ID           (from the customer portal)
-    3. The IP address of each miner on your local network
 
   Wright Fan API Key []: wf_abc123def456
   Wright Fan API URL [https://api.wrightfan.com]:
@@ -69,21 +68,73 @@ The first time you run it, a setup wizard walks you through everything:
   Collector type [braiins]:
 ```
 
-Then it asks you to add your miners one at a time:
+Then it finds your miners for you.  You've got two options — pick whichever fits your setup:
+
+#### Option A: Auto-Discovery (Recommended)
+
+Let the collector scan your local network and find every miner automatically.  Just say yes when it asks:
+
+```
+  Scan your local network to discover miners automatically? (y/n) [y]: y
+
+  Detected local network: 192.168.1.0/24
+  Subnet(s) to scan (comma-separated CIDRs) [192.168.1.0/24]:
+  Re-scan interval in seconds (0 = disable runtime re-scan) [300]:
+
+  Default credentials applied to every discovered miner.
+  Default username [root]:
+  Default password (hidden):
+
+  Scanning 192.168.1.0/24…
+  Found 12 miner(s):
+
+    1. 192.168.1.101   braiins    hostname: rack-a-slot-1
+    2. 192.168.1.102   braiins    hostname: rack-a-slot-2
+    ...
+```
+
+That's it — every miner on the subnet is picked up.  The collector also **re-scans on a timer** (default: every 5 minutes) so new rigs you plug in show up automatically without re-running setup.
+
+#### Option B: IP Range / CIDR Scan
+
+If your miners live on a specific range (e.g. a dedicated VLAN), you can give a CIDR block or IP range and the collector will scan it, find every miner in that range, and add them all at once:
+
+```
+  Would you like to add miners manually? (y/n) [n]: y
+
+  Enter a CIDR block or IP range to scan for miners.
+  Examples:  192.168.1.0/24  or  192.168.1.100-192.168.1.200
+  CIDR or range (Enter to skip): 10.0.50.1-10.0.50.254
+
+  Credentials for miners found in this range:
+  Username [root]:
+  Password (hidden):
+
+  Scanning 10.0.50.1-10.0.50.254 for miners (254 host(s))…
+  Hang tight — checking every IP in the range for Braiins / LuxOS APIs.
+
+  Found 8 miner(s):
+
+    1. 10.0.50.10      braiins    hostname: s19-001
+    2. 10.0.50.11      luxos      hostname: s19-002
+    ...
+```
+
+No need to type each IP one by one — give the range, and the collector does the rest.
+
+#### Option C: One at a Time
+
+If you only have a couple miners or need to add one with special credentials, you can still add them individually.  The wizard only offers this if the range scan didn't find anything (so you won't get asked twice):
 
 ```
 --- Miner #1 ---
   Give this miner a friendly name: Rack A - Slot 1
-  Braiins miner IP or URL: 192.168.1.100
-  Braiins username [root]:
-  Braiins password (hidden):
+  Miner IP or URL: 192.168.1.100
+  Miner username [root]:
+  Miner password (hidden):
+  Is this miner using Wright fans? (y/n) [n]: y
 
-  Add another miner? (y/n) [n]: y
-
---- Miner #2 ---
-  Give this miner a friendly name: Rack A - Slot 2
-  Braiins miner IP or URL: 192.168.1.101
-  ...
+  Add another miner? (y/n) [n]:
 ```
 
 Finally, it walks through each data category and asks if you want to enable it:
