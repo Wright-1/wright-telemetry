@@ -196,6 +196,22 @@ The collector checks for updates at every startup and restarts automatically whe
 
 ---
 
+## Running the Tests
+
+If you're poking around the code or contributing, you can run the test suite locally. It simulates the Braiins API with fake responses so you don't need a real miner plugged in.
+
+```bash
+pip install -r requirements.txt # if you haven't already installed the requirements
+pip install pytest responses
+pytest tests/ -v
+```
+
+81 tests cover the full pipeline: talking to the miner API, parsing the responses, detecting fan failures, encrypting data, and sending it to Wright. If something breaks, the tests will catch it.
+
+More details in [docs/tests.md](docs/tests.md).
+
+---
+
 ## Privacy & Security
 
 - **You control your data.**  Every data category is off by default.  You explicitly opt in during setup.

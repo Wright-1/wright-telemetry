@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Collects miner telemetry and sends it to the Wright Fan dashboard"
 readme = "README.md"
 license = {text = "Apache-2.0"}
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31.0",
     "cryptography>=41.0.0",
@@ -18,6 +18,7 @@ dependencies = [
 dev = [
     "pyinstaller>=6.0",
     "pytest>=7.0",
+    "responses>=0.25.0",
 ]
 
 [project.scripts]
