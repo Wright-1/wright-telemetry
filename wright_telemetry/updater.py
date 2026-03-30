@@ -1,4 +1,4 @@
-"""Auto-update via GitHub Releases. Called once at startup.
+"""Auto-update via GitHub Releases. Polls on a background thread.
 
 Never raises — a failed update check must not prevent the collector from running.
 
@@ -7,6 +7,7 @@ Flow:
   2. Compare tag version to running __version__
   3. If newer, download the platform-appropriate asset
   4. Replace the running binary and restart the process
+  5. Sleep for update_check_interval seconds and repeat
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import zipfile
 from pathlib import Path
 
@@ -37,19 +39,25 @@ _ASSET_NAMES: dict[str, str] = {
 }
 
 
+_DEFAULT_INTERVAL = 3600  # 1 hour
+
+
 def check_for_update(cfg: dict) -> None:
-    """Non-blocking update check in a daemon thread."""
+    """Start a background thread that polls for updates indefinitely."""
     if cfg.get("disable_auto_update", False):
         logger.debug("Auto-update check disabled by config")
         return
-    threading.Thread(target=_do_check, daemon=True).start()
+    interval = int(cfg.get("update_check_interval", _DEFAULT_INTERVAL))
+    threading.Thread(target=_update_loop, args=(interval,), daemon=True).start()
 
 
-def _do_check() -> None:
-    try:
-        _perform_update_check()
-    except Exception as exc:
-        logger.warning("Update check failed (non-fatal): %s", exc)
+def _update_loop(interval: int) -> None:
+    while True:
+        try:
+            _perform_update_check()
+        except Exception as exc:
+            logger.warning("Update check failed (non-fatal): %s", exc)
+        time.sleep(interval)
 
 
 def _perform_update_check() -> None:
