@@ -17,6 +17,7 @@ from wright_telemetry.consent import DEFAULT_CONSENT, run_consent_wizard
 from wright_telemetry.discovery import (
     default_subnet,
     discovered_to_miner_cfgs,
+    parse_ip_target,
     run_interactive_discovery,
     run_interactive_range_scan,
 )
@@ -126,14 +127,21 @@ def _wizard_range_scan() -> list[dict[str, Any]]:
     password = _ask_password("Password (hidden)")
     pw_b64 = _encode_password(password) if password else ""
 
-    print(f"\n  Scanning {target}…")
+    try:
+        num_hosts = len(parse_ip_target(target))
+    except ValueError:
+        num_hosts = 0
+
+    print()
+    print(f"  Scanning {target} for miners ({num_hosts} host(s))…")
+    print("  Hang tight — checking every IP in the range for Braiins / LuxOS APIs.")
     found = run_interactive_range_scan(target)
 
     if not found:
-        print("  No miners found in that range.")
+        print("  No miners found in that range.  Double-check the range or try a broader CIDR.")
         return []
 
-    print(f"  Found {len(found)} miner(s):\n")
+    print(f"\n  Found {len(found)} miner(s):\n")
     for i, m in enumerate(found, 1):
         host_part = f"  hostname: {m.hostname}" if m.hostname else ""
         print(f"    {i}. {m.ip:<16} {m.firmware:<10}{host_part}")
@@ -281,14 +289,15 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
         range_miners = _wizard_range_scan()
         miners.extend(range_miners)
 
-        add_individual = _ask("Add individual miners by IP? (y/n)", default="n")
-        if add_individual.lower() in ("y", "yes"):
-            while True:
-                miner = _wizard_add_miner(len(miners))
-                miners.append(miner)
-                more = _ask("Add another miner? (y/n)", default="n")
-                if more.lower() not in ("y", "yes"):
-                    break
+        if not range_miners:
+            add_individual = _ask("Add individual miners by IP? (y/n)", default="n")
+            if add_individual.lower() in ("y", "yes"):
+                while True:
+                    miner = _wizard_add_miner(len(miners))
+                    miners.append(miner)
+                    more = _ask("Add another miner? (y/n)", default="n")
+                    if more.lower() not in ("y", "yes"):
+                        break
 
     cfg["miners"] = miners
 
