@@ -15,6 +15,7 @@ from dataclasses import asdict
 from typing import Any
 
 from wright_telemetry.api_client import WrightAPIClient
+from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
 from wright_telemetry.config import decode_password
@@ -203,6 +204,25 @@ def _check_fan_rpm_changes(
     return new_events
 
 
+def _print_baseline_dashboard(name: str, baseline: Any) -> None:
+    """Print a human-readable baseline summary to the terminal."""
+    temp_line = ""
+    if baseline.baseline_temp is not None:
+        temp_line = (
+            f"\n  Avg Chip Temp:        {baseline.baseline_temp:.2f} "
+            f"± {baseline.baseline_temp_stddev:.2f} °C"
+        )
+    print(
+        f"[WRIGHT FAN] Baseline established for miner '{name}' fan #{baseline.fan_position}\n"
+        f"  Baseline Established: Yes\n"
+        f"  Sample Count:         {baseline.baseline_sample_count}\n"
+        f"  Baseline Start Time:  {baseline.baseline_start_time}\n"
+        f"  Baseline End Time:    {baseline.baseline_end_time}\n"
+        f"  Avg RPM:              {baseline.baseline_rpm:.2f} ± {baseline.baseline_rpm_stddev:.2f}"
+        f"{temp_line}"
+    )
+
+
 def _poll_cycle(
     collectors: list[tuple[dict[str, Any], MinerCollector]],
     identities: dict[str, MinerIdentity],
@@ -211,6 +231,7 @@ def _poll_cycle(
     facility_id: str,
     fan_prev_rpm: dict[tuple[str, int], int],
     fan_drop_events: list[dict],
+    baseline_tracker: BaselineTracker,
 ) -> None:
     """Run one polling cycle across all miners and all consented metrics.
 
@@ -264,6 +285,26 @@ def _poll_cycle(
             except Exception as exc:
                 logger.warning("Error checking fan RPMs for '%s': %s", name, exc)
 
+            try:
+                new_baselines = baseline_tracker.record(identity, cooling_data_obj)
+                for baseline in new_baselines:
+                    _print_baseline_dashboard(name, baseline)
+                    logger.info(
+                        "Baseline established for miner '%s' fan #%d: "
+                        "rpm=%.2f±%.2f samples=%d",
+                        name, baseline.fan_position,
+                        baseline.baseline_rpm, baseline.baseline_rpm_stddev,
+                        baseline.baseline_sample_count,
+                    )
+                    api_client.send(TelemetryPayload(
+                        metric_type="baseline",
+                        facility_id=facility_id,
+                        miner_identity=identity,
+                        data=baseline.to_dict(),
+                    ))
+            except Exception as exc:
+                logger.warning("Error updating baseline for '%s': %s", name, exc)
+
 
 def run(cfg: dict[str, Any]) -> None:
     """Main entry point -- runs forever with crash recovery."""
@@ -285,6 +326,7 @@ def run(cfg: dict[str, Any]) -> None:
         facility_id=facility_id,
     )
 
+    baseline_tracker = BaselineTracker()
     consecutive_crashes = 0
 
     while True:
@@ -374,7 +416,7 @@ def run(cfg: dict[str, Any]) -> None:
 
                     last_scan = now
 
-                _poll_cycle(collectors, identities, api_client, metrics, facility_id, fan_prev_rpm, fan_drop_events)
+                _poll_cycle(collectors, identities, api_client, metrics, facility_id, fan_prev_rpm, fan_drop_events, baseline_tracker)
 
                 time.sleep(poll_interval)
 
