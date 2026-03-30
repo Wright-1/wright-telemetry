@@ -1,12 +1,13 @@
 """CLI entry point for the Wright Telemetry Collector.
 
 Usage:
-    wright-telemetry              Run the collector (starts setup if first time)
-    wright-telemetry --setup      Re-run the setup wizard
-    wright-telemetry --discover   Scan the local network for miners and exit
-    wright-telemetry --install    Register as a background service (auto-start on boot)
-    wright-telemetry --uninstall  Remove the background service
-    wright-telemetry --version    Print version and exit
+    wright-telemetry                     Run the collector (starts setup if first time)
+    wright-telemetry --setup             Re-run the setup wizard
+    wright-telemetry --discover          Scan the local network for miners and exit
+    wright-telemetry --install           Register as a background service (auto-start on boot)
+    wright-telemetry --uninstall         Remove the background service
+    wright-telemetry --version           Print version and exit
+    wright-telemetry --detect-wright-fans  Poll fan RPM every second for Wright Fan machines
 """
 
 from __future__ import annotations
@@ -31,17 +32,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--discover", action="store_true", help="Scan the local network for miners and exit")
     parser.add_argument("--install", action="store_true", help="Install as a background service")
     parser.add_argument("--uninstall", action="store_true", help="Remove the background service")
-    parser.add_argument("--version", action="store_true", help="Print version and exit")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--loki-auth", help="Override Loki auth (Basic base64)")
+    parser.add_argument(
+        "--detect-wright-fans",
+        action="store_true",
+        help="Poll fan RPM every second on Wright Fan machines and send RPM drop events to the server",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-
-    if args.version:
-        print(f"wright-telemetry {__version__}")
-        sys.exit(0)
 
     if args.loki_auth:
         import os
@@ -95,9 +97,13 @@ def main() -> None:
     # Import here to avoid circular imports and to ensure collector adapters register
     import wright_telemetry.collectors.braiins  # noqa: F401  -- triggers @register
     import wright_telemetry.collectors.luxos    # noqa: F401  -- triggers @register
-    from wright_telemetry.scheduler import run
 
-    run(cfg)
+    if args.detect_wright_fans:
+        from wright_telemetry.scheduler import run_fan_detection
+        run_fan_detection(cfg)
+    else:
+        from wright_telemetry.scheduler import run
+        run(cfg)
 
 
 if __name__ == "__main__":
