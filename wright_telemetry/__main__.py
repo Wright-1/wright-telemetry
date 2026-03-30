@@ -131,15 +131,28 @@ def main() -> None:
 
     if args.detect_wright_fans:
         from wright_telemetry.scheduler import run_fan_detection
+
         completed = run_fan_detection(cfg)
         if not completed:
             return
         cfg["fan_detection_completed"] = True
         from wright_telemetry.config import save_config
+
         save_config(cfg)
 
     from wright_telemetry.scheduler import run
-    run(cfg)
+    from wright_telemetry.ws_client import AgentController, WebSocketClient
+
+    controller = AgentController()
+    ws_client = WebSocketClient(
+        controller,
+        api_url=cfg.get("wright_api_url", ""),
+        api_key=cfg.get("wright_api_key", ""),
+        facility_id=cfg.get("facility_id", ""),
+    )
+    ws_client.start()
+
+    run(cfg, controller=controller)
 
 
 if __name__ == "__main__":
