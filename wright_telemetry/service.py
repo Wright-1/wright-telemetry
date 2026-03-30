@@ -9,6 +9,7 @@ on failure.  Supports:
 
 from __future__ import annotations
 
+import getpass
 import os
 import platform
 import shutil
@@ -41,8 +42,6 @@ def _install_systemd() -> None:
     unit = textwrap.dedent(f"""\
         [Unit]
         Description=Wright Telemetry Collector
-        After=network-online.target
-        Wants=network-online.target
 
         [Service]
         Type=simple
@@ -64,7 +63,7 @@ def _install_systemd() -> None:
 
     # Enable lingering so the service runs without an active login session
     try:
-        subprocess.run(["loginctl", "enable-linger"], check=True)
+        subprocess.run(["loginctl", "enable-linger", getpass.getuser()], check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         print("  Note: could not enable linger. The service may stop when you log out.")
 
@@ -96,6 +95,9 @@ def _install_launchd() -> None:
 
     args_xml = "\n        ".join(f"<string>{a}</string>" for a in program_args)
 
+    log_dir = Path.home() / ".wright-telemetry"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
     plist = textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -113,9 +115,9 @@ def _install_launchd() -> None:
             <key>KeepAlive</key>
             <true/>
             <key>StandardOutPath</key>
-            <string>{Path.home() / ".wright-telemetry" / "stdout.log"}</string>
+            <string>{log_dir / "stdout.log"}</string>
             <key>StandardErrorPath</key>
-            <string>{Path.home() / ".wright-telemetry" / "stderr.log"}</string>
+            <string>{log_dir / "stderr.log"}</string>
         </dict>
         </plist>
     """)
@@ -124,15 +126,42 @@ def _install_launchd() -> None:
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_path.write_text(plist)
 
-    subprocess.run(["launchctl", "load", str(plist_path)], check=True)
+    uid = os.getuid()
+    domain_target = f"gui/{uid}"
+
+    # Remove stale registration if present
+    subprocess.run(
+        ["launchctl", "bootout", f"{domain_target}/{_LAUNCHD_LABEL}"],
+        check=False, capture_output=True,
+    )
+    try:
+        subprocess.run(
+            ["launchctl", "bootstrap", domain_target, str(plist_path)],
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        # Fallback for macOS < 10.10
+        subprocess.run(["launchctl", "load", str(plist_path)], check=True)
+
     print(f"  Installed launchd agent: {plist_path}")
     print(f"  Status: launchctl list | grep {_LAUNCHD_LABEL}")
 
 
 def _uninstall_launchd() -> None:
     plist_path = _launchd_plist_path()
+    uid = os.getuid()
+    domain_target = f"gui/{uid}"
+
+    try:
+        subprocess.run(
+            ["launchctl", "bootout", f"{domain_target}/{_LAUNCHD_LABEL}"],
+            check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        if plist_path.exists():
+            subprocess.run(["launchctl", "unload", str(plist_path)], check=False)
+
     if plist_path.exists():
-        subprocess.run(["launchctl", "unload", str(plist_path)], check=False)
         plist_path.unlink()
     print("  Removed launchd agent.")
 
@@ -145,20 +174,14 @@ def _install_windows_task() -> None:
     exe = _get_executable()
     task_name = f"\\WrightFan\\{_SERVICE_NAME}"
 
-    # Create the task
     cmd = [
         "schtasks", "/Create",
         "/TN", task_name,
         "/TR", exe,
-        "/SC", "ONSTART",
-        "/RL", "HIGHEST",
+        "/SC", "ONLOGON",
         "/F",  # force overwrite
     ]
     subprocess.run(cmd, check=True)
-
-    # Configure restart on failure via XML import would be ideal, but
-    # schtasks /Create covers the basics. For restart-on-failure we use
-    # the inner crash recovery loop in scheduler.py.
 
     print(f"  Installed Windows scheduled task: {task_name}")
     print(f"  Status: schtasks /Query /TN \"{task_name}\"")

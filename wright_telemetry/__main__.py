@@ -17,7 +17,7 @@ import logging
 import sys
 
 from wright_telemetry import __version__
-from wright_telemetry.config import load_config, run_setup_wizard
+from wright_telemetry.config import CONFIG_DIR, load_config, run_setup_wizard
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
 from wright_telemetry.updater import check_for_update
@@ -56,6 +56,11 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Ensure the data/log directory exists early so that launchd (macOS) can
+    # open its stdout/stderr log paths on the next reboot.  Running any
+    # subcommand with an updated binary is enough to heal existing installs.
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
     args = _parse_args()
 
     if args.loki_auth:
