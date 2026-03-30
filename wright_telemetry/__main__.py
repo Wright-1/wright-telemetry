@@ -19,6 +19,7 @@ from wright_telemetry import __version__
 from wright_telemetry.config import load_config, run_setup_wizard
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
+from wright_telemetry.updater import check_for_update
 
 
 def _parse_args() -> argparse.Namespace:
@@ -88,6 +89,8 @@ def main() -> None:
         print("\n  The service has been installed and will start automatically.")
         print("  You can also run the collector manually: wright-telemetry")
         sys.exit(0)
+
+    check_for_update(cfg)
 
     # Import here to avoid circular imports and to ensure collector adapters register
     import wright_telemetry.collectors.braiins  # noqa: F401  -- triggers @register

@@ -19,6 +19,9 @@ env/
 wright-telemetry.pkg
 *.dmg
 
+# PyUpdater build artifacts and signing keys (never commit pyu-data/)
+pyu-data/
+
 # IDE
 .idea/
 .vscode/

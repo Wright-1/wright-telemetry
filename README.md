@@ -24,6 +24,8 @@ Grab the latest release for your operating system from the [Releases page](https
 | macOS    | `wright-telemetry-macos.zip` (unzip first) |
 | Linux    | `wright-telemetry` |
 
+Once you have the collector running, **it updates itself automatically** — no need to download new releases manually.
+
 ### 2. Run It
 
 Open a terminal (Command Prompt on Windows, Terminal on Mac/Linux) and navigate to wherever you downloaded the file.
@@ -183,6 +185,14 @@ Go to **System Settings > Privacy & Security** and click "Allow Anyway" next to 
 **It was working but stopped**
 
 If you installed it as a background service, check the logs at `~/.wright-telemetry/collector.log`.  The service auto-restarts on failures, so check for repeated errors.
+
+**Disable automatic updates**
+
+The collector checks for updates at every startup and restarts automatically when a new version is available. To opt out, add the following to `~/.wright-telemetry/config.json`:
+
+```json
+"disable_auto_update": true
+```
 
 ---
 

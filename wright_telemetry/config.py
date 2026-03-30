@@ -295,6 +295,19 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     # -- Consent --
     cfg["consent"] = run_consent_wizard(cfg.get("consent"))
 
+    # -- Auto-update --
+    print("\n" + "-" * 60)
+    print("  AUTO-UPDATE")
+    print("-" * 60)
+    print()
+    print("  Wright Telemetry can check for new releases every hour and")
+    print("  apply them automatically without any action on your part.")
+    print()
+    current_auto_update = not cfg.get("disable_auto_update", False)
+    default_ans = "y" if current_auto_update else "n"
+    ans = _ask("Enable automatic updates? (y/n)", default=default_ans)
+    cfg["disable_auto_update"] = ans.lower() not in ("y", "yes")
+
     # -- Save --
     save_config(cfg)
     print(f"\n  Configuration saved to {CONFIG_FILE}")
