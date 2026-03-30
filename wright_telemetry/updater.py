@@ -11,6 +11,7 @@ Flow:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -29,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 GITHUB_REPO = "Wright-1/wright-telemetry"
 _RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-_TIMEOUT = 15  # seconds for network requests
+_CONNECT_TIMEOUT = 15  # seconds to establish connection
+_READ_TIMEOUT = 60    # seconds per socket read (important for large binaries)
 
 # Maps sys.platform to the GitHub Release asset name for that platform
 _ASSET_NAMES: dict[str, str] = {
@@ -90,10 +92,19 @@ def _perform_update_check() -> None:
         )
         return
 
+    checksum_asset = _find_checksum_asset(release["assets"], asset["name"])
+    if checksum_asset is None:
+        logger.warning("No checksum asset found for %s — skipping update", asset["name"])
+        return
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        download_path = Path(tmpdir) / asset["name"]
+        tmppath = Path(tmpdir)
+        download_path = tmppath / asset["name"]
+        checksum_path = tmppath / checksum_asset["name"]
         _download(asset["browser_download_url"], download_path)
-        new_binary = _extract_binary(download_path, Path(tmpdir))
+        _download(checksum_asset["browser_download_url"], checksum_path)
+        _verify_checksum(download_path, checksum_path)
+        new_binary = _extract_binary(download_path, tmppath)
         if new_binary is None:
             logger.warning("Could not extract binary from downloaded asset")
             return
@@ -102,7 +113,7 @@ def _perform_update_check() -> None:
 
 def _fetch_latest_release() -> dict | None:
     try:
-        resp = requests.get(_RELEASES_URL, timeout=_TIMEOUT)
+        resp = requests.get(_RELEASES_URL, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT))
         resp.raise_for_status()
         return resp.json()
     except requests.RequestException as exc:
@@ -130,12 +141,50 @@ def _find_asset(assets: list[dict]) -> dict | None:
     return None
 
 
+def _find_checksum_asset(assets: list[dict], asset_name: str) -> dict | None:
+    target = asset_name + ".sha256"
+    for asset in assets:
+        if asset["name"] == target:
+            return asset
+    return None
+
+
+def _verify_checksum(download_path: Path, checksum_path: Path) -> None:
+    """Raise ValueError if the SHA256 of download_path doesn't match checksum_path."""
+    # .sha256 files use sha256sum format: "<hex>  <filename>"
+    expected_hex = checksum_path.read_text().split()[0].lower()
+    actual_hex = hashlib.sha256(download_path.read_bytes()).hexdigest()
+    if actual_hex != expected_hex:
+        raise ValueError(
+            f"Checksum mismatch for {download_path.name}: "
+            f"expected {expected_hex}, got {actual_hex}"
+        )
+
+
 def _download(url: str, dest: Path) -> None:
-    resp = requests.get(url, stream=True, timeout=_TIMEOUT)
+    resp = requests.get(url, stream=True, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT))
     resp.raise_for_status()
     with open(dest, "wb") as f:
         for chunk in resp.iter_content(chunk_size=65536):
             f.write(chunk)
+
+
+def _safe_extractall_tar(tf: tarfile.TarFile, workdir: Path) -> None:
+    resolved_workdir = workdir.resolve()
+    for member in tf.getmembers():
+        member_path = (workdir / member.name).resolve()
+        if not member_path.is_relative_to(resolved_workdir):
+            raise ValueError(f"Path traversal detected in archive: {member.name}")
+    tf.extractall(workdir)
+
+
+def _safe_extractall_zip(zf: zipfile.ZipFile, workdir: Path) -> None:
+    resolved_workdir = workdir.resolve()
+    for name in zf.namelist():
+        member_path = (workdir / name).resolve()
+        if not member_path.is_relative_to(resolved_workdir):
+            raise ValueError(f"Path traversal detected in archive: {name}")
+    zf.extractall(workdir)
 
 
 def _extract_binary(asset_path: Path, workdir: Path) -> Path | None:
@@ -144,13 +193,13 @@ def _extract_binary(asset_path: Path, workdir: Path) -> Path | None:
 
     if name.endswith(".tar.gz"):
         with tarfile.open(asset_path) as tf:
-            tf.extractall(workdir)
+            _safe_extractall_tar(tf, workdir)
         binary = workdir / "wright-telemetry"
         return binary if binary.exists() else None
 
     if name.endswith(".zip"):
         with zipfile.ZipFile(asset_path) as zf:
-            zf.extractall(workdir)
+            _safe_extractall_zip(zf, workdir)
         # macOS zip contains bare binary; Windows zip contains the .exe
         for candidate in ("wright-telemetry", "wright-telemetry.exe"):
             binary = workdir / candidate
@@ -173,9 +222,12 @@ def _replace_and_restart(new_binary: Path) -> None:
 
 def _replace_and_restart_unix(new_binary: Path, current: Path) -> None:
     new_binary.chmod(0o755)
-    # On Unix we can overwrite the file while the process is running;
-    # the running inode stays alive until execv replaces the process image.
-    shutil.copy2(new_binary, current)
+    # Stage next to the target so os.rename is atomic (same filesystem).
+    # The running inode stays alive until execv replaces the process image.
+    staged = current.with_suffix(".new")
+    shutil.copy2(new_binary, staged)
+    staged.chmod(0o755)
+    os.rename(staged, current)
     logger.info("Update applied. Restarting...")
     os.execv(str(current), sys.argv)
 
@@ -187,9 +239,11 @@ def _replace_and_restart_windows(new_binary: Path, current: Path) -> None:
     staged = current.with_name(current.stem + "-update" + current.suffix)
     shutil.copy2(new_binary, staged)
 
+    pid = os.getpid()
     script = (
-        f"Start-Sleep -Seconds 2; "
-        f"Move-Item -Force '{staged}' '{current}'; "
+        f"$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; "
+        f"if ($p) {{ Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue }}; "
+        f"if (!(Move-Item -Force '{staged}' '{current}' -PassThru)) {{ exit 1 }}; "
         f"Start-Process '{current}'"
     )
     subprocess.Popen(
