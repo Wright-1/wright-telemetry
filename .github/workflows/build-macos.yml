@@ -25,7 +25,10 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller pytest responses
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
 
       - name: Build binary
         env:

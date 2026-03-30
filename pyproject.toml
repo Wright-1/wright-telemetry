@@ -18,6 +18,7 @@ dependencies = [
 dev = [
     "pyinstaller>=6.0",
     "pytest>=7.0",
+    "responses>=0.25.0",
 ]
 
 [project.scripts]

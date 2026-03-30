@@ -1,0 +1,58 @@
+{
+  "hashboards": [
+    {
+      "board_name": "Hashboard 0",
+      "board_temp": {"value": 58.0, "unit": "C"},
+      "highest_chip_temp": {"value": 72.5, "unit": "C"},
+      "lowest_inlet_temp": {"value": 32.0, "unit": "C"},
+      "highest_outlet_temp": {"value": 55.0, "unit": "C"},
+      "chips_count": 114,
+      "id": "0",
+      "enabled": true,
+      "stats": {
+        "ghs_5s": 48410.2,
+        "ghs_30m": 48300.0,
+        "accepted": 19477,
+        "rejected": 5,
+        "hardware_errors": 4,
+        "serial_number": "HB0-2391AX-A"
+      }
+    },
+    {
+      "board_name": "Hashboard 1",
+      "board_temp": {"value": 60.0, "unit": "C"},
+      "highest_chip_temp": {"value": 74.0, "unit": "C"},
+      "lowest_inlet_temp": {"value": 33.0, "unit": "C"},
+      "highest_outlet_temp": {"value": 57.0, "unit": "C"},
+      "chips_count": 114,
+      "id": "1",
+      "enabled": true,
+      "stats": {
+        "ghs_5s": 48400.1,
+        "ghs_30m": 48350.0,
+        "accepted": 19480,
+        "rejected": 6,
+        "hardware_errors": 5,
+        "serial_number": "HB1-2391AX-B"
+      }
+    },
+    {
+      "board_name": "Hashboard 2",
+      "board_temp": {"value": 57.0, "unit": "C"},
+      "highest_chip_temp": {"value": 71.0, "unit": "C"},
+      "lowest_inlet_temp": {"value": 31.5, "unit": "C"},
+      "highest_outlet_temp": {"value": 54.0, "unit": "C"},
+      "chips_count": 114,
+      "id": "2",
+      "enabled": true,
+      "stats": {
+        "ghs_5s": 48420.2,
+        "ghs_30m": 48330.2,
+        "accepted": 19475,
+        "rejected": 4,
+        "hardware_errors": 3,
+        "serial_number": "HB2-2391AX-C"
+      }
+    }
+  ]
+}

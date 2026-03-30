@@ -1,0 +1,24 @@
+{
+  "errors": [
+    {
+      "message": "Hashboard 1 temperature exceeds warning threshold",
+      "timestamp": "2024-03-15T10:23:45Z",
+      "error_codes": [
+        {"code": "TEMP_WARNING", "severity": "warning"}
+      ],
+      "components": [
+        {"type": "hashboard", "id": "1", "name": "Hashboard 1"}
+      ]
+    },
+    {
+      "message": "Fan 2 RPM below expected minimum",
+      "timestamp": "2024-03-15T09:15:30Z",
+      "error_codes": [
+        {"code": "FAN_RPM_LOW", "severity": "error"}
+      ],
+      "components": [
+        {"type": "fan", "id": "2", "name": "Fan 2"}
+      ]
+    }
+  ]
+}

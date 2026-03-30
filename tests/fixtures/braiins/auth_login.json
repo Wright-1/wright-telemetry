@@ -1,0 +1,4 @@
+{
+  "token": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyb290IiwiZXhwIjoxNzE2MjM5MDIyfQ.fake_signature",
+  "timeout_s": 3600
+}
