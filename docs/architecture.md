@@ -274,21 +274,22 @@ pyinstaller wright-telemetry.spec
 
 ## GitHub Actions CI
 
-Three independent workflows (`.github/workflows/`):
+Four workflows in `.github/workflows/`:
 
-| Workflow | Runner | Artifact |
-|----------|--------|----------|
-| `build-linux.yml` | `ubuntu-latest` | `wright-telemetry` (ELF binary) |
-| `build-macos.yml` | `macos-latest` | `wright-telemetry-macos.zip` |
-| `build-windows.yml` | `windows-latest` | `wright-telemetry.exe` |
+| Workflow | Runner | Purpose |
+|----------|--------|---------|
+| `braiins-test.yml` | `ubuntu-latest` (Python 3.9 + 3.11) | Runs the Braiins test suite on every PR and push to main |
+| `build-linux.yml` | `ubuntu-latest` | Tests + build Linux binary |
+| `build-macos.yml` | `macos-latest` | Tests + build macOS binary |
+| `build-windows.yml` | `windows-latest` | Tests + build Windows binary |
 
-Each workflow:
+Each build workflow:
 1. Checks out code
 2. Sets up Python 3.11
-3. Installs dependencies + PyInstaller
-4. Builds with `WRIGHT_LOKI_AUTH` from GitHub Secrets
-5. Verifies the binary runs (`--version`)
-6. Uploads artifact (always)
-7. Uploads release asset (on version tags like `v0.1.0`)
-
-Workflows are independent -- one failing does not block the others.
+3. Installs dependencies + PyInstaller + test deps
+4. **Runs the test suite** (build is blocked if tests fail)
+5. Builds with `WRIGHT_LOKI_AUTH` from GitHub Secrets
+6. Verifies the binary runs (`--version`)
+7. Generates SHA256 checksum
+8. Uploads artifact (always)
+9. Uploads release asset (on version tags like `v0.1.0`)
