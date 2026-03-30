@@ -84,13 +84,13 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     logger.info("Wright Telemetry Collector v%s starting", __version__)
 
-    check_for_update(cfg)
-
     if args.install:
         install_service()
         print("\n  The service has been installed and will start automatically.")
         print("  You can also run the collector manually: wright-telemetry")
         sys.exit(0)
+
+    check_for_update(cfg)
 
     # Import here to avoid circular imports and to ensure collector adapters register
     import wright_telemetry.collectors.braiins  # noqa: F401  -- triggers @register
