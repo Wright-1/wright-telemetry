@@ -21,7 +21,7 @@ from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
-from wright_telemetry.config import decode_password
+from wright_telemetry.config import decode_password, mark_miner_wright_fans
 from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
     discover_miners,
@@ -516,7 +516,103 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
     return True
 
 
-def run(cfg: dict[str, Any]) -> None:
+def _run_ws_fan_detection(
+    cfg: dict[str, Any],
+    controller: Any,
+    api_client: WrightAPIClient,
+) -> None:
+    """WebSocket-triggered fan detection: 1s cooling polls on ALL miners.
+
+    Runs until the controller mode switches back to ``"normal"``.
+    Pushes real-time events to the portal via the controller event queue
+    and continues sending fan_events via HTTP telemetry as usual.
+    """
+    facility_id = cfg.get("facility_id", "unknown")
+    default_collector_type = cfg.get("collector_type", "braiins")
+
+    miners = _resolve_miners(cfg)
+    if not miners:
+        logger.warning("No miners found during fan detection re-discovery")
+        controller.push_event({"event": "fan_detection_stopped", "reason": "no_miners"})
+        return
+
+    collectors = _build_collectors(miners, default_collector_type)
+    _authenticate_all(collectors)
+    identities = _fetch_identities(collectors)
+
+    controller.push_event({
+        "event": "fan_detection_started",
+        "miner_count": len(collectors),
+    })
+    logger.info(
+        "WebSocket fan detection started: %d miner(s), polling every 1s",
+        len(collectors),
+    )
+
+    fan_prev_rpm: dict[tuple[str, int], int] = {}
+    fan_drop_events: list[dict] = []
+
+    while controller.mode == "fan_detection":
+        for miner_cfg, collector in collectors:
+            name = miner_cfg.get("name", miner_cfg["url"])
+            identity = identities.get(miner_cfg["url"])
+            fan_fetcher = collector.get_fetcher("cooling")
+            if fan_fetcher is None:
+                continue
+            try:
+                cooling_data_obj = fan_fetcher()
+            except Exception as exc:
+                logger.warning("Error fetching cooling from '%s': %s", name, exc)
+                continue
+
+            try:
+                new_events = _check_fan_rpm_changes(
+                    name, cooling_data_obj, miner_cfg["url"],
+                    fan_prev_rpm, fan_drop_events,
+                )
+                if new_events:
+                    api_client.send(TelemetryPayload(
+                        metric_type="fan_events",
+                        facility_id=facility_id,
+                        miner_identity=identity,
+                        data={"events": new_events},
+                    ))
+                    for ev in new_events:
+                        controller.push_event({
+                            "event": "fan_transition",
+                            "miner": name,
+                            "miner_url": miner_cfg["url"],
+                            "fan_position": ev["fan_position"],
+                            "prev_rpm": ev["prev_rpm"],
+                            "curr_rpm": ev["curr_rpm"],
+                            "transition_type": ev["transition_type"],
+                        })
+                        if ev["transition_type"] == "on":
+                            mark_miner_wright_fans(miner_cfg["url"])
+                            miner_cfg["wright_fans"] = True
+                            if identity:
+                                identity.wright_fans = True
+                            controller.push_event({
+                                "event": "wright_fan_detected",
+                                "miner": name,
+                                "miner_url": miner_cfg["url"],
+                                "fan_position": ev["fan_position"],
+                            })
+                            logger.info(
+                                "Wright fan detected: miner '%s' fan #%d",
+                                name, ev["fan_position"],
+                            )
+            except Exception as exc:
+                logger.warning("Error checking fan RPMs for '%s': %s", name, exc)
+
+        if controller.wait_for_mode_change(timeout=_FAN_DETECTION_POLL_INTERVAL):
+            break
+
+    controller.push_event({"event": "fan_detection_stopped"})
+    logger.info("WebSocket fan detection stopped, returning to normal mode")
+
+
+def run(cfg: dict[str, Any], controller: Any = None) -> None:
     """Main entry point -- runs forever with crash recovery."""
     poll_interval = cfg.get("poll_interval_seconds", 30)
     facility_id = cfg.get("facility_id", "unknown")
@@ -626,7 +722,12 @@ def run(cfg: dict[str, Any]) -> None:
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
 
-                time.sleep(poll_interval)
+                if controller and controller.wait_for_mode_change(timeout=poll_interval):
+                    if controller.mode == "fan_detection":
+                        _run_ws_fan_detection(cfg, controller, api_client)
+                else:
+                    if not controller:
+                        time.sleep(poll_interval)
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")
