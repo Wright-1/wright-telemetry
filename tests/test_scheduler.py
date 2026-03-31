@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,7 +13,6 @@ from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.models import (
     CoolingData,
     ErrorData,
-    FanReading,
     HashboardData,
     HashrateData,
     MinerIdentity,
@@ -22,7 +20,6 @@ from wright_telemetry.models import (
 )
 from wright_telemetry.scheduler import (
     _build_collectors,
-    _check_fan_rpm_changes,
     _poll_cycle,
 )
 
@@ -87,76 +84,6 @@ def stub_collector(all_fixtures) -> StubCollector:
 
 
 # ---------------------------------------------------------------
-# _check_fan_rpm_changes
-# ---------------------------------------------------------------
-
-class TestCheckFanRpmChanges:
-
-    def test_initial_reading_no_events(self, stub_collector):
-        """First reading has no previous state, so no transitions."""
-        cooling = stub_collector.fetch_cooling()
-        prev: dict[tuple[str, int], int] = {}
-        drops: list[dict] = []
-        events = _check_fan_rpm_changes("miner1", cooling, "http://10.0.0.1", prev, drops)
-        assert events == []
-        assert len(prev) == 4
-
-    def test_fan_off_detected(self):
-        """RPM drops from >0 to 0 => off event."""
-        prev: dict[tuple[str, int], int] = {("http://m", 0): 4200}
-        drops: list[dict] = []
-        cooling = CoolingData(
-            fans=[FanReading(position=0, rpm=0, target_speed_ratio=0.0)],
-        )
-        events = _check_fan_rpm_changes("m", cooling, "http://m", prev, drops)
-        assert len(events) == 1
-        assert events[0]["transition_type"] == "off"
-        assert events[0]["prev_rpm"] == 4200
-        assert events[0]["curr_rpm"] == 0
-        assert len(drops) == 1
-        assert drops[0]["recovered_at"] is None
-
-    def test_fan_on_detected(self):
-        """RPM rises from 0 to >0 => on event, closes the drop."""
-        prev: dict[tuple[str, int], int] = {("http://m", 0): 0}
-        drops: list[dict] = [
-            {
-                "miner": "m",
-                "miner_url": "http://m",
-                "fan_position": 0,
-                "prev_rpm": 4200,
-                "detected_at": 1000.0,
-                "recovered_at": None,
-                "duration_s": None,
-            }
-        ]
-        cooling = CoolingData(
-            fans=[FanReading(position=0, rpm=4100, target_speed_ratio=0.65)],
-        )
-        events = _check_fan_rpm_changes("m", cooling, "http://m", prev, drops)
-        assert len(events) == 1
-        assert events[0]["transition_type"] == "on"
-        assert drops[0]["recovered_at"] is not None
-        assert drops[0]["duration_s"] is not None
-
-    def test_stable_rpm_no_events(self):
-        """Same RPM as before => no events."""
-        prev: dict[tuple[str, int], int] = {("http://m", 0): 4200}
-        drops: list[dict] = []
-        cooling = CoolingData(
-            fans=[FanReading(position=0, rpm=4200, target_speed_ratio=0.65)],
-        )
-        events = _check_fan_rpm_changes("m", cooling, "http://m", prev, drops)
-        assert events == []
-
-    def test_non_cooling_data_ignored(self):
-        prev: dict[tuple[str, int], int] = {}
-        drops: list[dict] = []
-        events = _check_fan_rpm_changes("m", HashrateData({}, {}, {}), "http://m", prev, drops)
-        assert events == []
-
-
-# ---------------------------------------------------------------
 # _poll_cycle
 # ---------------------------------------------------------------
 
@@ -171,14 +98,12 @@ class TestPollCycle:
         api_client.send.return_value = True
 
         metrics = ["cooling", "hashrate", "uptime", "hashboards", "errors"]
-        fan_prev: dict[tuple[str, int], int] = {}
-        fan_drops: list[dict] = []
 
         from wright_telemetry.baseline import BaselineTracker
         _poll_cycle(
             [(miner_cfg, stub_collector)],
             identities, api_client, metrics, "fac-1",
-            fan_prev, fan_drops, BaselineTracker(),
+            BaselineTracker(),
         )
 
         sent_types = [call.args[0].metric_type for call in api_client.send.call_args_list]
@@ -201,14 +126,12 @@ class TestPollCycle:
         api_client.send.return_value = True
 
         metrics = ["cooling", "hashrate", "uptime"]
-        fan_prev: dict[tuple[str, int], int] = {}
-        fan_drops: list[dict] = []
 
         from wright_telemetry.baseline import BaselineTracker
         _poll_cycle(
             [(miner_cfg, collector)],
             identities, api_client, metrics, "fac-1",
-            fan_prev, fan_drops, BaselineTracker(),
+            BaselineTracker(),
         )
 
         sent_types = [call.args[0].metric_type for call in api_client.send.call_args_list]
