@@ -291,7 +291,12 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
             "No miners with wright_fans=true found in config. "
             "Mark miners as Wright Fan machines in --setup to use --detect-wright-fans."
         )
-        print("[WRIGHT FAN] No Wright Fan machines configured. Exiting.")
+        print("[WRIGHT FAN] No Wright Fan machines configured. Press Ctrl+C to exit.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n[WRIGHT FAN] Stopped.")
         return
 
     logger.info(
