@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from dataclasses import asdict
 from typing import Any
 
@@ -126,83 +127,6 @@ def _fetch_identities(
     return identities
 
 
-def _check_fan_rpm_changes(
-    name: str,
-    data_obj: Any,
-    miner_url: str,
-    fan_prev_rpm: dict[tuple[str, int], int],
-    fan_drop_events: list[dict],
-) -> list[dict]:
-    """Detect RPM transitions, append independent drop events, and print to terminal.
-
-    fan_prev_rpm: last known RPM per (miner_url, fan_position).
-    fan_drop_events: append-only list of drop event dicts:
-        {miner, miner_url, fan_position, prev_rpm,
-         detected_at, recovered_at, duration_s}
-
-    Returns a list of new transition events ready for the fan_events telemetry payload.
-    Each entry: {fan_position, prev_rpm, curr_rpm, transition_type, occurred_at}
-    """
-    from wright_telemetry.models import CoolingData
-    if not isinstance(data_obj, CoolingData):
-        return []
-
-    now = time.time()
-    occurred_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
-    new_events: list[dict] = []
-
-    for fan in data_obj.fans:
-        key = (miner_url, fan.position)
-        prev_rpm = fan_prev_rpm.get(key)
-        curr_rpm = fan.rpm
-
-        if prev_rpm is not None:
-            if prev_rpm > 0 and curr_rpm == 0:
-                event = {
-                    "miner": name,
-                    "miner_url": miner_url,
-                    "fan_position": fan.position,
-                    "prev_rpm": prev_rpm,
-                    "detected_at": now,
-                    "recovered_at": None,
-                    "duration_s": None,
-                }
-                fan_drop_events.append(event)
-                print(
-                    f"[WRIGHT FAN] Fan #{fan.position} on '{name}' switched OFF "
-                    f"(RPM: {prev_rpm} → 0)"
-                )
-                new_events.append({
-                    "fan_position": fan.position,
-                    "prev_rpm": prev_rpm,
-                    "curr_rpm": 0,
-                    "transition_type": "off",
-                    "occurred_at": occurred_at,
-                })
-
-            elif prev_rpm == 0 and curr_rpm > 0:
-                # Close the most recent open event for this fan.
-                for event in reversed(fan_drop_events):
-                    if event["miner_url"] == miner_url and event["fan_position"] == fan.position and event["recovered_at"] is None:
-                        event["recovered_at"] = now
-                        event["duration_s"] = now - event["detected_at"]
-                        print(
-                            f"[WRIGHT FAN] Fan #{fan.position} on '{name}' switched ON "
-                            f"(RPM: 0 → {curr_rpm}) | was OFF for {event['duration_s']:.1f}s"
-                        )
-                        break
-                new_events.append({
-                    "fan_position": fan.position,
-                    "prev_rpm": 0,
-                    "curr_rpm": curr_rpm,
-                    "transition_type": "on",
-                    "occurred_at": occurred_at,
-                })
-
-        fan_prev_rpm[key] = curr_rpm
-
-    return new_events
-
 
 def _print_baseline_dashboard(name: str, baseline: Any) -> None:
     """Print a human-readable baseline summary to the terminal."""
@@ -229,14 +153,9 @@ def _poll_cycle(
     api_client: WrightAPIClient,
     metrics: list[str],
     facility_id: str,
-    fan_prev_rpm: dict[tuple[str, int], int],
-    fan_drop_events: list[dict],
     baseline_tracker: BaselineTracker,
 ) -> None:
-    """Run one polling cycle across all miners and all consented metrics.
-
-    Also checks for fan RPM transitions and sends fan_events payloads when found.
-    """
+    """Run one polling cycle across all miners and all consented metrics."""
     for miner_cfg, collector in collectors:
         name = miner_cfg.get("name", miner_cfg["url"])
         identity = identities.get(miner_cfg["url"])
@@ -262,8 +181,6 @@ def _poll_cycle(
                     "Error fetching %s from '%s': %s", metric, name, exc,
                 )
 
-        # Fan RPM transition check — reuses cooling data if already fetched,
-        # otherwise fetches it now.
         if cooling_data_obj is None:
             fan_fetcher = collector.get_fetcher("cooling")
             if fan_fetcher is not None:
@@ -273,18 +190,6 @@ def _poll_cycle(
                     logger.warning("Error fetching cooling from '%s': %s", name, exc)
 
         if cooling_data_obj is not None:
-            try:
-                new_events = _check_fan_rpm_changes(name, cooling_data_obj, miner_cfg["url"], fan_prev_rpm, fan_drop_events)
-                if new_events:
-                    api_client.send(TelemetryPayload(
-                        metric_type="fan_events",
-                        facility_id=facility_id,
-                        miner_identity=identity,
-                        data={"events": new_events},
-                    ))
-            except Exception as exc:
-                logger.warning("Error checking fan RPMs for '%s': %s", name, exc)
-
             try:
                 new_baselines = baseline_tracker.record(identity, cooling_data_obj)
                 for baseline in new_baselines:
@@ -306,11 +211,73 @@ def _poll_cycle(
                 logger.warning("Error updating baseline for '%s': %s", name, exc)
 
 
-_FAN_DETECTION_POLL_INTERVAL = 1  # seconds
+_FAN_DETECTION_POLL_INTERVAL = 1   # seconds
+_DIP_THRESHOLD = 0.25              # RPM must drop >25% from rolling peak to count as a dip
+_DIP_WINDOW_S = 60                 # all fans must have dipped within this window
+_BASELINE_SAMPLES = 30             # rolling window size (= 30 seconds at 1s poll)
+_DETECTION_COOLDOWN_S = 300        # min seconds between detections for the same miner
+
+
+def _detect_fan_dips(
+    miner_url: str,
+    cooling_data: Any,
+    fan_rpm_history: dict[tuple[str, int], deque],
+    fan_dip_times: dict[tuple[str, int], float],
+    miner_last_detected: dict[str, float],
+) -> list[int]:
+    """Record fan RPMs and check if all fans have dipped within the window.
+
+    A dip is defined as current RPM dropping more than _DIP_THRESHOLD below
+    the rolling peak of the last _BASELINE_SAMPLES readings for that fan.
+    Detection fires when every fan on the miner has a dip within the last
+    _DIP_WINDOW_S seconds, subject to per-miner cooldown.
+
+    Returns the list of fan positions that triggered the detection, or [].
+    """
+    from wright_telemetry.models import CoolingData
+    if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
+        return []
+
+    now = time.time()
+
+    for fan in cooling_data.fans:
+        key = (miner_url, fan.position)
+        if key not in fan_rpm_history:
+            fan_rpm_history[key] = deque(maxlen=_BASELINE_SAMPLES)
+        fan_rpm_history[key].append(fan.rpm)
+
+        history = fan_rpm_history[key]
+        if len(history) < _BASELINE_SAMPLES:
+            continue  # not enough data yet to establish a baseline
+
+        peak = max(history)
+        if peak == 0:
+            continue  # fan has never been spinning
+
+        if fan.rpm < peak * (1 - _DIP_THRESHOLD):
+            fan_dip_times[key] = now
+
+    # Check cooldown before evaluating detection
+    last_detected = miner_last_detected.get(miner_url, 0.0)
+    if now - last_detected < _DETECTION_COOLDOWN_S:
+        return []
+
+    all_positions = [fan.position for fan in cooling_data.fans]
+    cutoff = now - _DIP_WINDOW_S
+    dipped = [
+        pos for pos in all_positions
+        if fan_dip_times.get((miner_url, pos), 0.0) >= cutoff
+    ]
+
+    if dipped and len(dipped) == len(all_positions):
+        miner_last_detected[miner_url] = now
+        return dipped
+
+    return []
 
 
 def run_fan_detection(cfg: dict[str, Any]) -> None:
-    """Poll fan RPM every second on Wright Fan machines and send RPM drop events.
+    """Poll fan RPM every second on Wright Fan machines.
 
     Only miners with ``wright_fans: true`` in their config are monitored.
     Only ``cooling`` data is fetched on each cycle.
@@ -353,8 +320,9 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
             identities = _fetch_identities(collectors)
 
             consecutive_crashes = 0
-            fan_prev_rpm: dict[tuple[str, int], int] = {}
-            fan_drop_events: list[dict] = []
+            fan_rpm_history: dict[tuple[str, int], deque] = {}
+            fan_dip_times: dict[tuple[str, int], float] = {}
+            miner_last_detected: dict[str, float] = {}
 
             while True:
                 for miner_cfg, collector in collectors:
@@ -370,19 +338,24 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                         continue
 
                     try:
-                        new_events = _check_fan_rpm_changes(
-                            name, cooling_data_obj, miner_cfg["url"],
-                            fan_prev_rpm, fan_drop_events,
+                        dipped = _detect_fan_dips(
+                            miner_cfg["url"], cooling_data_obj,
+                            fan_rpm_history, fan_dip_times, miner_last_detected,
                         )
-                        if new_events:
-                            api_client.send(TelemetryPayload(
-                                metric_type="fan_events",
-                                facility_id=facility_id,
-                                miner_identity=identity,
-                                data={"events": new_events},
-                            ))
+                        if dipped:
+                            mac = identity.mac_address if identity else "unknown"
+                            detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            print(
+                                f"[WRIGHT FAN] All fans dipped on '{name}' "
+                                f"(positions {dipped}) — marking as Wright fans"
+                            )
+                            logger.info(
+                                "All fans dipped on '%s' (mac=%s positions=%s) — calling wright-fans endpoint",
+                                name, mac, dipped,
+                            )
+                            api_client.mark_wright_fans(mac, dipped, detected_at)
                     except Exception as exc:
-                        logger.warning("Error checking fan RPMs for '%s': %s", name, exc)
+                        logger.warning("Error in fan dip detection for '%s': %s", name, exc)
 
                 time.sleep(_FAN_DETECTION_POLL_INTERVAL)
 
@@ -443,8 +416,6 @@ def run(cfg: dict[str, Any]) -> None:
             known_urls = {m["url"] for m in miners}
             # Include MACs back-propagated from identity fetch
             known_macs = {m["mac_address"] for m in miners if m.get("mac_address")}
-            fan_prev_rpm: dict[tuple[str, int], int] = {}
-            fan_drop_events: list[dict] = []
 
             while True:
                 now = time.time()
@@ -510,7 +481,7 @@ def run(cfg: dict[str, Any]) -> None:
 
                     last_scan = now
 
-                _poll_cycle(collectors, identities, api_client, metrics, facility_id, fan_prev_rpm, fan_drop_events, baseline_tracker)
+                _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
 
                 time.sleep(poll_interval)
 
