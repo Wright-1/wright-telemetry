@@ -211,8 +211,8 @@ def _poll_cycle(
                 logger.warning("Error updating baseline for '%s': %s", name, exc)
 
 
-_FAN_DETECTION_POLL_INTERVAL = 1   # seconds
-_DIP_THRESHOLD = 0.15              # RPM must drop >15% from rolling peak to count as a dip
+_FAN_DETECTION_POLL_INTERVAL = 0.25  # seconds
+_DIP_THRESHOLD = 0.05               # RPM must drop >5% from rolling peak to count as a dip
 _DIP_WINDOW_S = 60                 # all fans must have dipped within this window
 _BASELINE_SAMPLES = 30             # rolling window size (= 30 seconds at 1s poll)
 _DETECTION_COOLDOWN_S = 300        # min seconds between detections for the same miner
