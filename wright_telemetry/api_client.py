@@ -43,7 +43,7 @@ class WrightAPIClient:
     ) -> bool:
         """POST to /v1/miners/wright-fans to mark fans as Wright fans by MAC address."""
         from wright_telemetry.encryption import encrypt_payload
-        url = f"{self.api_url}/v1/miners/wright-fans"
+        url = f"{self.api_url}/api/v1/miners/wright-fans"
         payload = {
             "mac_address": mac_address,
             "fan_positions": fan_positions,
