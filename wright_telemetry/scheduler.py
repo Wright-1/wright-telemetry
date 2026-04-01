@@ -212,7 +212,7 @@ def _poll_cycle(
 
 
 _FAN_DETECTION_POLL_INTERVAL = 1   # seconds
-_DIP_THRESHOLD = 0.25              # RPM must drop >25% from rolling peak to count as a dip
+_DIP_THRESHOLD = 0.15              # RPM must drop >15% from rolling peak to count as a dip
 _DIP_WINDOW_S = 60                 # all fans must have dipped within this window
 _BASELINE_SAMPLES = 30             # rolling window size (= 30 seconds at 1s poll)
 _DETECTION_COOLDOWN_S = 300        # min seconds between detections for the same miner
@@ -255,6 +255,11 @@ def _detect_fan_dips(
             continue  # fan has never been spinning
 
         if fan.rpm < peak * (1 - _DIP_THRESHOLD):
+            if fan_dip_times.get(key, 0.0) < now - 1:  # suppress repeat prints within same second
+                print(
+                    f"[WRIGHT FAN] Fan dip detected on {miner_url} "
+                    f"fan #{fan.position}: {fan.rpm} RPM (peak {peak} RPM)"
+                )
             fan_dip_times[key] = now
 
     # Check cooldown before evaluating detection
