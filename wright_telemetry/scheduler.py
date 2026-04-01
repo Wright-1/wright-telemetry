@@ -320,13 +320,10 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
     facility_id = cfg.get("facility_id", "unknown")
     default_collector_type = cfg.get("collector_type", "braiins")
 
-    wright_fan_miners = [m for m in cfg.get("miners", []) if m.get("wright_fans")]
-    if not wright_fan_miners:
-        logger.warning(
-            "No miners with wright_fans=true found in config. "
-            "Mark miners as Wright Fan machines in --setup to use --detect-wright-fans."
-        )
-        print("[WRIGHT FAN] No Wright Fan machines configured. Press Ctrl+C to exit.")
+    all_miners = _resolve_miners(cfg)
+    if not all_miners:
+        logger.warning("No miners found (configured or discovered). Run --setup or enable discovery.")
+        print("[WRIGHT FAN] No miners found. Press Ctrl+C to exit.")
         try:
             while True:
                 time.sleep(1)
@@ -335,14 +332,14 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
         return
 
     logger.info(
-        "Starting Wright Fan detection mode: %d machine(s), polling every %ds",
-        len(wright_fan_miners), _FAN_DETECTION_POLL_INTERVAL,
+        "Starting Wright Fan detection mode: %d machine(s), polling every %ss",
+        len(all_miners), _FAN_DETECTION_POLL_INTERVAL,
     )
     print(
-        f"[WRIGHT FAN] Monitoring {len(wright_fan_miners)} machine(s) — "
+        f"[WRIGHT FAN] Monitoring {len(all_miners)} machine(s) — "
         f"polling fan RPM every {_FAN_DETECTION_POLL_INTERVAL}s"
     )
-    for m in wright_fan_miners:
+    for m in all_miners:
         print(f"  • {m.get('name', m['url'])} ({m['url']})")
 
     api_client = WrightAPIClient(
@@ -355,7 +352,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
 
     while True:
         try:
-            collectors = _build_collectors(wright_fan_miners, default_collector_type)
+            collectors = _build_collectors(all_miners, default_collector_type)
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
 
