@@ -212,8 +212,8 @@ def _poll_cycle(
 
 
 _FAN_DETECTION_POLL_INTERVAL = 0.25  # seconds
-_DIP_THRESHOLD = 0.05               # RPM must drop >5% from rolling peak to count as a dip
-_DIP_WINDOW_S = 60                 # all fans must have dipped within this window
+_DIP_THRESHOLD = 0.01               # RPM must drop >1% from rolling peak to count as a dip
+_DIP_WINDOW_S = 30                 # all fans must have dipped within this window
 _BASELINE_SAMPLES = 120            # rolling window size (30s at 0.25s poll)
 _DETECTION_COOLDOWN_S = 300        # min seconds between detections for the same miner
 
@@ -236,7 +236,6 @@ def _detect_fan_dips(
     """
     from wright_telemetry.models import CoolingData
     if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
-        print(f"[WRIGHT FAN DEBUG] {miner_url}: got non-CoolingData or no fans — skipping")
         return []
 
     now = time.time()
@@ -248,31 +247,14 @@ def _detect_fan_dips(
         fan_rpm_history[key].append(fan.rpm)
 
         history = fan_rpm_history[key]
-        samples = len(history)
-
-        if samples < _BASELINE_SAMPLES:
-            print(
-                f"[WRIGHT FAN DEBUG] {miner_url} fan#{fan.position}: "
-                f"warming up {samples}/{_BASELINE_SAMPLES} samples, current={fan.rpm} RPM"
-            )
+        if len(history) < _BASELINE_SAMPLES:
             continue  # not enough data yet to establish a baseline
 
         peak = max(history)
-        threshold_rpm = peak * (1 - _DIP_THRESHOLD)
-        is_dip = fan.rpm < threshold_rpm
-
-        print(
-            f"[WRIGHT FAN DEBUG] {miner_url} fan#{fan.position}: "
-            f"current={fan.rpm} RPM  peak={peak} RPM  "
-            f"threshold={threshold_rpm:.0f} RPM ({_DIP_THRESHOLD*100:.0f}% below peak)  "
-            f"{'DIP DETECTED' if is_dip else 'normal'}"
-        )
-
         if peak == 0:
-            print(f"[WRIGHT FAN DEBUG] {miner_url} fan#{fan.position}: peak=0, skipping")
             continue
 
-        if is_dip:
+        if fan.rpm < peak * (1 - _DIP_THRESHOLD):
             if fan_dip_times.get(key, 0.0) < now - 1:
                 print(
                     f"[WRIGHT FAN] Fan dip detected on {miner_url} "
@@ -280,14 +262,8 @@ def _detect_fan_dips(
                 )
             fan_dip_times[key] = now
 
-    # Check cooldown before evaluating detection
     last_detected = miner_last_detected.get(miner_url, 0.0)
-    cooldown_remaining = _DETECTION_COOLDOWN_S - (now - last_detected)
-    if cooldown_remaining > 0:
-        print(
-            f"[WRIGHT FAN DEBUG] {miner_url}: in cooldown, "
-            f"{cooldown_remaining:.0f}s remaining before next detection"
-        )
+    if now - last_detected < _DETECTION_COOLDOWN_S:
         return []
 
     all_positions = [fan.position for fan in cooling_data.fans]
@@ -296,13 +272,6 @@ def _detect_fan_dips(
         pos for pos in all_positions
         if fan_dip_times.get((miner_url, pos), 0.0) >= cutoff
     ]
-    not_dipped = [pos for pos in all_positions if pos not in dipped]
-
-    print(
-        f"[WRIGHT FAN DEBUG] {miner_url}: dip check — "
-        f"dipped={dipped} not_dipped={not_dipped} "
-        f"(need all {len(all_positions)} within last {_DIP_WINDOW_S}s)"
-    )
 
     if dipped and len(dipped) == len(all_positions):
         miner_last_detected[miner_url] = now
