@@ -10,6 +10,8 @@ Outer layer: top-level crash recovery with exponential backoff -- if
 from __future__ import annotations
 
 import logging
+import sys
+import threading
 import time
 from collections import deque
 from dataclasses import asdict
@@ -421,11 +423,28 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
         facility_id=facility_id,
     )
 
+    stop_event = threading.Event()
+
+    def _listen_for_quit() -> None:
+        try:
+            while not stop_event.is_set():
+                line = sys.stdin.readline()
+                if line.strip().lower() == "q":
+                    print("\n[WRIGHT FAN] Stopping detection — starting normal polling loop...")
+                    stop_event.set()
+                    break
+        except Exception:
+            pass
+
+    listener = threading.Thread(target=_listen_for_quit, daemon=True)
+    listener.start()
+    print("[WRIGHT FAN] Type 'q' + Enter at any time to finish detection and start normal polling.")
+
     consecutive_crashes = 0
     # Track last detection time for the 2-hour idle timeout (persists across crash restarts)
     last_detection_time = time.time()
 
-    while True:
+    while not stop_event.is_set():
         try:
             collectors = _build_collectors(all_miners, default_collector_type)
             _authenticate_all(collectors)
@@ -436,12 +455,13 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
             fan_dip_times: dict[tuple[str, int], float] = {}
             miner_last_detected: dict[str, float] = {}
 
-            while True:
-                # Auto-exit if no detections in 2 hours
+            while not stop_event.is_set():
+                # Auto-exit if no detections in 4 hours
                 if time.time() - last_detection_time >= _DETECTION_IDLE_TIMEOUT_S:
                     print("\n[WRIGHT FAN] No detections in 4 hours — exiting detection mode.")
                     print("  To re-enter detection mode: wright-telemetry --detect-wright-fans")
                     logger.info("Detection mode idle timeout (4 hours). Exiting.")
+                    stop_event.set()
                     return
 
                 for miner_cfg, collector in collectors:
@@ -484,7 +504,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
         except KeyboardInterrupt:
             logger.info("Wright Fan detection shutting down (keyboard interrupt)")
             print("\n[WRIGHT FAN] Stopped.")
-            break
+            return False
         except Exception:
             consecutive_crashes += 1
             backoff = min(10 * (2 ** (consecutive_crashes - 1)), _MAX_BACKOFF)
@@ -493,6 +513,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                 consecutive_crashes, backoff,
             )
             time.sleep(backoff)
+    return True
 
 
 def run(cfg: dict[str, Any]) -> None:

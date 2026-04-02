@@ -131,10 +131,15 @@ def main() -> None:
 
     if args.detect_wright_fans:
         from wright_telemetry.scheduler import run_fan_detection
-        run_fan_detection(cfg)
-    else:
-        from wright_telemetry.scheduler import run
-        run(cfg)
+        completed = run_fan_detection(cfg)
+        if not completed:
+            return
+        cfg["fan_detection_completed"] = True
+        from wright_telemetry.config import save_config
+        save_config(cfg)
+
+    from wright_telemetry.scheduler import run
+    run(cfg)
 
 
 if __name__ == "__main__":
