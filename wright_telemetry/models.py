@@ -13,7 +13,7 @@ class MinerIdentity:
     serial_number: str
     hostname: str
     mac_address: str
-    wright_fans: bool = False
+    wright_fans: Optional[bool] = None
     ip_address: str = ""
 
     def to_dict(self) -> dict[str, Any]:

@@ -8,8 +8,6 @@ collector loop.
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
-from typing import Any
 
 import requests
 
@@ -34,6 +32,33 @@ class WrightAPIClient:
             "X-API-Key": self.api_key,
             "X-Facility-ID": self.facility_id,
         })
+
+    def mark_stock_fans(
+        self,
+        mac_address: str,
+        fan_baselines: list[dict],
+        detected_at: str,
+    ) -> bool:
+        """POST to /api/v1/miners/stock-fans to record baseline RPMs and mark as stock."""
+        url = f"{self.api_url}/api/v1/miners/stock-fans"
+        payload = {
+            "mac_address": mac_address,
+            "fan_baselines": fan_baselines,
+            "detected_at": detected_at,
+            "facility_id": self.facility_id,
+        }
+        try:
+            wire = encrypt_payload(payload, self.api_key)
+            resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)
+            resp.raise_for_status()
+            logger.info(
+                "Marked stock fans for miner %s (HTTP %d)",
+                mac_address, resp.status_code,
+            )
+            return True
+        except Exception as exc:
+            logger.warning("Failed to mark stock fans for miner %s: %s", mac_address, exc)
+            return False
 
     def mark_wright_fans(
         self,

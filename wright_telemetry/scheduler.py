@@ -100,12 +100,10 @@ def _fetch_identities(
     for miner_cfg, collector in collectors:
         url = miner_cfg["url"]
         name = miner_cfg.get("name", url)
-        wright_fans = bool(miner_cfg.get("wright_fans", False))
         # Derive the IP from the URL for storage in the identity
         ip = url.removeprefix("http://").removeprefix("https://").split("/")[0].split(":")[0]
         try:
             identity = collector.fetch_identity()
-            identity.wright_fans = wright_fans
             identity.ip_address = ip
             identities[url] = identity
             # Back-propagate MAC into config so re-discovery can match by MAC
@@ -121,7 +119,6 @@ def _fetch_identities(
             identities[url] = MinerIdentity(
                 uid="unknown", serial_number="unknown",
                 hostname=name, mac_address="unknown",
-                wright_fans=wright_fans,
                 ip_address=ip,
             )
     return identities
@@ -216,6 +213,113 @@ _DIP_THRESHOLD = 0.01               # RPM must drop >1% from rolling peak to cou
 _DIP_WINDOW_S = 30                 # all fans must have dipped within this window
 _BASELINE_SAMPLES = 120            # rolling window size (30s at 0.25s poll)
 _DETECTION_COOLDOWN_S = 300        # min seconds between detections for the same miner
+_DETECTION_IDLE_TIMEOUT_S = 14400  # exit detection mode after 4 hours with no detections
+_BASELINE_COLLECTION_TIMEOUT_S = 300  # max seconds to wait for baseline collection
+
+
+def run_baseline_collection(cfg: dict[str, Any]) -> None:
+    """Poll fan RPM at high frequency, establish a baseline for each miner,
+    and mark them as stock fans via the API.
+
+    Intended to run once during setup, before Wright Fan detection.
+    Only the mark_stock_fans() call is sent to the API — no polling data.
+    """
+    facility_id = cfg.get("facility_id", "unknown")
+    default_collector_type = cfg.get("collector_type", "braiins")
+
+    all_miners = _resolve_miners(cfg)
+    if not all_miners:
+        print("[BASELINE] No miners found. Skipping baseline collection.")
+        return
+
+    sample_time = _BASELINE_SAMPLES * _FAN_DETECTION_POLL_INTERVAL
+    print(f"\n[BASELINE] Collecting fan baselines for {len(all_miners)} miner(s)...")
+    print(f"  Requires ~{sample_time:.0f}s of stable readings per miner. Press Ctrl+C to skip.\n")
+    for m in all_miners:
+        print(f"  • {m.get('name', m['url'])} ({m['url']})")
+    print()
+
+    api_client = WrightAPIClient(
+        api_url=cfg.get("wright_api_url", ""),
+        api_key=cfg.get("wright_api_key", ""),
+        facility_id=facility_id,
+    )
+
+    try:
+        collectors = _build_collectors(all_miners, default_collector_type)
+        _authenticate_all(collectors)
+        identities = _fetch_identities(collectors)
+    except KeyboardInterrupt:
+        print("\n[BASELINE] Skipped.")
+        return
+
+    fan_rpm_history: dict[tuple[str, int], deque] = {}
+    baselined: set[str] = set()
+    start_time = time.time()
+
+    try:
+        while len(baselined) < len(collectors):
+            if time.time() - start_time > _BASELINE_COLLECTION_TIMEOUT_S:
+                print("[BASELINE] Timeout reached — proceeding with partial baselines.")
+                break
+
+            for miner_cfg, collector in collectors:
+                url = miner_cfg["url"]
+                if url in baselined:
+                    continue
+                name = miner_cfg.get("name", url)
+                identity = identities.get(url)
+                fan_fetcher = collector.get_fetcher("cooling")
+                if fan_fetcher is None:
+                    baselined.add(url)
+                    continue
+
+                try:
+                    cooling_data = fan_fetcher()
+                except Exception as exc:
+                    logger.warning("Error fetching cooling from '%s': %s", name, exc)
+                    continue
+
+                from wright_telemetry.models import CoolingData
+                if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
+                    continue
+
+                all_ready = True
+                for fan in cooling_data.fans:
+                    key = (url, fan.position)
+                    if key not in fan_rpm_history:
+                        fan_rpm_history[key] = deque(maxlen=_BASELINE_SAMPLES)
+                    fan_rpm_history[key].append(fan.rpm)
+                    if len(fan_rpm_history[key]) < _BASELINE_SAMPLES:
+                        all_ready = False
+
+                if all_ready:
+                    mac = identity.mac_address if identity else "unknown"
+                    detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    fan_baselines = [
+                        {
+                            "position": fan.position,
+                            "avg_rpm": round(
+                                sum(fan_rpm_history[(url, fan.position)])
+                                / len(fan_rpm_history[(url, fan.position)]), 1
+                            ),
+                        }
+                        for fan in cooling_data.fans
+                    ]
+                    print(f"[BASELINE] Baseline established for '{name}' — marking as stock fans")
+                    logger.info("Baseline established for '%s' (mac=%s): %s", name, mac, fan_baselines)
+                    api_client.mark_stock_fans(mac, fan_baselines, detected_at)
+                    baselined.add(url)
+
+            time.sleep(_FAN_DETECTION_POLL_INTERVAL)
+
+    except KeyboardInterrupt:
+        print("\n[BASELINE] Baseline collection skipped.")
+        return
+
+    done = len(baselined)
+    total = len(collectors)
+    print(f"\n[BASELINE] Complete — {done}/{total} miner(s) baselined as stock.\n")
 
 
 def _detect_fan_dips(
@@ -281,10 +385,10 @@ def _detect_fan_dips(
 
 
 def run_fan_detection(cfg: dict[str, Any]) -> None:
-    """Poll fan RPM every second on Wright Fan machines.
+    """Poll fan RPM on all configured miners, detecting Wright Fan dip signatures.
 
-    Only miners with ``wright_fans: true`` in their config are monitored.
-    Only ``cooling`` data is fetched on each cycle.
+    Only ``cooling`` data is fetched locally — the only outbound API call is
+    ``mark_wright_fans()`` when a detection fires.
     """
     facility_id = cfg.get("facility_id", "unknown")
     default_collector_type = cfg.get("collector_type", "braiins")
@@ -318,6 +422,8 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
     )
 
     consecutive_crashes = 0
+    # Track last detection time for the 2-hour idle timeout (persists across crash restarts)
+    last_detection_time = time.time()
 
     while True:
         try:
@@ -331,6 +437,13 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
             miner_last_detected: dict[str, float] = {}
 
             while True:
+                # Auto-exit if no detections in 2 hours
+                if time.time() - last_detection_time >= _DETECTION_IDLE_TIMEOUT_S:
+                    print("\n[WRIGHT FAN] No detections in 4 hours — exiting detection mode.")
+                    print("  To re-enter detection mode: wright-telemetry --detect-wright-fans")
+                    logger.info("Detection mode idle timeout (4 hours). Exiting.")
+                    return
+
                 for miner_cfg, collector in collectors:
                     name = miner_cfg.get("name", miner_cfg["url"])
                     identity = identities.get(miner_cfg["url"])
@@ -338,6 +451,8 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                     if fan_fetcher is None:
                         continue
                     try:
+                        # Only cooling data is fetched locally — no polling data is sent to the API.
+                        # The only outbound call in this loop is mark_wright_fans() on detection.
                         cooling_data_obj = fan_fetcher()
                     except Exception as exc:
                         logger.warning("Error fetching cooling from '%s': %s", name, exc)
@@ -360,6 +475,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                                 name, mac, dipped,
                             )
                             api_client.mark_wright_fans(mac, dipped, detected_at)
+                            last_detection_time = time.time()
                     except Exception as exc:
                         logger.warning("Error in fan dip detection for '%s': %s", name, exc)
 
