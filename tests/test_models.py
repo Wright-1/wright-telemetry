@@ -188,7 +188,7 @@ class TestMinerIdentity:
         )
         d = mi.to_dict()
         assert d["uid"] == "abc"
-        assert d["wright_fans"] is False
+        assert d["wright_fans"] is None
 
     def test_wright_fans_flag(self):
         mi = MinerIdentity(
