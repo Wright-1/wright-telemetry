@@ -1,13 +1,13 @@
 """CLI entry point for the Wright Telemetry Collector.
 
 Usage:
-    wright-telemetry                     Run the collector (starts setup if first time)
-    wright-telemetry --setup             Re-run the setup wizard
-    wright-telemetry --discover          Scan the local network for miners and exit
-    wright-telemetry --install           Register as a background service (auto-start on boot)
-    wright-telemetry --uninstall         Remove the background service
-    wright-telemetry --version           Print version and exit
-    wright-telemetry --detect-wright-fans  Poll fan RPM every second for Wright Fan machines
+    wright-telemetry                       Run the collector (starts setup if first time)
+    wright-telemetry --setup               Re-run the setup wizard
+    wright-telemetry --detect-wright-fans  Start Wright Fan detection mode
+    wright-telemetry --discover            Scan the local network for miners and exit
+    wright-telemetry --install             Register as a background service (auto-start on boot)
+    wright-telemetry --uninstall           Remove the background service
+    wright-telemetry --version             Print version and exit
 """
 
 from __future__ import annotations
@@ -21,6 +21,19 @@ from wright_telemetry.config import load_config, run_setup_wizard
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
 from wright_telemetry.updater import check_for_update
+
+
+def _print_help_menu() -> None:
+    """Print a formatted list of available commands."""
+    print("\n  ┌─ Wright Telemetry — Available Commands ───────────────────────────────────┐")
+    print("  │  wright-telemetry                       Start the collector              │")
+    print("  │  wright-telemetry --setup               Re-run the setup wizard          │")
+    print("  │  wright-telemetry --detect-wright-fans  Start Wright Fan detection mode  │")
+    print("  │  wright-telemetry --discover            Scan network for miners and exit │")
+    print("  │  wright-telemetry --install             Install as a background service  │")
+    print("  │  wright-telemetry --uninstall           Remove the background service    │")
+    print("  │  wright-telemetry --version             Print version and exit           │")
+    print("  └────────────────────────────────────────────────────────────────────────────┘\n")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -74,7 +87,8 @@ def main() -> None:
     # Load or create config
     cfg = load_config()
 
-    if cfg is None or args.setup:
+    ran_setup = cfg is None or args.setup
+    if ran_setup:
         cfg = run_setup_wizard(existing=cfg)
 
     if cfg is None:
@@ -97,6 +111,23 @@ def main() -> None:
     # Import here to avoid circular imports and to ensure collector adapters register
     import wright_telemetry.collectors.braiins  # noqa: F401  -- triggers @register
     import wright_telemetry.collectors.luxos    # noqa: F401  -- triggers @register
+
+    # After setup: collect baselines, show help, offer detection mode
+    if ran_setup and not args.detect_wright_fans:
+        from wright_telemetry.scheduler import run_baseline_collection, run_fan_detection
+        run_baseline_collection(cfg)
+        _print_help_menu()
+        print("  Wright Fan detection mode monitors fan RPM for dips that indicate Wright")
+        print("  fans are installed. You can start it anytime with:")
+        print("    wright-telemetry --detect-wright-fans\n")
+        try:
+            answer = input("  Would you like to start Wright Fan detection mode now? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        print()
+        if answer == "y":
+            run_fan_detection(cfg)
+            return
 
     if args.detect_wright_fans:
         from wright_telemetry.scheduler import run_fan_detection

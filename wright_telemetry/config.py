@@ -95,15 +95,10 @@ def _wizard_add_miner(index: int) -> dict[str, Any]:
     username = _ask("Miner username", default="root")
     password = _ask_password("Miner password (hidden)")
 
-    print()
-    wright_fans_ans = _ask("Is this miner using Wright fans? (y/n)", default="n")
-    wright_fans = wright_fans_ans.lower() in ("y", "yes")
-
     miner: dict[str, Any] = {
         "name": name,
         "url": url,
         "username": username,
-        "wright_fans": wright_fans,
     }
     if password:
         miner["password_b64"] = _encode_password(password)
