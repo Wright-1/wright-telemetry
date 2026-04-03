@@ -23,6 +23,7 @@ import threading
 import time
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -33,12 +34,32 @@ _RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _CONNECT_TIMEOUT = 15  # seconds to establish connection
 _READ_TIMEOUT = 60    # seconds per socket read (important for large binaries)
 
-# Maps sys.platform to the GitHub Release asset name for that platform
-_ASSET_NAMES: dict[str, str] = {
-    "linux": "wright-telemetry",
-    "darwin": "wright-telemetry-macos.zip",
-    "win32": "wright-telemetry.exe",
-}
+_MAX_BACKOFF = 3600  # seconds
+
+# Release asset filenames to try, in order, for each host OS only (never cross-platform).
+_LEGACY_LINUX_ASSET = "wright-telemetry"  # older releases before linux used a distinct name
+
+
+def _running_os() -> Optional[str]:
+    """Return 'linux', 'darwin', or 'win32' for supported frozen builds, else None."""
+    plat = sys.platform
+    if plat.startswith("linux"):
+        return "linux"
+    if plat == "darwin":
+        return "darwin"
+    if plat == "win32":
+        return "win32"
+    return None
+
+
+def _release_asset_candidates(os_name: str) -> tuple[str, ...]:
+    if os_name == "linux":
+        return ("wright-telemetry-linux", _LEGACY_LINUX_ASSET)
+    if os_name == "darwin":
+        return ("wright-telemetry-macos.zip",)
+    if os_name == "win32":
+        return ("wright-telemetry.exe",)
+    return ()
 
 
 _DEFAULT_INTERVAL = 60  # 1 minute
@@ -54,30 +75,60 @@ def check_for_update(cfg: dict) -> None:
 
 
 def _update_loop(interval: int) -> None:
+    backoff = float(interval)
     while True:
         try:
-            _perform_update_check()
+            ok, rate_limit_sleep = _perform_update_check()
         except Exception as exc:
             logger.warning("Update check failed (non-fatal): %s", exc)
-        time.sleep(interval)
+            ok = False
+            rate_limit_sleep = None
+
+        if ok:
+            backoff = float(interval)
+            time.sleep(interval)
+            continue
+
+        if rate_limit_sleep is not None:
+            wait = max(rate_limit_sleep, backoff)
+            logger.info("Next update check in %.0fs (rate limit or backoff)", wait)
+            time.sleep(wait)
+            backoff = min(max(backoff * 2, interval), _MAX_BACKOFF)
+        else:
+            wait = backoff
+            logger.info("Next update check in %.0fs (backoff after error)", wait)
+            time.sleep(wait)
+            backoff = min(backoff * 2, _MAX_BACKOFF)
 
 
-def _perform_update_check() -> None:
+def _github_session_headers() -> dict[str, str]:
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        return {"Authorization": f"Bearer {token.strip()}"}
+    return {}
+
+
+def _perform_update_check() -> tuple[bool, Optional[float]]:
+    """Return (True, None) if the check finished without a recoverable API failure.
+
+    On failure, returns (False, None) for generic errors or (False, seconds) when
+    GitHub rate-limited (caller should sleep at least that long).
+    """
     # Only applies to frozen PyInstaller binaries; skip in dev/source installs
     if not getattr(sys, "frozen", False):
         logger.debug("Running from source — skipping update check")
-        return
+        return True, None
 
     from wright_telemetry import __version__
 
-    release = _fetch_latest_release()
+    release, rate_sleep = _fetch_latest_release()
     if release is None:
-        return
+        return False, rate_sleep
 
     latest_version = release["tag_name"].lstrip("v")
     if not _is_newer(latest_version, __version__):
         logger.info("wright-telemetry is up to date (v%s)", __version__)
-        return
+        return True, None
 
     logger.info(
         "Update available: v%s -> v%s. Downloading...",
@@ -85,17 +136,19 @@ def _perform_update_check() -> None:
         latest_version,
     )
 
-    asset = _find_asset(release["assets"])
+    asset = _find_asset_for_os(release["assets"])
     if asset is None:
+        os_name = _running_os() or sys.platform
         logger.warning(
-            "No release asset found for platform %s — skipping update", sys.platform
+            "No release asset found for this OS (%s) — skipping update",
+            os_name,
         )
-        return
+        return True, None
 
     checksum_asset = _find_checksum_asset(release["assets"], asset["name"])
     if checksum_asset is None:
         logger.warning("No checksum asset found for %s — skipping update", asset["name"])
-        return
+        return True, None
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
@@ -107,18 +160,48 @@ def _perform_update_check() -> None:
         new_binary = _extract_binary(download_path, tmppath)
         if new_binary is None:
             logger.warning("Could not extract binary from downloaded asset")
-            return
+            return True, None
         _replace_and_restart(new_binary)
 
 
-def _fetch_latest_release() -> dict | None:
+def _fetch_latest_release() -> tuple[Optional[dict], Optional[float]]:
+    """Return (release_json, rate_limit_retry_after_seconds).
+
+    On success: (dict, None). On failure: (None, None) or (None, seconds) for 403.
+    """
+    headers = _github_session_headers()
     try:
-        resp = requests.get(_RELEASES_URL, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT))
-        resp.raise_for_status()
-        return resp.json()
+        resp = requests.get(
+            _RELEASES_URL,
+            headers=headers,
+            timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
+        )
     except requests.RequestException as exc:
         logger.warning("Could not reach GitHub releases API: %s", exc)
-        return None
+        return None, None
+
+    if resp.status_code == 403:
+        reset = resp.headers.get("X-RateLimit-Reset")
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after and retry_after.isdigit():
+            sleep_s = float(retry_after) + 2.0
+        elif reset and reset.isdigit():
+            sleep_s = max(0.0, float(int(reset) - time.time())) + 5.0
+        else:
+            sleep_s = float(_MAX_BACKOFF)
+        logger.warning(
+            "GitHub releases API returned 403 (rate limit or forbidden); retry in ~%.0fs",
+            sleep_s,
+        )
+        return None, sleep_s
+
+    try:
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning("Could not reach GitHub releases API: %s", exc)
+        return None, None
+
+    return resp.json(), None
 
 
 def _is_newer(latest: str, current: str) -> bool:
@@ -131,13 +214,16 @@ def _is_newer(latest: str, current: str) -> bool:
         return False
 
 
-def _find_asset(assets: list[dict]) -> dict | None:
-    target = _ASSET_NAMES.get(sys.platform)
-    if target is None:
+def _find_asset_for_os(assets: list[dict]) -> dict | None:
+    os_name = _running_os()
+    if os_name is None:
+        logger.warning("Auto-update not supported on platform %s", sys.platform)
         return None
-    for asset in assets:
-        if asset["name"] == target:
-            return asset
+    names = _release_asset_candidates(os_name)
+    by_name = {a["name"]: a for a in assets}
+    for name in names:
+        if name in by_name:
+            return by_name[name]
     return None
 
 
@@ -207,7 +293,7 @@ def _extract_binary(asset_path: Path, workdir: Path) -> Path | None:
                 return binary
         return None
 
-    # Linux: bare binary with no extension
+    # Linux: bare binary (e.g. wright-telemetry-linux or legacy wright-telemetry)
     return asset_path
 
 
