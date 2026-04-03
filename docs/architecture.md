@@ -155,13 +155,15 @@ flowchart TD
 ## Wright Fan API Contract
 
 ```
-POST {wright_api_url}/api/v1/telemetry
+POST {wright_api_url}/v1/telemetry
 Headers:
     Content-Type: application/json
     X-API-Key: {api_key}
     X-Facility-ID: {facility_id}
 Body: {"nonce": "...", "ciphertext": "..."}
 ```
+
+`wright_api_url` must be the full API base URL for your environment (the collector appends `/v1/telemetry`, `/v1/ws/agent`, and so on). Production is typically `https://api.wrightfan.com`; development often uses `https://dev.wrightfan.com/api`, with `/api` included in the configured base rather than in those path suffixes.
 
 Decrypted payload structure:
 
@@ -232,7 +234,7 @@ Location: `~/.wright-telemetry/config.json`
 ```json
 {
     "wright_api_key": "string",
-    "wright_api_url": "string (default: https://api.wrightfan.com)",
+    "wright_api_url": "string (default: https://api.wrightfan.com — full API base; use https://dev.wrightfan.com/api for dev)",
     "facility_id": "string",
     "poll_interval_seconds": 30,
     "consent": {

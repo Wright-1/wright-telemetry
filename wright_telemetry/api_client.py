@@ -90,7 +90,7 @@ class WrightAPIClient:
 
     def send(self, payload: TelemetryPayload) -> bool:
         """Encrypt and POST a telemetry payload.  Returns True on success."""
-        url = f"{self.api_url}/api/v1/telemetry"
+        url = f"{self.api_url}/v1/telemetry"
         try:
             wire = encrypt_payload(payload.to_dict(), self.api_key)
             resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)
