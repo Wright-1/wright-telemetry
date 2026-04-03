@@ -36,7 +36,7 @@ class TestSend:
     def test_successful_post(self, api_client, sample_payload):
         responses.add(
             responses.POST,
-            f"{API_URL}/api/v1/telemetry",
+            f"{API_URL}/v1/telemetry",
             json={"status": "ok"},
             status=200,
         )
@@ -48,7 +48,7 @@ class TestSend:
         """The POST body must contain nonce+ciphertext, not plaintext fields."""
         responses.add(
             responses.POST,
-            f"{API_URL}/api/v1/telemetry",
+            f"{API_URL}/v1/telemetry",
             json={"status": "ok"},
             status=200,
         )
@@ -63,7 +63,7 @@ class TestSend:
     def test_http_error_returns_false(self, api_client, sample_payload):
         responses.add(
             responses.POST,
-            f"{API_URL}/api/v1/telemetry",
+            f"{API_URL}/v1/telemetry",
             json={"error": "bad request"},
             status=400,
         )
@@ -73,7 +73,7 @@ class TestSend:
     def test_server_error_returns_false(self, api_client, sample_payload):
         responses.add(
             responses.POST,
-            f"{API_URL}/api/v1/telemetry",
+            f"{API_URL}/v1/telemetry",
             json={"error": "internal"},
             status=500,
         )
@@ -84,7 +84,7 @@ class TestSend:
         import requests as req
         responses.add(
             responses.POST,
-            f"{API_URL}/api/v1/telemetry",
+            f"{API_URL}/v1/telemetry",
             body=req.ConnectionError("refused"),
         )
         assert api_client.send(sample_payload) is False
@@ -93,7 +93,7 @@ class TestSend:
     def test_headers_set(self, api_client, sample_payload):
         responses.add(
             responses.POST,
-            f"{API_URL}/api/v1/telemetry",
+            f"{API_URL}/v1/telemetry",
             json={"status": "ok"},
             status=200,
         )

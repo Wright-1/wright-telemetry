@@ -230,6 +230,9 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
         "Wright Fan API Key",
         default=cfg.get("wright_api_key", ""),
     )
+    print()
+    print("  Wright Fan API URL: use the full base from the portal (e.g. https://api.wrightfan.com")
+    print("  or https://dev.wrightfan.com/api). /v1/... paths are added automatically.")
     cfg["wright_api_url"] = _ask(
         "Wright Fan API URL",
         default=cfg.get("wright_api_url", _DEFAULT_WRIGHT_API_URL),

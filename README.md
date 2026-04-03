@@ -68,6 +68,8 @@ The first time you run it, a setup wizard walks you through everything:
   Collector type [braiins]:
 ```
 
+Use the **full API base** from the portal. Production is usually `https://api.wrightfan.com`. For development, that is often `https://dev.wrightfan.com/api` (include `/api` in the URL when the portal shows it that way). The collector adds paths such as `/v1/telemetry` itself.
+
 Then it finds your miners for you.  You've got two options — pick whichever fits your setup:
 
 #### Option A: Auto-Discovery (Recommended)
