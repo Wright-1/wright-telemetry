@@ -22,7 +22,7 @@ Grab the latest release for your operating system from the [Releases page](https
 |----------|------|
 | Windows  | `wright-telemetry.exe` |
 | macOS    | `wright-telemetry-macos.zip` (unzip first) |
-| Linux    | `wright-telemetry` |
+| Linux    | `wright-telemetry-linux` |
 
 Once you have the collector running, **it updates itself automatically** — no need to download new releases manually.
 
@@ -37,14 +37,15 @@ wright-telemetry.exe
 
 **Mac (you may need to allow it in System Settings > Privacy):**
 ```
+unzip wright-telemetry-macos.zip
 chmod +x wright-telemetry
 ./wright-telemetry
 ```
 
 **Linux:**
 ```
-chmod +x wright-telemetry
-./wright-telemetry
+chmod +x wright-telemetry-linux
+./wright-telemetry-linux
 ```
 
 ### 3. Follow the Setup Wizard

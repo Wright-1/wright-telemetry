@@ -22,11 +22,13 @@ The updater looks for these asset names on the GitHub Release:
 
 | Platform | Asset name |
 |----------|------------|
-| Linux    | `wright-telemetry` |
+| Linux    | `wright-telemetry-linux` (older releases may still ship `wright-telemetry`) |
 | macOS    | `wright-telemetry-macos.zip` |
 | Windows  | `wright-telemetry.exe` |
 
-These names match what the CI workflows upload to each release. If you rename a release asset, update `_ASSET_NAMES` in `wright_telemetry/updater.py` to match.
+The updater resolves the host OS (`linux` / `darwin` / `win32`) and only considers assets for that OS. Linux tries `wright-telemetry-linux` first, then the legacy `wright-telemetry` name for older tags.
+
+If you change release asset names, update `_release_asset_candidates()` in `wright_telemetry/updater.py`.
 
 ---
 
@@ -64,4 +66,4 @@ GitHub Actions builds the binaries and uploads them to the release. All existing
 
 ## GitHub API Rate Limits
 
-Unauthenticated requests to `api.github.com` are limited to 60/hour per IP. For a daemon that only checks on startup this is well within limits. If you ever need to increase the limit, set a `GITHUB_TOKEN` environment variable and pass it as a `Authorization: Bearer` header in `_fetch_latest_release()`.
+Unauthenticated requests to `api.github.com` are limited to 60/hour per IP. The updater uses exponential backoff after failures and, on HTTP 403, waits until `X-RateLimit-Reset` (or `Retry-After`) when provided. To raise the limit (5000/hour for authenticated requests), set `GITHUB_TOKEN` or `GH_TOKEN` in the environment; the client sends it as `Authorization: Bearer`.
