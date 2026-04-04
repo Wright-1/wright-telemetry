@@ -19,6 +19,23 @@ logger = logging.getLogger(__name__)
 _POST_TIMEOUT = 20  # seconds
 
 
+def wright_api_v1_url(api_url: str, *segments: str) -> str:
+    """Build a URL under ``/api/v1/...`` from the configured Wright API base.
+
+    The setup wizard often stores the mount point explicitly, e.g.
+    ``https://api.wrightfan.com/api`` or ``https://dev.wrightfan.com/api``.
+    In that case paths are appended as ``/v1/<segments>`` only.
+
+    If the base is the host root (no trailing ``/api``), ``/api/v1/<segments>``
+    is appended.
+    """
+    base = (api_url or "").strip().rstrip("/")
+    tail = "/".join(segments)
+    if base.endswith("/api"):
+        return f"{base}/v1/{tail}"
+    return f"{base}/api/v1/{tail}"
+
+
 class WrightAPIClient:
     """Thin wrapper around the Wright Fan telemetry ingest endpoint."""
 
@@ -40,7 +57,7 @@ class WrightAPIClient:
         detected_at: str,
     ) -> bool:
         """POST to /api/v1/miners/stock-fans to record baseline RPMs and mark as stock."""
-        url = f"{self.api_url}/api/v1/miners/stock-fans"
+        url = wright_api_v1_url(self.api_url, "miners", "stock-fans")
         payload = {
             "mac_address": mac_address,
             "fan_baselines": fan_baselines,
@@ -67,8 +84,7 @@ class WrightAPIClient:
         detected_at: str,
     ) -> bool:
         """POST to /v1/miners/wright-fans to mark fans as Wright fans by MAC address."""
-        from wright_telemetry.encryption import encrypt_payload
-        url = f"{self.api_url}/api/v1/miners/wright-fans"
+        url = wright_api_v1_url(self.api_url, "miners", "wright-fans")
         payload = {
             "mac_address": mac_address,
             "fan_positions": fan_positions,
@@ -90,7 +106,7 @@ class WrightAPIClient:
 
     def send(self, payload: TelemetryPayload) -> bool:
         """Encrypt and POST a telemetry payload.  Returns True on success."""
-        url = f"{self.api_url}/v1/telemetry"
+        url = wright_api_v1_url(self.api_url, "telemetry")
         try:
             wire = encrypt_payload(payload.to_dict(), self.api_key)
             resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)

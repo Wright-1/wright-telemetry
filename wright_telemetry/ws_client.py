@@ -14,6 +14,8 @@ import queue
 import threading
 from typing import Any, Optional
 
+from wright_telemetry.api_client import wright_api_v1_url
+
 logger = logging.getLogger(__name__)
 
 _MAX_BACKOFF = 300  # 5 minutes
@@ -87,12 +89,13 @@ class WebSocketClient:
 
     @staticmethod
     def _build_ws_url(api_url: str) -> str:
-        url = api_url.rstrip("/")
-        if url.startswith("https://"):
-            url = "wss://" + url[len("https://"):]
-        elif url.startswith("http://"):
-            url = "ws://" + url[len("http://"):]
-        return f"{url}/api/v1/ws/agent"
+        """Map HTTP API base to ``ws(s)://`` ``/api/v1/ws/agent``."""
+        http_url = wright_api_v1_url(api_url, "ws", "agent")
+        if http_url.startswith("https://"):
+            return "wss://" + http_url[len("https://"):]
+        if http_url.startswith("http://"):
+            return "ws://" + http_url[len("http://"):]
+        return http_url
 
     # ------------------------------------------------------------------
     # Async internals
