@@ -386,6 +386,134 @@ def _detect_fan_dips(
     return []
 
 
+# Portal / WebSocket fan-ID: physical switch (off → on), not rolling dip signature.
+_WS_FAN_SWITCH_POLL_INTERVAL = 1.0
+_WS_FAN_RPM_RUNNING_THRESHOLD = 500
+
+
+def _check_fan_rpm_changes(
+    _miner_name: str,
+    cooling_data: Any,
+    miner_url: str,
+    fan_prev_rpm: dict[tuple[str, int], int],
+    _fan_drop_events: list[dict],
+) -> list[dict[str, Any]]:
+    """Detect fan RPM crossing off/on vs *running* threshold (portal live detection).
+
+    Shared implementation: only :func:`_run_ws_fan_detection` calls this. CLI Wright Fan
+    mode uses :func:`_detect_fan_dips` instead.
+    """
+    from wright_telemetry.models import CoolingData
+
+    if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
+        return []
+
+    events: list[dict[str, Any]] = []
+    for fan in cooling_data.fans:
+        key = (miner_url, fan.position)
+        curr = int(fan.rpm)
+        prev = fan_prev_rpm.get(key)
+        if prev is None:
+            fan_prev_rpm[key] = curr
+            continue
+
+        prev_running = prev >= _WS_FAN_RPM_RUNNING_THRESHOLD
+        curr_running = curr >= _WS_FAN_RPM_RUNNING_THRESHOLD
+        if prev_running and not curr_running:
+            events.append({
+                "fan_position": fan.position,
+                "prev_rpm": prev,
+                "curr_rpm": curr,
+                "transition_type": "off",
+            })
+        elif not prev_running and curr_running:
+            events.append({
+                "fan_position": fan.position,
+                "prev_rpm": prev,
+                "curr_rpm": curr,
+                "transition_type": "on",
+            })
+
+        fan_prev_rpm[key] = curr
+
+    return events
+
+
+def _emit_ws_fan_switch_events(
+    name: str,
+    miner_cfg: dict[str, Any],
+    identity: Any,
+    new_events: list[dict[str, Any]],
+    api_client: WrightAPIClient,
+    facility_id: str,
+    controller: Any,
+) -> None:
+    """Send telemetry + portal events for :func:`_check_fan_rpm_changes` results."""
+    if not new_events:
+        return
+
+    api_client.send(
+        TelemetryPayload(
+            metric_type="fan_events",
+            facility_id=facility_id,
+            miner_identity=identity,
+            data={"events": new_events},
+        )
+    )
+    mac = identity.mac_address if identity else "unknown"
+    detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    for ev in new_events:
+        controller.push_event({
+            "event": "fan_transition",
+            "miner": name,
+            "miner_url": miner_cfg["url"],
+            "fan_position": ev["fan_position"],
+            "prev_rpm": ev["prev_rpm"],
+            "curr_rpm": ev["curr_rpm"],
+            "transition_type": ev["transition_type"],
+        })
+        if ev["transition_type"] == "on":
+            api_client.mark_wright_fans(mac, [ev["fan_position"]], detected_at)
+            mark_miner_wright_fans(miner_cfg["url"])
+            miner_cfg["wright_fans"] = True
+            if identity:
+                identity.wright_fans = True
+            controller.push_event({
+                "event": "wright_fan_detected",
+                "miner": name,
+                "miner_url": miner_cfg["url"],
+                "fan_position": ev["fan_position"],
+            })
+            logger.info(
+                "Wright fan detected: miner '%s' fan #%d",
+                name,
+                ev["fan_position"],
+            )
+
+
+def _handle_wright_fan_dip_detection(
+    name: str,
+    identity: Any,
+    dipped: list[int],
+    api_client: WrightAPIClient,
+) -> None:
+    """After :func:`_detect_fan_dips` fires (CLI ``--detect-wright-fans`` only)."""
+    mac = identity.mac_address if identity else "unknown"
+    detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    logger.info(
+        "All fans dipped on '%s' (mac=%s positions=%s) — calling wright-fans endpoint",
+        name,
+        mac,
+        dipped,
+    )
+    api_client.mark_wright_fans(mac, dipped, detected_at)
+    print(
+        f"[WRIGHT FAN] All fans dipped on '{name}' "
+        f"(positions {dipped}) — marking as Wright fans"
+    )
+
+
 def run_fan_detection(cfg: dict[str, Any]) -> None:
     """Poll fan RPM on all configured miners, detecting Wright Fan dip signatures.
 
@@ -484,17 +612,12 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                             fan_rpm_history, fan_dip_times, miner_last_detected,
                         )
                         if dipped:
-                            mac = identity.mac_address if identity else "unknown"
-                            detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                            print(
-                                f"[WRIGHT FAN] All fans dipped on '{name}' "
-                                f"(positions {dipped}) — marking as Wright fans"
+                            _handle_wright_fan_dip_detection(
+                                name,
+                                identity,
+                                dipped,
+                                api_client,
                             )
-                            logger.info(
-                                "All fans dipped on '%s' (mac=%s positions=%s) — calling wright-fans endpoint",
-                                name, mac, dipped,
-                            )
-                            api_client.mark_wright_fans(mac, dipped, detected_at)
                             last_detection_time = time.time()
                     except Exception as exc:
                         logger.warning("Error in fan dip detection for '%s': %s", name, exc)
@@ -521,11 +644,10 @@ def _run_ws_fan_detection(
     controller: Any,
     api_client: WrightAPIClient,
 ) -> None:
-    """WebSocket-triggered fan detection: 1s cooling polls on ALL miners.
+    """WebSocket-triggered fan detection using :func:`_check_fan_rpm_changes` (switch / RPM threshold).
 
+    CLI ``--detect-wright-fans`` continues to use :func:`_detect_fan_dips` only.
     Runs until the controller mode switches back to ``"normal"``.
-    Pushes real-time events to the portal via the controller event queue
-    and continues sending fan_events via HTTP telemetry as usual.
     """
     facility_id = cfg.get("facility_id", "unknown")
     default_collector_type = cfg.get("collector_type", "braiins")
@@ -545,8 +667,9 @@ def _run_ws_fan_detection(
         "miner_count": len(collectors),
     })
     logger.info(
-        "WebSocket fan detection started: %d miner(s), polling every 1s",
+        "WebSocket fan detection started: %d miner(s), polling every %ss (switch RPM algorithm)",
         len(collectors),
+        _WS_FAN_SWITCH_POLL_INTERVAL,
     )
 
     fan_prev_rpm: dict[tuple[str, int], int] = {}
@@ -567,45 +690,26 @@ def _run_ws_fan_detection(
 
             try:
                 new_events = _check_fan_rpm_changes(
-                    name, cooling_data_obj, miner_cfg["url"],
-                    fan_prev_rpm, fan_drop_events,
+                    name,
+                    cooling_data_obj,
+                    miner_cfg["url"],
+                    fan_prev_rpm,
+                    fan_drop_events,
                 )
                 if new_events:
-                    api_client.send(TelemetryPayload(
-                        metric_type="fan_events",
-                        facility_id=facility_id,
-                        miner_identity=identity,
-                        data={"events": new_events},
-                    ))
-                    for ev in new_events:
-                        controller.push_event({
-                            "event": "fan_transition",
-                            "miner": name,
-                            "miner_url": miner_cfg["url"],
-                            "fan_position": ev["fan_position"],
-                            "prev_rpm": ev["prev_rpm"],
-                            "curr_rpm": ev["curr_rpm"],
-                            "transition_type": ev["transition_type"],
-                        })
-                        if ev["transition_type"] == "on":
-                            mark_miner_wright_fans(miner_cfg["url"])
-                            miner_cfg["wright_fans"] = True
-                            if identity:
-                                identity.wright_fans = True
-                            controller.push_event({
-                                "event": "wright_fan_detected",
-                                "miner": name,
-                                "miner_url": miner_cfg["url"],
-                                "fan_position": ev["fan_position"],
-                            })
-                            logger.info(
-                                "Wright fan detected: miner '%s' fan #%d",
-                                name, ev["fan_position"],
-                            )
+                    _emit_ws_fan_switch_events(
+                        name,
+                        miner_cfg,
+                        identity,
+                        new_events,
+                        api_client,
+                        facility_id,
+                        controller,
+                    )
             except Exception as exc:
                 logger.warning("Error checking fan RPMs for '%s': %s", name, exc)
 
-        if controller.wait_for_mode_change(timeout=_FAN_DETECTION_POLL_INTERVAL):
+        if controller.wait_for_mode_change(timeout=_WS_FAN_SWITCH_POLL_INTERVAL):
             break
 
     controller.push_event({"event": "fan_detection_stopped"})

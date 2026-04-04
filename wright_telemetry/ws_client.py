@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import queue
+import ssl
 import threading
 from typing import Any, Optional
 
@@ -138,11 +139,18 @@ class WebSocketClient:
         import websockets
 
         consecutive_failures = 0
+        # TODO: Re-enable TLS verification before shipping production builds.
+        connect_kw: dict[str, Any] = {}
+        if self._ws_url.startswith("wss://"):
+            _ctx = ssl.create_default_context()
+            _ctx.check_hostname = False
+            _ctx.verify_mode = ssl.CERT_NONE
+            connect_kw["ssl"] = _ctx
 
         while True:
             try:
                 logger.info("Connecting to portal WebSocket: %s", self._ws_url)
-                async with websockets.connect(self._ws_url) as ws:
+                async with websockets.connect(self._ws_url, **connect_kw) as ws:
                     await self._send_json(ws, {
                         "api_key": self.api_key,
                         "facility_id": self.facility_id,

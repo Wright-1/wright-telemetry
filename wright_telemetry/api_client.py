@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 import requests
+import urllib3
 
 from wright_telemetry.encryption import encrypt_payload
 from wright_telemetry.models import TelemetryPayload
@@ -44,6 +45,9 @@ class WrightAPIClient:
         self.api_key = api_key
         self.facility_id = facility_id
         self._session = requests.Session()
+        # TODO: Re-enable TLS verification before shipping production builds.
+        self._session.verify = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self._session.headers.update({
             "Content-Type": "application/json",
             "X-API-Key": self.api_key,
