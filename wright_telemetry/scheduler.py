@@ -22,6 +22,7 @@ from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
 from wright_telemetry.config import decode_password, mark_miner_wright_fans
+from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
     discover_miners,
@@ -460,7 +461,10 @@ def _emit_ws_fan_switch_events(
             data={"events": new_events},
         )
     )
-    mac = identity.mac_address if identity else "unknown"
+    mac_raw = (identity.mac_address if identity else "") or ""
+    mac_cfg = (miner_cfg.get("mac_address") or "").strip()
+    mac = normalize_mac_address(mac_raw) or normalize_mac_address(mac_cfg) or mac_raw.strip()
+
     detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     for ev in new_events:
@@ -474,22 +478,31 @@ def _emit_ws_fan_switch_events(
             "transition_type": ev["transition_type"],
         })
         if ev["transition_type"] == "on":
-            api_client.mark_wright_fans(mac, [ev["fan_position"]], detected_at)
-            mark_miner_wright_fans(miner_cfg["url"])
-            miner_cfg["wright_fans"] = True
-            if identity:
-                identity.wright_fans = True
-            controller.push_event({
-                "event": "wright_fan_detected",
-                "miner": name,
-                "miner_url": miner_cfg["url"],
-                "fan_position": ev["fan_position"],
-            })
-            logger.info(
-                "Wright fan detected: miner '%s' fan #%d",
-                name,
-                ev["fan_position"],
-            )
+            marked = api_client.mark_wright_fans(mac, [ev["fan_position"]], detected_at)
+            if marked:
+                mark_miner_wright_fans(miner_cfg["url"])
+                miner_cfg["wright_fans"] = True
+                if identity:
+                    identity.wright_fans = True
+                controller.push_event({
+                    "event": "wright_fan_detected",
+                    "miner": name,
+                    "miner_url": miner_cfg["url"],
+                    "fan_position": ev["fan_position"],
+                })
+                logger.info(
+                    "Wright fan detected: miner '%s' fan #%d",
+                    name,
+                    ev["fan_position"],
+                )
+            else:
+                logger.warning(
+                    "Wright fan ON transition for '%s' fan #%d but portal did not accept "
+                    "mark_wright_fans (mac=%r); check MAC vs telemetry readings",
+                    name,
+                    ev["fan_position"],
+                    mac or None,
+                )
 
 
 def _handle_wright_fan_dip_detection(
@@ -499,7 +512,8 @@ def _handle_wright_fan_dip_detection(
     api_client: WrightAPIClient,
 ) -> None:
     """After :func:`_detect_fan_dips` fires (CLI ``--detect-wright-fans`` only)."""
-    mac = identity.mac_address if identity else "unknown"
+    mac_raw = (identity.mac_address if identity else "") or ""
+    mac = normalize_mac_address(mac_raw) or mac_raw.strip()
     detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     logger.info(
         "All fans dipped on '%s' (mac=%s positions=%s) — calling wright-fans endpoint",

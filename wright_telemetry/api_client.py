@@ -13,6 +13,7 @@ import requests
 import urllib3
 
 from wright_telemetry.encryption import encrypt_payload
+from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.models import TelemetryPayload
 
 logger = logging.getLogger(__name__)
@@ -62,8 +63,9 @@ class WrightAPIClient:
     ) -> bool:
         """POST to /api/v1/miners/stock-fans to record baseline RPMs and mark as stock."""
         url = wright_api_v1_url(self.api_url, "miners", "stock-fans")
+        mac = normalize_mac_address(mac_address) or (mac_address or "").strip()
         payload = {
-            "mac_address": mac_address,
+            "mac_address": mac,
             "fan_baselines": fan_baselines,
             "detected_at": detected_at,
             "facility_id": self.facility_id,
@@ -74,11 +76,11 @@ class WrightAPIClient:
             resp.raise_for_status()
             logger.info(
                 "Marked stock fans for miner %s (HTTP %d)",
-                mac_address, resp.status_code,
+                mac, resp.status_code,
             )
             return True
         except Exception as exc:
-            logger.warning("Failed to mark stock fans for miner %s: %s", mac_address, exc)
+            logger.warning("Failed to mark stock fans for miner %s: %s", mac, exc)
             return False
 
     def mark_wright_fans(
@@ -89,8 +91,9 @@ class WrightAPIClient:
     ) -> bool:
         """POST to /v1/miners/wright-fans to mark fans as Wright fans by MAC address."""
         url = wright_api_v1_url(self.api_url, "miners", "wright-fans")
+        mac = normalize_mac_address(mac_address) or (mac_address or "").strip()
         payload = {
-            "mac_address": mac_address,
+            "mac_address": mac,
             "fan_positions": fan_positions,
             "detected_at": detected_at,
             "facility_id": self.facility_id,
@@ -101,11 +104,11 @@ class WrightAPIClient:
             resp.raise_for_status()
             logger.info(
                 "Marked %d Wright fans for miner %s (HTTP %d)",
-                len(fan_positions), mac_address, resp.status_code,
+                len(fan_positions), mac, resp.status_code,
             )
             return True
         except Exception as exc:
-            logger.warning("Failed to mark Wright fans for miner %s: %s", mac_address, exc)
+            logger.warning("Failed to mark Wright fans for miner %s: %s", mac, exc)
             return False
 
     def send(self, payload: TelemetryPayload) -> bool:
