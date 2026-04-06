@@ -10,8 +10,10 @@ Endpoints used (Braiins OS Public REST API v1.2.0):
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -39,6 +41,9 @@ class BraiinsCollector(MinerCollector):
         super().__init__(url, username, password)
         self._session = requests.Session()
         self._token: Optional[str] = None
+        # Some miners return empty bodies to the default python-requests User-Agent.
+        self._session.headers.setdefault("Accept", "application/json")
+        self._session.headers.setdefault("User-Agent", "WrightTelemetry/braiins-collector")
 
     # ------------------------------------------------------------------
     # Authentication
@@ -57,8 +62,8 @@ class BraiinsCollector(MinerCollector):
             self._session.headers.pop("authorization", None)
             resp = self._session.post(login_url, json=payload, timeout=_REQUEST_TIMEOUT)
             resp.raise_for_status()
-            data = resp.json()
-            self._token = data.get("token")
+            data = self._json_from_response(resp, login_url)
+            self._token = data.get("token") or data.get("access_token")
             if self._token:
                 self._session.headers["authorization"] = self._token
                 logger.info("Authenticated with Braiins miner at %s (token timeout: %ss)",
@@ -66,13 +71,65 @@ class BraiinsCollector(MinerCollector):
             else:
                 logger.warning("Auth response missing token for %s -- body: %s -- continuing without auth",
                                self.url, data)
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             logger.warning("Auth failed for %s (%s) -- will try requests without auth", self.url, exc)
+
+    def _json_from_response(self, resp: requests.Response, url: str) -> dict:
+        """Decode JSON, accepting UTF-8 BOM; raise with useful logs if the body is wrong."""
+        raw = resp.content or b""
+        text = raw.decode("utf-8-sig").strip()
+        if not text:
+            logger.warning(
+                "Empty response body from %s (HTTP %s, Content-Type=%r, len=%d)",
+                url,
+                resp.status_code,
+                resp.headers.get("Content-Type"),
+                len(raw),
+            )
+            raise ValueError(f"Empty response body from {url}")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            preview = text[:400].replace("\n", " ")
+            logger.warning(
+                "Non-JSON response from %s (HTTP %s): %s",
+                url,
+                resp.status_code,
+                preview,
+            )
+            raise
+
+    def _maybe_upgrade_to_https_after_redirect(self, resp: requests.Response) -> bool:
+        """If the miner redirected HTTP → HTTPS, follow it on our base URL and re-login.
+
+        ``requests`` may drop the ``Authorization`` header on a cross-scheme redirect,
+        which often produces empty or HTML responses and JSON decode failures.
+        """
+        if not resp.history or not self.url.startswith("http://"):
+            return False
+        final = urlparse(resp.url)
+        if final.scheme != "https":
+            return False
+        new_base = f"{final.scheme}://{final.netloc}".rstrip("/")
+        if new_base == self.url:
+            return False
+        logger.info(
+            "Braiins miner redirected %s → %s; switching base URL and re-authenticating",
+            self.url,
+            new_base,
+        )
+        self.url = new_base
+        self.authenticate()
+        return True
 
     def _get(self, path: str) -> dict:
         """Issue a GET request with automatic 401 retry."""
         url = f"{self.url}{path}"
         resp = self._session.get(url, timeout=_REQUEST_TIMEOUT)
+
+        if self._maybe_upgrade_to_https_after_redirect(resp):
+            url = f"{self.url}{path}"
+            resp = self._session.get(url, timeout=_REQUEST_TIMEOUT)
 
         if resp.status_code == 401 and self.username:
             logger.info("Got 401 from %s -- re-authenticating", url)
@@ -80,7 +137,7 @@ class BraiinsCollector(MinerCollector):
             resp = self._session.get(url, timeout=_REQUEST_TIMEOUT)
 
         resp.raise_for_status()
-        return resp.json()
+        return self._json_from_response(resp, url)
 
     # ------------------------------------------------------------------
     # Identity
