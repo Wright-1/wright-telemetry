@@ -27,6 +27,7 @@ from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
     discover_miners,
     discovered_to_miner_cfgs,
+    firmware_types_for_collector,
     merge_miners,
 )
 from wright_telemetry.models import MinerIdentity, TelemetryPayload
@@ -47,8 +48,10 @@ def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     subnets = discovery_cfg.get("subnets")
     default_user = discovery_cfg.get("default_username", "root")
     default_pw_b64 = discovery_cfg.get("default_password_b64", "")
+    collector_type = cfg.get("collector_type", "braiins")
+    firmware_types = firmware_types_for_collector(collector_type)
 
-    found = discover_miners(subnets=subnets)
+    found = discover_miners(subnets=subnets, firmware_types=firmware_types)
     discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
 
     merged = merge_miners(manual_miners, discovered_cfgs)

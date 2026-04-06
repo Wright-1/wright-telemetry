@@ -137,26 +137,29 @@ def _probe_luxos(ip: str) -> Optional[DiscoveredMiner]:
 
 
 def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
-    """Hit the Vnish REST API; 200 or 401 means it's a Vnish miner."""
+    """Hit the Vnish REST API; require 200 JSON with ``firmware_version``.
+
+    Treating 401 alone as Vnish caused false positives (e.g. other firmware
+    returning 401 on ``/api/v1/info``). Miners that hide ``/api/v1/info``
+    behind auth must be added manually or discovered after probe support
+    for credentials is added.
+    """
     url = f"http://{ip}/api/v1/info"
     try:
         resp = requests.get(url, timeout=_PROBE_TIMEOUT)
-        if resp.status_code in (200, 401):
-            hostname = ""
-            mac = ""
-            if resp.status_code == 200:
-                try:
-                    data = resp.json()
-                    hostname = data.get("hostname", "")
-                    mac = data.get("mac", "")
-                    if not data.get("firmware_version"):
-                        return None
-                except Exception:
-                    pass
-            return DiscoveredMiner(
-                ip=ip, firmware="vnish",
-                hostname=hostname, mac_address=mac,
-            )
+        if resp.status_code != 200:
+            return None
+        try:
+            data = resp.json()
+        except Exception:
+            return None
+        if not data.get("firmware_version"):
+            return None
+        return DiscoveredMiner(
+            ip=ip, firmware="vnish",
+            hostname=data.get("hostname", ""),
+            mac_address=data.get("mac", ""),
+        )
     except (requests.ConnectionError, requests.Timeout, OSError):
         pass
     return None
@@ -167,6 +170,19 @@ _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
     "luxos": _probe_luxos,
     "vnish": _probe_vnish,
 }
+
+
+def firmware_types_for_collector(collector_type: str) -> Optional[list[str]]:
+    """Map config ``collector_type`` to discovery probe keys.
+
+    Returns a single-firmware list so we only hit APIs for the rig the user
+    selected. Returns ``None`` if *collector_type* is unknown so discovery
+    falls back to probing every registered firmware (forward compatibility).
+    """
+    key = (collector_type or "").strip().lower() or "braiins"
+    if key in _PROBES:
+        return [key]
+    return None
 
 
 # ------------------------------------------------------------------
@@ -358,22 +374,28 @@ def _cli_progress(scanned: int, total: int) -> None:
 
 def run_interactive_discovery(
     subnets: Optional[list[str]] = None,
+    firmware_types: Optional[list[str]] = None,
 ) -> list[DiscoveredMiner]:
     """Run discovery with a live progress line on stdout."""
-    miners = discover_miners(subnets=subnets, progress_cb=_cli_progress)
+    miners = discover_miners(
+        subnets=subnets, firmware_types=firmware_types, progress_cb=_cli_progress,
+    )
     sys.stdout.write("\r" + " " * 40 + "\r")  # clear progress line
     sys.stdout.flush()
     return miners
 
 
-def run_interactive_range_scan(target: str) -> list[DiscoveredMiner]:
+def run_interactive_range_scan(
+    target: str,
+    firmware_types: Optional[list[str]] = None,
+) -> list[DiscoveredMiner]:
     """Parse *target* (CIDR, range, or single IP) and scan with progress."""
     try:
         hosts = parse_ip_target(target)
     except ValueError as exc:
         logger.error("Invalid target %r: %s", target, exc)
         return []
-    miners = scan_hosts(hosts, progress_cb=_cli_progress)
+    miners = scan_hosts(hosts, firmware_types, progress_cb=_cli_progress)
     sys.stdout.write("\r" + " " * 40 + "\r")
     sys.stdout.flush()
     return miners

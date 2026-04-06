@@ -17,6 +17,7 @@ from wright_telemetry.consent import DEFAULT_CONSENT, run_consent_wizard
 from wright_telemetry.discovery import (
     default_subnet,
     discovered_to_miner_cfgs,
+    firmware_types_for_collector,
     parse_ip_target,
     run_interactive_discovery,
     run_interactive_range_scan,
@@ -118,7 +119,7 @@ def _wizard_add_miner(index: int) -> dict[str, Any]:
     return miner
 
 
-def _wizard_range_scan() -> list[dict[str, Any]]:
+def _wizard_range_scan(collector_type: str = _DEFAULT_COLLECTOR_TYPE) -> list[dict[str, Any]]:
     """Prompt for a CIDR block or IP range, scan it, return miner configs."""
     print()
     print("  Enter a CIDR block or IP range to scan for miners.")
@@ -141,8 +142,9 @@ def _wizard_range_scan() -> list[dict[str, Any]]:
 
     print()
     print(f"  Scanning {target} for miners ({num_hosts} host(s))…")
-    print("  Hang tight — checking every IP in the range for Braiins / LuxOS APIs.")
-    found = run_interactive_range_scan(target)
+    print("  Hang tight — probing each host for your selected firmware API.")
+    fw = firmware_types_for_collector(collector_type)
+    found = run_interactive_range_scan(target, firmware_types=fw)
 
     if not found:
         print("  No miners found in that range.  Double-check the range or try a broader CIDR.")
@@ -157,7 +159,10 @@ def _wizard_range_scan() -> list[dict[str, Any]]:
     return discovered_to_miner_cfgs(found, username, pw_b64)
 
 
-def _wizard_discovery(existing_discovery: Optional[dict[str, Any]] = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _wizard_discovery(
+    existing_discovery: Optional[dict[str, Any]] = None,
+    collector_type: str = _DEFAULT_COLLECTOR_TYPE,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Run the discovery portion of the setup wizard.
 
     Returns ``(miners, discovery_cfg)`` where *miners* is a list of miner
@@ -199,7 +204,8 @@ def _wizard_discovery(existing_discovery: Optional[dict[str, Any]] = None) -> tu
     for subnet in subnets:
         print(f"  Scanning {subnet}…")
 
-    found = run_interactive_discovery(subnets)
+    fw = firmware_types_for_collector(collector_type)
+    found = run_interactive_discovery(subnets, firmware_types=fw)
 
     if not found:
         print("  No miners found.")
@@ -287,7 +293,10 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     )
     if run_discovery.lower() in ("y", "yes"):
         print()
-        discovered_miners, discovery_cfg = _wizard_discovery(cfg.get("discovery"))
+        discovered_miners, discovery_cfg = _wizard_discovery(
+            cfg.get("discovery"),
+            collector_type=cfg.get("collector_type", _DEFAULT_COLLECTOR_TYPE),
+        )
         cfg["discovery"] = discovery_cfg
         miners.extend(discovered_miners)
     else:
@@ -296,7 +305,9 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     # Optional manual entry — CIDR / range first, then individual
     add_manual = _ask("Would you like to add miners manually? (y/n)", default="n")
     if add_manual.lower() in ("y", "yes"):
-        range_miners = _wizard_range_scan()
+        range_miners = _wizard_range_scan(
+            collector_type=cfg.get("collector_type", _DEFAULT_COLLECTOR_TYPE),
+        )
         miners.extend(range_miners)
 
         if not range_miners:
