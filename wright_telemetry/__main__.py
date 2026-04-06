@@ -112,34 +112,40 @@ def main() -> None:
     import wright_telemetry.collectors.braiins  # noqa: F401  -- triggers @register
     import wright_telemetry.collectors.luxos    # noqa: F401  -- triggers @register
 
-    # After setup: collect baselines, show help, offer detection mode
+    # After setup: collect baselines and show help (fan detection: use --detect-wright-fans)
     if ran_setup and not args.detect_wright_fans:
-        from wright_telemetry.scheduler import run_baseline_collection, run_fan_detection
+        from wright_telemetry.scheduler import run_baseline_collection
+
         run_baseline_collection(cfg)
         _print_help_menu()
         print("  Wright Fan detection mode monitors fan RPM for dips that indicate Wright")
         print("  fans are installed. You can start it anytime with:")
         print("    wright-telemetry --detect-wright-fans\n")
-        try:
-            answer = input("  Would you like to start Wright Fan detection mode now? [y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            answer = ""
-        print()
-        if answer == "y":
-            run_fan_detection(cfg)
-            return
 
     if args.detect_wright_fans:
         from wright_telemetry.scheduler import run_fan_detection
+
         completed = run_fan_detection(cfg)
         if not completed:
             return
         cfg["fan_detection_completed"] = True
         from wright_telemetry.config import save_config
+
         save_config(cfg)
 
     from wright_telemetry.scheduler import run
-    run(cfg)
+    from wright_telemetry.ws_client import AgentController, WebSocketClient
+
+    controller = AgentController()
+    ws_client = WebSocketClient(
+        controller,
+        api_url=cfg.get("wright_api_url", ""),
+        api_key=cfg.get("wright_api_key", ""),
+        facility_id=cfg.get("facility_id", ""),
+    )
+    ws_client.start()
+
+    run(cfg, controller=controller)
 
 
 if __name__ == "__main__":

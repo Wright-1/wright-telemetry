@@ -5,13 +5,34 @@ from __future__ import annotations
 import responses
 import pytest
 
-from wright_telemetry.api_client import WrightAPIClient
+from wright_telemetry.api_client import WrightAPIClient, wright_api_v1_url
 from wright_telemetry.models import MinerIdentity, TelemetryPayload
 
 
 API_URL = "https://api.wrightfan.com"
+TELEMETRY_URL = wright_api_v1_url(API_URL, "telemetry")
+API_URL_WITH_API_SUFFIX = "https://api.wrightfan.com/api"
 API_KEY = "test-api-key-12345"
 FACILITY_ID = "fac-001"
+
+
+class TestWrightApiV1Url:
+
+    def test_host_root_appends_api_v1(self) -> None:
+        assert wright_api_v1_url(
+            "https://api.wrightfan.com", "telemetry",
+        ) == "https://api.wrightfan.com/api/v1/telemetry"
+        assert wright_api_v1_url(
+            "https://api.wrightfan.com", "ws", "agent",
+        ) == "https://api.wrightfan.com/api/v1/ws/agent"
+
+    def test_explicit_api_mount(self) -> None:
+        assert wright_api_v1_url(
+            API_URL_WITH_API_SUFFIX, "telemetry",
+        ) == "https://api.wrightfan.com/api/v1/telemetry"
+        assert wright_api_v1_url(
+            "https://dev.wrightfan.com/api/", "ws", "agent",
+        ) == "https://dev.wrightfan.com/api/v1/ws/agent"
 
 
 @pytest.fixture()
@@ -36,7 +57,7 @@ class TestSend:
     def test_successful_post(self, api_client, sample_payload):
         responses.add(
             responses.POST,
-            f"{API_URL}/v1/telemetry",
+            TELEMETRY_URL,
             json={"status": "ok"},
             status=200,
         )
@@ -48,7 +69,7 @@ class TestSend:
         """The POST body must contain nonce+ciphertext, not plaintext fields."""
         responses.add(
             responses.POST,
-            f"{API_URL}/v1/telemetry",
+            TELEMETRY_URL,
             json={"status": "ok"},
             status=200,
         )
@@ -63,7 +84,7 @@ class TestSend:
     def test_http_error_returns_false(self, api_client, sample_payload):
         responses.add(
             responses.POST,
-            f"{API_URL}/v1/telemetry",
+            TELEMETRY_URL,
             json={"error": "bad request"},
             status=400,
         )
@@ -73,7 +94,7 @@ class TestSend:
     def test_server_error_returns_false(self, api_client, sample_payload):
         responses.add(
             responses.POST,
-            f"{API_URL}/v1/telemetry",
+            TELEMETRY_URL,
             json={"error": "internal"},
             status=500,
         )
@@ -84,7 +105,7 @@ class TestSend:
         import requests as req
         responses.add(
             responses.POST,
-            f"{API_URL}/v1/telemetry",
+            TELEMETRY_URL,
             body=req.ConnectionError("refused"),
         )
         assert api_client.send(sample_payload) is False
@@ -93,7 +114,7 @@ class TestSend:
     def test_headers_set(self, api_client, sample_payload):
         responses.add(
             responses.POST,
-            f"{API_URL}/v1/telemetry",
+            TELEMETRY_URL,
             json={"status": "ok"},
             status=200,
         )

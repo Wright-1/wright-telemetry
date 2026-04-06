@@ -25,7 +25,7 @@ from wright_telemetry.discovery import (
 CONFIG_DIR = Path.home() / ".wright-telemetry"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
-_DEFAULT_WRIGHT_API_URL = "https://api.wrightfan.com"
+_DEFAULT_WRIGHT_API_URL = "https://api.wrightfan.com/api"
 _DEFAULT_POLL_INTERVAL = 30
 _DEFAULT_COLLECTOR_TYPE = "braiins"
 _DEFAULT_SCAN_INTERVAL = 300  # seconds between runtime re-scans
@@ -52,6 +52,18 @@ def save_config(cfg: dict[str, Any]) -> None:
         os.chmod(CONFIG_FILE, 0o600)
     except OSError:
         pass
+
+
+def mark_miner_wright_fans(miner_url: str, wright_fans: bool = True) -> None:
+    """Set ``wright_fans`` on the miner matching *miner_url* and persist."""
+    cfg = load_config()
+    if cfg is None:
+        return
+    for miner in cfg.get("miners", []):
+        if miner.get("url") == miner_url:
+            miner["wright_fans"] = wright_fans
+            break
+    save_config(cfg)
 
 
 # ------------------------------------------------------------------
@@ -231,7 +243,7 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
         default=cfg.get("wright_api_key", ""),
     )
     print()
-    print("  Wright Fan API URL: use the full base from the portal (e.g. https://api.wrightfan.com")
+    print("  Wright Fan API URL: use the API base from the portal (e.g. https://api.wrightfan.com/api")
     print("  or https://dev.wrightfan.com/api). /v1/... paths are added automatically.")
     cfg["wright_api_url"] = _ask(
         "Wright Fan API URL",
