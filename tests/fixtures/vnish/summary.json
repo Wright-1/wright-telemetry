@@ -1,0 +1,27 @@
+{
+  "miner": {
+    "instant_hashrate": 145230.5,
+    "average_hashrate": 145100.0,
+    "hardware_errors": 12,
+    "uptime": 1728000,
+    "hr_nominal": 147000.0
+  },
+  "pools": [
+    {
+      "url": "stratum+tcp://pool.example.com:3333",
+      "user": "miner_worker.001",
+      "status": "Alive",
+      "accepted": 58432,
+      "rejected": 15,
+      "stale": 3,
+      "difficulty_accepted": 934912000.0,
+      "pool_rejected_pct": 0.026,
+      "pool_stale_pct": 0.005
+    }
+  ],
+  "power": {
+    "watts": 3245,
+    "efficiency": 22.35,
+    "power_consumption": 3250
+  }
+}

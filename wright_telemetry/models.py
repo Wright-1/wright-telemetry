@@ -92,6 +92,29 @@ class CoolingData:
                 highest_temp = {"value": max(all_temps), "unit": "C"}
         return cls(fans=fans, highest_temperature=highest_temp)
 
+    @classmethod
+    def from_vnish(cls, raw: dict[str, Any]) -> CoolingData:
+        fans = [
+            FanReading(
+                position=f.get("id", 0),
+                rpm=f.get("rpm", 0),
+                target_speed_ratio=f.get("speed_pct", 0) / 100.0,
+            )
+            for f in raw.get("fans", [])
+        ]
+        highest_temp: Optional[dict[str, Any]] = None
+        chains = raw.get("chains", [])
+        if chains:
+            all_temps: list[float] = []
+            for c in chains:
+                for key in ("temp_board", "temp_chip"):
+                    val = c.get(key)
+                    if isinstance(val, (int, float)) and val > 0:
+                        all_temps.append(float(val))
+            if all_temps:
+                highest_temp = {"value": max(all_temps), "unit": "C"}
+        return cls(fans=fans, highest_temperature=highest_temp)
+
 
 @dataclass
 class HashrateData:
@@ -148,6 +171,38 @@ class HashrateData:
         }
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
+    @classmethod
+    def from_vnish(cls, raw: dict[str, Any]) -> HashrateData:
+        miner = raw.get("miner", {})
+        miner_stats = {
+            "ghs_5s": miner.get("instant_hashrate", 0),
+            "ghs_av": miner.get("average_hashrate", 0),
+            "hardware_errors": miner.get("hardware_errors", 0),
+        }
+        pools = raw.get("pools", [])
+        pool_stats = {
+            "pools": [
+                {
+                    "url": p.get("url", ""),
+                    "user": p.get("user", ""),
+                    "status": p.get("status", ""),
+                    "accepted": p.get("accepted", 0),
+                    "rejected": p.get("rejected", 0),
+                    "stale": p.get("stale", 0),
+                    "difficulty_accepted": p.get("difficulty_accepted", 0),
+                    "pool_rejected_pct": p.get("pool_rejected_pct", 0),
+                    "pool_stale_pct": p.get("pool_stale_pct", 0),
+                }
+                for p in pools
+            ],
+        }
+        power = raw.get("power", {})
+        power_stats = {
+            "watts": power.get("watts", 0),
+            "efficiency": power.get("efficiency", 0),
+        }
+        return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
+
 
 @dataclass
 class UptimeData:
@@ -188,6 +243,22 @@ class UptimeData:
                 "luxminer": version.get("LUXminer", ""),
                 "api": version.get("API", ""),
                 "type": version.get("Type", ""),
+            },
+            platform=0,
+            status=0,
+        )
+
+    @classmethod
+    def from_vnish(cls, info_raw: dict[str, Any], summary_raw: dict[str, Any]) -> UptimeData:
+        miner = summary_raw.get("miner", {})
+        elapsed = miner.get("uptime", 0)
+        return cls(
+            bosminer_uptime_s=elapsed,
+            system_uptime_s=elapsed,
+            hostname=info_raw.get("hostname", ""),
+            bos_version={
+                "vnish": info_raw.get("firmware_version", ""),
+                "model": info_raw.get("model", ""),
             },
             platform=0,
             status=0,
@@ -276,6 +347,35 @@ class HashboardData:
             ))
         return cls(hashboards=boards)
 
+    @classmethod
+    def from_vnish(cls, raw: dict[str, Any]) -> HashboardData:
+        boards: list[HashboardReading] = []
+        for chain in raw.get("chains", []):
+            board_id = chain.get("id", 0)
+            board_temp_val = chain.get("temp_board")
+            board_temp = {"value": board_temp_val, "unit": "C"} if board_temp_val is not None else None
+            chip_temp_val = chain.get("temp_chip")
+            highest_chip = {"value": chip_temp_val, "unit": "C"} if chip_temp_val is not None else None
+
+            boards.append(HashboardReading(
+                board_name=chain.get("name", f"Chain {board_id}"),
+                board_temp=board_temp,
+                highest_chip_temp=highest_chip,
+                lowest_inlet_temp=None,
+                highest_outlet_temp=None,
+                chips_count=chain.get("chips", 0),
+                id=str(board_id),
+                enabled=chain.get("status", "") == "ok",
+                stats={
+                    "hashrate": chain.get("hashrate", 0),
+                    "accepted": chain.get("accepted", 0),
+                    "rejected": chain.get("rejected", 0),
+                    "hardware_errors": chain.get("hw_errors", 0),
+                    "serial_number": chain.get("serial", ""),
+                },
+            ))
+        return cls(hashboards=boards)
+
 
 @dataclass
 class ErrorEntry:
@@ -312,5 +412,18 @@ class ErrorData:
                 components=[{"target": e.get("Target", ""), "id": e.get("ID", "")}],
             )
             for e in events_raw.get("EVENTS", [])
+        ]
+        return cls(errors=entries)
+
+    @classmethod
+    def from_vnish(cls, raw: dict[str, Any]) -> ErrorData:
+        entries = [
+            ErrorEntry(
+                message=e.get("message", ""),
+                timestamp=e.get("timestamp", ""),
+                error_codes=[{"code": e.get("code", ""), "severity": e.get("severity", "")}],
+                components=[{"type": e.get("component_type", ""), "id": e.get("component_id", "")}],
+            )
+            for e in raw.get("errors", [])
         ]
         return cls(errors=entries)

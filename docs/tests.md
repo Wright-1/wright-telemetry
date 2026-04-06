@@ -32,9 +32,13 @@ pytest tests/test_braiins_collector.py -v
 # Run just the LuxOS collector tests
 pytest tests/test_luxos_collector.py -v
 
+# Run just the Vnish collector tests
+pytest tests/test_vnish_collector.py -v
+
 # Run a single test class
 pytest tests/test_braiins_collector.py::TestAuthentication -v
 pytest tests/test_luxos_collector.py::TestFetchHashboards -v
+pytest tests/test_vnish_collector.py::TestFetchCooling -v
 
 # Stop on first failure
 pytest tests/ -x
@@ -77,9 +81,25 @@ Full regression of `LuxOSCollector` against simulated LuxOS CGMiner-compatible T
 | Errors | Event entries from `events` with codes, timestamps, targets |
 | Edge cases | Empty responses, missing fields, empty CONFIG list, socket timeout, connection refused, real socket error |
 
+### Vnish API Simulator (`test_vnish_collector.py`)
+
+Full regression of `VnishCollector` against simulated Vnish firmware REST API endpoints. The `responses` library intercepts HTTP calls so no real miner is needed.
+
+| Area | What's tested |
+|------|--------------|
+| Authentication | Token stored in session via `/api/v1/unlock`, no-password skip, HTTP error handling, missing token field |
+| 401 Auto-retry | `_get()` re-authenticates and retries on 401 |
+| Identity | uid, serial, hostname, mac from `/api/v1/info` |
+| Cooling | Fan list parsing (4 fans), highest temperature from chains |
+| Hashrate | miner stats, pool stats, power stats from `/api/v1/summary` |
+| Uptime | uptime seconds, firmware version, hostname from `/api/v1/info` + `/api/v1/summary` |
+| Hashboards | 3 chains with temps, chip counts, stats from `/api/v1/status` |
+| Errors | Error entries with codes, timestamps, components from `/api/v1/status` |
+| Edge cases | Empty responses, missing fields, HTTP 500, connection errors |
+
 ### Model Parsing (`test_models.py`)
 
-Unit tests for every `from_braiins()` and `from_luxos()` factory method on the data models. Each model is tested with:
+Unit tests for every `from_braiins()`, `from_luxos()`, and `from_vnish()` factory method on the data models. Each model is tested with:
 
 - Full realistic data (from fixture files)
 - Empty data (`{}`)
@@ -92,9 +112,11 @@ Also covers `MinerIdentity.to_dict()` and `TelemetryPayload.to_dict()` serializa
 
 | Test | What happens |
 |------|-------------|
-| Probe 200 | Braiins miner detected, hostname and MAC extracted |
-| Probe 401 | Miner detected (auth required), no details |
-| Probe 404 | Not a Braiins miner, returns None |
+| Braiins probe 200 | Braiins miner detected, hostname and MAC extracted |
+| Braiins probe 401 | Miner detected (auth required), no details |
+| Braiins probe 404 | Not a Braiins miner, returns None |
+| Vnish probe 200 | Vnish miner detected, hostname and MAC extracted |
+| Vnish probe 401 | Vnish miner detected (auth required), no details |
 | Probe timeout | Connection error, returns None |
 | IP parsing | Single IP, CIDR /24, CIDR /30, ranges, reversed ranges, invalid input |
 | Merge logic | Manual miners win on URL conflict, no duplicates |
@@ -160,14 +182,26 @@ Realistic JSON responses mirroring the LuxOS CGMiner-compatible TCP API on port 
 | `devs.json` | `devs` | 3 hashboards with MHS, accepted/rejected, serial, profile |
 | `events.json` | `events` | 2 events (temp warning + fan RPM low) |
 
+### Vnish (`tests/fixtures/vnish/`)
+
+Realistic JSON responses mirroring the Vnish firmware REST API v1.2.6:
+
+| File | Endpoint | Contents |
+|------|----------|----------|
+| `unlock.json` | `POST /api/v1/unlock` | Authentication token |
+| `info.json` | `GET /api/v1/info` | UID, serial, hostname, MAC, firmware version, model |
+| `summary.json` | `GET /api/v1/summary` | Hashrate (instant/average), pools, power, uptime |
+| `status.json` | `GET /api/v1/status` | 4 fans, 3 chains with temps/chips/stats, 2 errors |
+
 To update fixture data: edit the JSON files directly. The test suite loads them at runtime, so changes take effect immediately.
 
 ---
 
 ## CI Integration
 
-Tests run automatically in three places:
+Tests run automatically in four places:
 
 1. **`braiins-test.yml`** -- Braiins collector test workflow, runs on every PR and push to main, tests against Python 3.11
 2. **`luxos-test.yml`** -- LuxOS collector test workflow, runs on every PR and push to main, tests against Python 3.11
-3. **Build workflows** (`build-linux.yml`, `build-macos.yml`, `build-windows.yml`) -- tests run before each build, so a failing test blocks the release
+3. **`vnish-test.yml`** -- Vnish collector test workflow, runs on every PR and push to main, tests against Python 3.11
+4. **Build workflows** (`build-linux.yml`, `build-macos.yml`, `build-windows.yml`) -- tests run before each build, so a failing test blocks the release

@@ -21,15 +21,15 @@ flowchart LR
         Grafana["Grafana"]
     end
     Miner1 -->|"Braiins REST"| Collector
-    Miner2 -->|"Braiins REST"| Collector
-    MinerN -->|"Braiins REST"| Collector
+    Miner2 -->|"LuxOS TCP"| Collector
+    MinerN -->|"Vnish REST"| Collector
     Collector -->|"Encrypted POST"| API
     Collector -->|"Log push"| Loki
     Loki --> Grafana
     API --> Portal
 ```
 
-The collector runs on any machine on the same LAN as the mining rigs. It polls each miner's local REST API, encrypts the payload, and POSTs it to the Wright Fan cloud API. Operational logs are shipped to Loki for centralized monitoring.
+The collector runs on any machine on the same LAN as the mining rigs. It polls each miner's local API (Braiins REST, LuxOS TCP, or Vnish REST), encrypts the payload, and POSTs it to the Wright Fan cloud API. Operational logs are shipped to Loki for centralized monitoring.
 
 ---
 
@@ -53,6 +53,8 @@ wright_telemetry/
         base.py          # abstract MinerCollector interface
         factory.py       # registry-based factory
         braiins.py       # Braiins OS REST adapter
+        luxos.py         # LuxOS CGMiner TCP adapter
+        vnish.py         # Vnish firmware REST adapter
 ```
 
 ---
@@ -81,15 +83,23 @@ classDiagram
         +fetch_identity()
         ...
     }
-    class VnishCollector {
-        <<future>>
-    }
     class LuxOSCollector {
-        <<future>>
+        -_host: str
+        -_port: int
+        +authenticate()
+        +fetch_identity()
+        ...
+    }
+    class VnishCollector {
+        -_session: requests.Session
+        -_token: str
+        +authenticate()
+        +fetch_identity()
+        ...
     }
     MinerCollector <|-- BraiinsCollector
-    MinerCollector <|-- VnishCollector
     MinerCollector <|-- LuxOSCollector
+    MinerCollector <|-- VnishCollector
 ```
 
 ### Adding a New Backend
@@ -127,6 +137,36 @@ class VnishCollector(MinerCollector):
 | errors     | `GET /api/v1/miner/errors`        | `errors[].message`, `timestamp`, `error_codes`         |
 
 Authentication: `POST /api/v1/auth/login` with `{"username": "...", "password": "..."}` returns `{"token": "..."}`. The token is sent as `Authorization: Bearer <token>` on subsequent requests. The adapter auto-refreshes on 401.
+
+---
+
+## LuxOS API (CGMiner TCP on port 4028)
+
+| Metric     | Command            | Response (key fields)                                  |
+|------------|--------------------|--------------------------------------------------------|
+| identity   | `config`           | `CONFIG[].SerialNumber`, `Hostname`, `MACAddr`         |
+| cooling    | `fans` + `temps`   | `FANS[].RPM`, `Speed`; `TEMPS[].Board`, `Chip`        |
+| hashrate   | `summary` + `pools` + `power` | `SUMMARY[].GHS 5s`, `POOLS[].URL`, `POWER[].Watts` |
+| uptime     | `summary` + `version` + `config` | `Elapsed`, `LUXminer`, `API`              |
+| hashboards | `devs` + `temps`   | `DEVS[].MHS av`, `Temperature`, `SerialNumber`         |
+| errors     | `events`           | `EVENTS[].Description`, `Code`, `CreatedAt`            |
+
+No authentication required for read-only telemetry queries.
+
+---
+
+## Vnish API Endpoints
+
+| Metric     | Endpoint               | Response (key fields)                                  |
+|------------|------------------------|--------------------------------------------------------|
+| identity   | `GET /api/v1/info`     | `uid`, `serial`, `hostname`, `mac`, `firmware_version` |
+| cooling    | `GET /api/v1/status`   | `fans[].rpm`, `speed_pct`; `chains[].temp_board`, `temp_chip` |
+| hashrate   | `GET /api/v1/summary`  | `miner.instant_hashrate`, `pools[]`, `power.watts`     |
+| uptime     | `GET /api/v1/info` + `GET /api/v1/summary` | `firmware_version`, `miner.uptime` |
+| hashboards | `GET /api/v1/status`   | `chains[].temp_board`, `temp_chip`, `chips`, `hashrate` |
+| errors     | `GET /api/v1/status`   | `errors[].message`, `code`, `timestamp`                |
+
+Authentication: `POST /api/v1/unlock` with `{"pw": "..."}` returns `{"token": "..."}`. The token is sent as `Authorization: <token>` on subsequent requests. System-level commands use `Authorization: Bearer <token>`. The adapter auto-refreshes on 401.
 
 ---
 
@@ -193,7 +233,7 @@ The collector can find miners on the network automatically so operators don't ha
 ```mermaid
 flowchart TD
     Start["Setup wizard starts"] --> AutoDisc{"Auto-discover?"}
-    AutoDisc -->|yes| Subnet["Scan subnet(s) via<br/>Braiins + LuxOS probes"]
+    AutoDisc -->|yes| Subnet["Scan subnet(s) via<br/>Braiins + LuxOS + Vnish probes"]
     AutoDisc -->|no| Manual{"Add manually?"}
     Subnet --> Found["Discovered miners added<br/>with default credentials"]
     Found --> RuntimeRescan["Runtime re-scan timer<br/>(default 300s)"]
@@ -208,12 +248,13 @@ flowchart TD
 
 ### How probing works
 
-Each IP in the target range is probed concurrently (up to 128 threads). Two probe functions run per IP:
+Each IP in the target range is probed concurrently (up to 128 threads). Three probe functions run per IP:
 
 | Probe | Method | Positive signal |
 |-------|--------|-----------------|
 | Braiins | `GET /api/v1/miner/details` | HTTP 200 or 401 |
 | LuxOS | TCP 4028 `{"command":"version"}` | Response contains `LUXminer` |
+| Vnish | `GET /api/v1/info` | HTTP 200 or 401, response contains `firmware_version` |
 
 Probes time out after 2 seconds. Results are sorted by IP and deduplicated by MAC address when merging with existing config.
 
@@ -329,11 +370,13 @@ pyinstaller wright-telemetry.spec
 
 ## GitHub Actions CI
 
-Four workflows in `.github/workflows/`:
+Five workflows in `.github/workflows/`:
 
 | Workflow | Runner | Purpose |
 |----------|--------|---------|
 | `braiins-test.yml` | `ubuntu-latest` (Python 3.11) | Runs the Braiins test suite on every PR and push to main |
+| `luxos-test.yml` | `ubuntu-latest` (Python 3.11) | Runs the LuxOS test suite on every PR and push to main |
+| `vnish-test.yml` | `ubuntu-latest` (Python 3.11) | Runs the Vnish test suite on every PR and push to main |
 | `build-linux.yml` | `ubuntu-latest` | Tests + build Linux binary |
 | `build-macos.yml` | `macos-latest` | Tests + build macOS binary |
 | `build-windows.yml` | `windows-latest` | Tests + build Windows binary |

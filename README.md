@@ -6,7 +6,7 @@ A small tool that runs on your local network, reads data from your mining rigs, 
 
 ## What Does This Thing Do?
 
-You run this on any spare computer that's on the **same local network** as your miners.  It connects to each miner's built-in API (Braiins OS, LuxOS, and more coming), reads the metrics you choose to share, encrypts everything, and sends it to your Wright Fan account.
+You run this on any spare computer that's on the **same local network** as your miners.  It connects to each miner's built-in API (Braiins OS, LuxOS, Vnish), reads the metrics you choose to share, encrypts everything, and sends it to your Wright Fan account.
 
 **You choose exactly what data to share.**  Every category is off by default.  The setup wizard explains what each one does and asks you before turning anything on.
 
@@ -66,7 +66,7 @@ The first time you run it, a setup wizard walks you through everything:
   Wright Fan API URL [https://api.wrightfan.com]:
   Facility ID []: facility_789
   Poll interval in seconds [30]:
-  Collector type [braiins]:
+  Collector type [braiins]:    (braiins, luxos, or vnish)
 ```
 
 Use the **full API base** from the portal. Production is usually `https://api.wrightfan.com`. For development, that is often `https://dev.wrightfan.com/api` (include `/api` in the URL when the portal shows it that way). The collector adds paths such as `/v1/telemetry` itself.
@@ -93,6 +93,7 @@ Let the collector scan your local network and find every miner automatically.  J
 
     1. 192.168.1.101   braiins    hostname: rack-a-slot-1
     2. 192.168.1.102   braiins    hostname: rack-a-slot-2
+    3. 192.168.1.103   vnish      hostname: rack-a-slot-3
     ...
 ```
 
@@ -114,12 +115,13 @@ If your miners live on a specific range (e.g. a dedicated VLAN), you can give a 
   Password (hidden):
 
   Scanning 10.0.50.1-10.0.50.254 for miners (254 host(s))…
-  Hang tight — checking every IP in the range for Braiins / LuxOS APIs.
+  Hang tight — checking every IP in the range for Braiins / LuxOS / Vnish APIs.
 
   Found 8 miner(s):
 
     1. 10.0.50.10      braiins    hostname: s19-001
     2. 10.0.50.11      luxos      hostname: s19-002
+    3. 10.0.50.12      vnish      hostname: s19-003
     ...
 ```
 
@@ -228,8 +230,8 @@ Logs are at `~/.wright-telemetry/collector.log`.
 
 **"Auth failed" errors**
 
-- Double-check your Braiins username and password
-- The default username is usually `root`
+- **Braiins**: Double-check your username and password (default username is usually `root`)
+- **Vnish**: Double-check your Vnish web password (default is usually `admin`)
 - If your miner has no password set, just press Enter when asked
 
 **Mac: "unidentified developer" warning**
@@ -252,7 +254,7 @@ The collector checks for updates at every startup and restarts automatically whe
 
 ## Running the Tests
 
-If you're poking around the code or contributing, you can run the test suite locally. It simulates the Braiins and LuxOS APIs with fake responses so you don't need a real miner plugged in.
+If you're poking around the code or contributing, you can run the test suite locally. It simulates the Braiins, LuxOS, and Vnish APIs with fake responses so you don't need a real miner plugged in.
 
 ```bash
 pip install -r requirements.txt # if you haven't already installed the requirements
@@ -260,7 +262,7 @@ pip install pytest responses
 pytest tests/ -v
 ```
 
-Tests cover the full pipeline for both firmware types: talking to the miner API, parsing the responses, detecting fan failures, encrypting data, and sending it to Wright. If something breaks, the tests will catch it.
+Tests cover the full pipeline for all three firmware types: talking to the miner API, parsing the responses, detecting fan failures, encrypting data, and sending it to Wright. If something breaks, the tests will catch it.
 
 More details in [docs/tests.md](docs/tests.md).
 
