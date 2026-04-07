@@ -21,6 +21,31 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Sync __version__ from release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          python <<'PY'
+          import os, re, pathlib
+          ref = os.environ["GITHUB_REF"]
+          if not ref.startswith("refs/tags/v"):
+              raise SystemExit(f"unexpected GITHUB_REF: {ref!r}")
+          ver = ref.removeprefix("refs/tags/").removeprefix("v")
+          p = pathlib.Path("wright_telemetry/__init__.py")
+          t = p.read_text(encoding="utf-8")
+          nt, n = re.subn(
+              r'^(__version__\s*=\s*")[^"]*(")',
+              lambda m, ver=ver: m.group(1) + ver + m.group(2),
+              t,
+              count=1,
+              flags=re.M,
+          )
+          if n != 1:
+              raise SystemExit(f"could not patch __version__ in {p}")
+          p.write_text(nt, encoding="utf-8")
+          print(f"Set __version__ to {ver!r}")
+          PY
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
