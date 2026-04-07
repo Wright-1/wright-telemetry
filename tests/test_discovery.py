@@ -12,7 +12,9 @@ import pytest
 from wright_telemetry.discovery import (
     DiscoveredMiner,
     _probe_braiins,
+    _probe_vnish,
     discovered_to_miner_cfgs,
+    firmware_types_for_collector,
     merge_miners,
     parse_ip_target,
 )
@@ -79,6 +81,70 @@ class TestProbeBraiins:
         )
         result = _probe_braiins("10.0.0.4")
         assert result is None
+
+
+# ---------------------------------------------------------------
+# _probe_vnish
+# ---------------------------------------------------------------
+
+class TestProbeVnish:
+
+    @responses.activate
+    def test_200_with_firmware_version(self):
+        responses.add(
+            responses.GET,
+            "http://10.0.0.10/api/v1/info",
+            json={
+                "hostname": "vn-miner",
+                "mac": "AA:BB:CC:DD:EE:FF",
+                "firmware_version": "1.0.0",
+            },
+            status=200,
+        )
+        result = _probe_vnish("10.0.0.10")
+        assert result is not None
+        assert result.firmware == "vnish"
+        assert result.hostname == "vn-miner"
+        assert result.mac_address == "AA:BB:CC:DD:EE:FF"
+
+    @responses.activate
+    def test_401_not_treated_as_vnish(self):
+        responses.add(
+            responses.GET,
+            "http://10.0.0.11/api/v1/info",
+            json={"error": "auth required"},
+            status=401,
+        )
+        assert _probe_vnish("10.0.0.11") is None
+
+    @responses.activate
+    def test_200_without_firmware_version_returns_none(self):
+        responses.add(
+            responses.GET,
+            "http://10.0.0.12/api/v1/info",
+            json={"hostname": "other"},
+            status=200,
+        )
+        assert _probe_vnish("10.0.0.12") is None
+
+
+# ---------------------------------------------------------------
+# firmware_types_for_collector
+# ---------------------------------------------------------------
+
+class TestFirmwareTypesForCollector:
+
+    def test_braiins(self):
+        assert firmware_types_for_collector("braiins") == ["braiins"]
+
+    def test_case_insensitive(self):
+        assert firmware_types_for_collector("VNISH") == ["vnish"]
+
+    def test_unknown_returns_none(self):
+        assert firmware_types_for_collector("future-fw") is None
+
+    def test_empty_defaults_to_braiins(self):
+        assert firmware_types_for_collector("") == ["braiins"]
 
 
 # ---------------------------------------------------------------
