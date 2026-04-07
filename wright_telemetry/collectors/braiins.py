@@ -41,7 +41,11 @@ class BraiinsCollector(MinerCollector):
         super().__init__(url, username, password)
         self._session = requests.Session()
         self._token: Optional[str] = None
-        # Some miners return empty bodies to the default python-requests User-Agent.
+        # Avoid requests' default Accept-Encoding (gzip, deflate, br). Some
+        # embedded Braiins/stacks return compressed responses that decode to an
+        # empty body in urllib3, which then fails JSON parsing — while stdlib
+        # urllib (no br/gzip) receives plain JSON (matches scripts/probe_braiins_http.py).
+        self._session.headers["Accept-Encoding"] = "identity"
         self._session.headers.setdefault("Accept", "application/json")
         self._session.headers.setdefault("User-Agent", "WrightTelemetry/braiins-collector")
 
