@@ -4,7 +4,8 @@ Usage:
     wright-telemetry                       Run the collector (starts setup if first time)
     wright-telemetry --setup               Re-run the setup wizard
     wright-telemetry --detect-wright-fans  Start Wright Fan detection mode
-    wright-telemetry --discover            Scan the local network for miners and exit
+    wright-telemetry --discover            Scan all local subnets for miners and exit
+    wright-telemetry --subnets-file FILE   Import VLANs from file, scan, and save to config
     wright-telemetry --install             Register as a background service (auto-start on boot)
     wright-telemetry --uninstall           Remove the background service
     wright-telemetry --version             Print version and exit
@@ -26,13 +27,14 @@ from wright_telemetry.updater import check_for_update
 def _print_help_menu() -> None:
     """Print a formatted list of available commands."""
     print("\n  ┌─ Wright Telemetry — Available Commands ───────────────────────────────────┐")
-    print("  │  wright-telemetry                       Start the collector              │")
-    print("  │  wright-telemetry --setup               Re-run the setup wizard          │")
-    print("  │  wright-telemetry --detect-wright-fans  Start Wright Fan detection mode  │")
-    print("  │  wright-telemetry --discover            Scan network for miners and exit │")
-    print("  │  wright-telemetry --install             Install as a background service  │")
-    print("  │  wright-telemetry --uninstall           Remove the background service    │")
-    print("  │  wright-telemetry --version             Print version and exit           │")
+    print("  │  wright-telemetry                         Start the collector              │")
+    print("  │  wright-telemetry --setup                 Re-run the setup wizard          │")
+    print("  │  wright-telemetry --detect-wright-fans    Start Wright Fan detection mode  │")
+    print("  │  wright-telemetry --discover              Scan all local subnets for miners│")
+    print("  │  wright-telemetry --subnets-file FILE     Import VLANs from file and scan  │")
+    print("  │  wright-telemetry --install               Install as a background service  │")
+    print("  │  wright-telemetry --uninstall             Remove the background service    │")
+    print("  │  wright-telemetry --version               Print version and exit           │")
     print("  └────────────────────────────────────────────────────────────────────────────┘\n")
 
 
@@ -42,7 +44,8 @@ def _parse_args() -> argparse.Namespace:
         description="Collects miner telemetry and sends it to the Wright Fan dashboard.",
     )
     parser.add_argument("--setup", action="store_true", help="Re-run the setup wizard")
-    parser.add_argument("--discover", action="store_true", help="Scan the local network for miners and exit")
+    parser.add_argument("--discover", action="store_true", help="Scan all local subnets for miners and exit")
+    parser.add_argument("--subnets-file", metavar="FILE", help="Import VLANs from a text file (one CIDR per line), save to config, and scan")
     parser.add_argument("--install", action="store_true", help="Install as a background service")
     parser.add_argument("--uninstall", action="store_true", help="Remove the background service")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -68,13 +71,47 @@ def main() -> None:
         os.environ["WRIGHT_LOKI_AUTH"] = args.loki_auth
 
     if args.discover:
-        from wright_telemetry.discovery import default_subnet, run_interactive_discovery
-        subnet = default_subnet()
-        if subnet is None:
+        from wright_telemetry.discovery import default_subnets, run_interactive_discovery
+        subnets = default_subnets()
+        if not subnets:
             print("Could not detect local network.")
             sys.exit(1)
-        print(f"\nScanning {subnet} for miners…\n")
-        found = run_interactive_discovery([subnet])
+        print(f"\nScanning {len(subnets)} subnet(s): {', '.join(subnets)}\n")
+        found = run_interactive_discovery(subnets)
+        if not found:
+            print("No miners found.")
+        else:
+            print(f"Found {len(found)} miner(s):\n")
+            for m in found:
+                host = f"  hostname: {m.hostname}" if m.hostname else ""
+                mac = f"  mac: {m.mac_address}" if m.mac_address else ""
+                print(f"  {m.ip:<16} {m.firmware:<10}{host}{mac}")
+        sys.exit(0)
+
+    if args.subnets_file:
+        from wright_telemetry.discovery import (
+            firmware_types_for_collector,
+            load_subnets_file,
+            run_interactive_discovery,
+        )
+        from wright_telemetry.config import save_config
+        try:
+            subnets = load_subnets_file(args.subnets_file)
+        except OSError as exc:
+            print(f"Could not read subnets file: {exc}")
+            sys.exit(1)
+        if not subnets:
+            print("Subnets file is empty or contains only comments.")
+            sys.exit(1)
+        cfg = load_config() or {}
+        disc = cfg.setdefault("discovery", {})
+        disc["subnets"] = subnets
+        disc.setdefault("enabled", True)
+        save_config(cfg)
+        print(f"Imported {len(subnets)} subnet(s) from {args.subnets_file}")
+        fw = firmware_types_for_collector(cfg.get("collector_type", "braiins"))
+        print(f"\nScanning {len(subnets)} subnet(s) for miners…\n")
+        found = run_interactive_discovery(subnets, firmware_types=fw)
         if not found:
             print("No miners found.")
         else:

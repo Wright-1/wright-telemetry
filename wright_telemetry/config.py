@@ -16,8 +16,10 @@ from typing import Any, Optional
 from wright_telemetry.consent import DEFAULT_CONSENT, run_consent_wizard
 from wright_telemetry.discovery import (
     default_subnet,
+    default_subnets,
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
+    load_subnets_file,
     parse_ip_target,
     run_interactive_discovery,
     run_interactive_range_scan,
@@ -170,17 +172,17 @@ def _wizard_discovery(
     """
     disc = dict(existing_discovery) if existing_discovery else {}
 
-    detected = default_subnet()
-    if detected:
-        print(f"  Detected local network: {detected}")
+    detected_list = default_subnets()
+    if detected_list:
+        print(f"  Detected local networks: {', '.join(detected_list)}")
     else:
         print("  Could not auto-detect your local network.")
 
     raw_subnets = _ask(
         "Subnet(s) to scan (comma-separated CIDRs)",
-        default=disc.get("subnets", [detected] if detected else []).__str__()
+        default=", ".join(disc["subnets"])
         if disc.get("subnets")
-        else (detected or ""),
+        else ", ".join(detected_list),
     )
     subnets = [s.strip() for s in raw_subnets.split(",") if s.strip()]
 
@@ -200,21 +202,45 @@ def _wizard_discovery(
     default_pw = _ask_password("Default password (hidden)")
     default_pw_b64 = _encode_password(default_pw) if default_pw else disc.get("default_password_b64", "")
 
-    print()
-    for subnet in subnets:
-        print(f"  Scanning {subnet}…")
-
     fw = firmware_types_for_collector(collector_type)
-    found = run_interactive_discovery(subnets, firmware_types=fw)
 
-    if not found:
-        print("  No miners found.")
-    else:
-        print(f"  Found {len(found)} miner(s):\n")
-        for i, m in enumerate(found, 1):
-            host_part = f"  hostname: {m.hostname}" if m.hostname else ""
-            print(f"    {i}. {m.ip:<16} {m.firmware:<10}{host_part}")
+    def _run_scan(scan_subnets: list[str]) -> list[Any]:
         print()
+        for subnet in scan_subnets:
+            print(f"  Scanning {subnet}…")
+        miners_found = run_interactive_discovery(scan_subnets, firmware_types=fw)
+        if not miners_found:
+            print("  No miners found.")
+        else:
+            print(f"  Found {len(miners_found)} miner(s):\n")
+            for i, m in enumerate(miners_found, 1):
+                host_part = f"  hostname: {m.hostname}" if m.hostname else ""
+                print(f"    {i}. {m.ip:<16} {m.firmware:<10}{host_part}")
+            print()
+        return miners_found
+
+    found = _run_scan(subnets)
+
+    # Confirmation loop — let the user load more subnets if the count looks wrong
+    while True:
+        confirm = _ask(
+            f"Found {len(found)} miner(s). Does this look right? (y/n)",
+            default="y",
+        )
+        if confirm.lower() in ("y", "yes"):
+            break
+        file_path = _ask(
+            "Path to subnets file to load additional VLANs (Enter to skip)"
+        )
+        if not file_path:
+            break
+        try:
+            extra = load_subnets_file(file_path)
+            merged = list(dict.fromkeys(subnets + extra))  # dedupe, preserve order
+            subnets = merged
+            found = _run_scan(subnets)
+        except OSError as exc:
+            print(f"  Could not read file: {exc}")
 
     discovery_cfg: dict[str, Any] = {
         "enabled": scan_interval > 0,
