@@ -1,0 +1,24 @@
+# subnets.txt — sample plain-text subnets file for wright-telemetry
+#
+# Usage:
+#   wright-telemetry --subnets-file subnets.txt
+#
+# One CIDR block or IP range per line.
+# Lines starting with # and blank lines are ignored.
+# This file REPLACES the auto-detected subnet list in config — it does not
+# merge with previously configured subnets.
+
+# Management VLAN
+192.168.1.0/27
+
+# Mining VLANs — Box 01
+192.168.2.0/27
+192.168.3.0/27
+192.168.4.0/27
+
+# Mining VLANs — Box 02
+192.168.19.0/27
+192.168.20.0/27
+
+# IP range syntax is also accepted
+# 10.10.5.1-10.10.5.30

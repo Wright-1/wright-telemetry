@@ -98,18 +98,51 @@ def default_subnet() -> Optional[str]:
     return subnets[0] if subnets else None
 
 
-def load_subnets_file(path: str) -> list[str]:
-    """Parse a plain-text subnets file and return a list of CIDR/range strings.
+def _load_subnets_xlsx(path: str) -> list[str]:
+    """Extract CIDR strings from an Excel workbook.
 
-    Rules:
-        - One entry per line
-        - Lines starting with ``#`` (after stripping) are comments — skipped
-        - Blank lines are skipped
-        - Leading/trailing whitespace is stripped from each entry
+    Scans every cell in every sheet; returns any cell value that looks like a
+    CIDR (contains '/') or an IP range (contains '-'), skipping the header row
+    if the first sheet has one.
+    """
+    try:
+        import openpyxl  # optional dependency
+    except ImportError as exc:
+        raise ImportError(
+            "openpyxl is required to load .xlsx subnet files.  "
+            "Install it with: pip install openpyxl"
+        ) from exc
+
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    subnets: list[str] = []
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(values_only=True):
+            for cell in row:
+                if not isinstance(cell, str):
+                    continue
+                val = cell.strip()
+                if ("/" in val or "-" in val) and val[0].isdigit():
+                    subnets.append(val)
+    wb.close()
+    return subnets
+
+
+def load_subnets_file(path: str) -> list[str]:
+    """Parse a subnets file and return a list of CIDR/range strings.
+
+    Supports:
+        - ``.xlsx`` workbooks — any cell containing a CIDR (``x.x.x.x/n``) or
+          IP range (``x.x.x.x-y.y.y.y``) is collected.  Requires ``openpyxl``.
+        - Plain-text files — one entry per line; lines starting with ``#`` and
+          blank lines are skipped.
 
     Raises:
         OSError: if the file cannot be opened
+        ImportError: if an .xlsx file is given but openpyxl is not installed
     """
+    if path.lower().endswith(".xlsx"):
+        return _load_subnets_xlsx(path)
+
     subnets: list[str] = []
     with open(path, "r", encoding="utf-8") as fh:
         for line in fh:
