@@ -401,6 +401,18 @@ class TestLoadSubnetsFile:
         with pytest.raises(OSError):
             load_subnets_file("/tmp/does_not_exist_wright_telemetry_test_xyz.txt")
 
+    def test_xlsx_bitmine_site_01(self):
+        xlsx_path = Path(__file__).parent.parent / "BITMINE-SITE-01_VLANs_and_IP_Ranges.xlsx"
+        if not xlsx_path.exists():
+            pytest.skip("BITMINE-SITE-01_VLANs_and_IP_Ranges.xlsx not present")
+        result = load_subnets_file(str(xlsx_path))
+        assert len(result) == 80
+        assert result[0] == "192.168.1.0/27"
+        assert result[-1] == "192.168.165.0/28"
+        import ipaddress
+        for entry in result:
+            ipaddress.IPv4Network(entry, strict=False)  # all entries are valid CIDRs
+
     def test_75_vlans(self):
         lines = "\n".join(f"192.168.{i}.0/27" for i in range(1, 76))
         path = self._write_temp(lines + "\n")
