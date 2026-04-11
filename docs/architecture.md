@@ -260,7 +260,9 @@ flowchart TD
 
 ### Subnets file (`--subnets-file`)
 
-For sites where the collector host doesn't have interfaces on every VLAN, operators can supply a plain text file:
+For sites where the collector host doesn't have interfaces on every VLAN, operators can supply a subnets file in one of two formats:
+
+**Plain text** — one CIDR or IP range per line; `#` comments and blank lines are ignored:
 
 ```
 # One CIDR or IP range per line; # comments and blank lines ignored
@@ -269,7 +271,13 @@ For sites where the collector host doesn't have interfaces on every VLAN, operat
 192.168.3.0/27
 ```
 
-`load_subnets_file(path)` in `discovery.py` parses this format. The `--subnets-file FILE` CLI flag calls it, writes the resulting list to `discovery.subnets` in config, and runs a scan. The setup wizard also prompts for a file path when the user indicates the auto-detected miner count looks wrong.
+**Excel workbook (`.xlsx`)** — any cell containing a value that looks like a CIDR (`x.x.x.x/n`) or IP range (`x.x.x.x-y.y.y.y`) is collected from all sheets. The expected layout has subnet CIDRs in a dedicated column (e.g. "IP Range (Subnet)"), but the parser scans every cell so column order doesn't matter. Requires `openpyxl` (included in the default dependencies).
+
+Sample files are in [`docs/samples/`](samples/).
+
+> **Important:** `--subnets-file` **replaces** the subnet list in config — it does not merge with auto-detected or previously configured subnets. After the import, `discovery.subnets` contains exactly what the file specified.
+
+`load_subnets_file(path)` in `discovery.py` detects the format by file extension and parses accordingly. The `--subnets-file FILE` CLI flag calls it, writes the resulting list to `discovery.subnets` in config, and runs a scan. The setup wizard also prompts for a file path when the user indicates the auto-detected miner count looks wrong.
 
 ### How probing works
 
