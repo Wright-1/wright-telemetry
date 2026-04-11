@@ -80,7 +80,7 @@ Let the collector scan your local network and find every miner automatically.  J
 ```
   Scan your local network to discover miners automatically? (y/n) [y]: y
 
-  Detected local network: 192.168.1.0/24
+  Detected local networks: 192.168.1.0/24
   Subnet(s) to scan (comma-separated CIDRs) [192.168.1.0/24]:
   Re-scan interval in seconds (0 = disable runtime re-scan) [300]:
 
@@ -95,9 +95,49 @@ Let the collector scan your local network and find every miner automatically.  J
     2. 192.168.1.102   braiins    hostname: rack-a-slot-2
     3. 192.168.1.103   vnish      hostname: rack-a-slot-3
     ...
+
+  Found 12 miner(s). Does this look right? (y/n) [y]: y
 ```
 
-That's it — every miner on the subnet is picked up.  The collector also **re-scans on a timer** (default: every 5 minutes) so new rigs you plug in show up automatically without re-running setup.
+The collector also **re-scans on a timer** (default: every 5 minutes) so new rigs you plug in show up automatically without re-running setup.
+
+#### Multi-VLAN / Large Sites
+
+If your miners are spread across multiple VLANs, the collector will automatically detect all of them if the machine it runs on has a network interface on each VLAN (e.g. a trunk port or VLAN sub-interfaces).  All detected subnets are pre-populated in the wizard — just press Enter to accept.
+
+If the machine only has one interface but routes to multiple VLAN subnets, the count will look low and the wizard asks:
+
+```
+  Found 6 miner(s). Does this look right? (y/n) [y]: n
+  Path to subnets file to load additional VLANs (Enter to skip): /path/to/vlans.txt
+
+  Scanning 12 subnet(s)…
+  Found 87 miner(s). Does this look right? (y/n) [y]: y
+```
+
+**Subnets file format** — create a plain text file with one CIDR or IP range per line:
+
+```
+# Lines starting with # are comments (ignored)
+# Blank lines are also ignored
+
+# Box 01
+192.168.1.0/27
+192.168.2.0/27
+192.168.3.0/27
+
+# Box 02
+192.168.19.0/27
+192.168.20.0/27
+```
+
+You can also import a subnets file directly without going through `--setup`:
+
+```
+wright-telemetry --subnets-file /path/to/vlans.txt
+```
+
+This saves the subnets into config and runs a scan immediately.  Subsequent re-discovery cycles will use those subnets automatically.
 
 #### Option B: IP Range / CIDR Scan
 
@@ -222,6 +262,22 @@ Logs are at `~/.wright-telemetry/collector.log`.
 
 ## Troubleshooting
 
+**Miners on other VLANs aren't being discovered**
+
+Auto-discovery scans all network interfaces on the machine running the collector.  If your miners live on VLANs that this machine doesn't have a direct interface on, you need to provide the subnets manually.  First confirm the machine can reach a miner on that VLAN:
+
+```
+ping 192.168.68.10
+```
+
+If that works but discovery misses it, create a subnets file and import it:
+
+```
+wright-telemetry --subnets-file /path/to/vlans.txt
+```
+
+See the [Multi-VLAN / Large Sites](#multi-vlan--large-sites) section above for the file format.
+
 **"Can't reach miner" errors**
 
 - Make sure the computer running this tool is on the **same local network** as your miners
@@ -283,6 +339,8 @@ More details in [docs/tests.md](docs/tests.md).
 |---------|-------------|
 | `wright-telemetry` | Run the collector (setup wizard on first run) |
 | `wright-telemetry --setup` | Re-run the setup wizard |
+| `wright-telemetry --discover` | Scan all local subnets and print found miners (does not save) |
+| `wright-telemetry --subnets-file FILE` | Import VLANs from a text file, save to config, and scan |
 | `wright-telemetry --install` | Install as a background service |
 | `wright-telemetry --uninstall` | Remove the background service |
 | `wright-telemetry --version` | Print version number |

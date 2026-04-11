@@ -52,12 +52,72 @@ def get_local_ip() -> Optional[str]:
         return None
 
 
+def default_subnets() -> list[str]:
+    """Return /24 CIDRs for all detected local interfaces, excluding loopback.
+
+    Uses ``socket.getaddrinfo`` on the local hostname as the primary
+    cross-platform method (no psutil, no netifaces, no fcntl).  Supplements
+    with the UDP-trick IP from :func:`get_local_ip` so that machines with
+    unusual hostname resolution still get at least one subnet.
+
+    Returns an empty list if nothing can be detected.
+    """
+    ips: list[str] = []
+
+    # Primary: hostname-based getaddrinfo — covers most multi-interface setups
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+        for info in infos:
+            ip = info[4][0]
+            if not ip.startswith("127."):
+                ips.append(ip)
+    except Exception:
+        pass
+
+    # Supplement: UDP trick picks up the default-route interface even if
+    # hostname resolution is misconfigured or returns only loopback
+    udp_ip = get_local_ip()
+    if udp_ip and not udp_ip.startswith("127.") and udp_ip not in ips:
+        ips.append(udp_ip)
+
+    # Deduplicate and map each IP → its /24
+    seen: set[str] = set()
+    subnets: list[str] = []
+    for ip in ips:
+        subnet = str(ipaddress.IPv4Network(f"{ip}/24", strict=False))
+        if subnet not in seen:
+            seen.add(subnet)
+            subnets.append(subnet)
+
+    return subnets
+
+
 def default_subnet() -> Optional[str]:
-    """Return the /24 subnet that contains the local IP, or *None*."""
-    ip = get_local_ip()
-    if ip is None:
-        return None
-    return str(ipaddress.IPv4Network(f"{ip}/24", strict=False))
+    """Return the primary /24 subnet, or *None* (backwards-compat wrapper)."""
+    subnets = default_subnets()
+    return subnets[0] if subnets else None
+
+
+def load_subnets_file(path: str) -> list[str]:
+    """Parse a plain-text subnets file and return a list of CIDR/range strings.
+
+    Rules:
+        - One entry per line
+        - Lines starting with ``#`` (after stripping) are comments — skipped
+        - Blank lines are skipped
+        - Leading/trailing whitespace is stripped from each entry
+
+    Raises:
+        OSError: if the file cannot be opened
+    """
+    subnets: list[str] = []
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            subnets.append(stripped)
+    return subnets
 
 
 # ------------------------------------------------------------------
@@ -276,14 +336,18 @@ def discover_miners(
 ) -> list[DiscoveredMiner]:
     """High-level entry point: scan one or more subnets for miners.
 
-    If *subnets* is ``None`` the local /24 is auto-detected.
+    If *subnets* is ``None`` all local interface subnets are auto-detected.
     """
     if not subnets:
-        auto = default_subnet()
-        if auto is None:
-            logger.error("Could not detect local network — specify subnets manually.")
+        subnets = default_subnets()
+        if not subnets:
+            logger.error(
+                "Could not detect local network. "
+                "To fix: run 'wright-telemetry --subnets-file FILE' with a text file "
+                "containing one CIDR per line, or re-run 'wright-telemetry --setup' "
+                "and enter your subnet(s) manually."
+            )
             return []
-        subnets = [auto]
 
     all_miners: list[DiscoveredMiner] = []
     for subnet in subnets:

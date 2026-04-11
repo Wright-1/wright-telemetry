@@ -233,10 +233,16 @@ The collector can find miners on the network automatically so operators don't ha
 ```mermaid
 flowchart TD
     Start["Setup wizard starts"] --> AutoDisc{"Auto-discover?"}
-    AutoDisc -->|yes| Subnet["Scan subnet(s) via<br/>Braiins + LuxOS + Vnish probes"]
+    AutoDisc -->|yes| Detect["default_subnets():<br/>enumerate all local interfaces"]
+    Detect --> Subnet["Scan subnet(s) via<br/>Braiins + LuxOS + Vnish probes"]
     AutoDisc -->|no| Manual{"Add manually?"}
-    Subnet --> Found["Discovered miners added<br/>with default credentials"]
-    Found --> RuntimeRescan["Runtime re-scan timer<br/>(default 300s)"]
+    Subnet --> Found["Print found miners"]
+    Found --> Confirm{"Count look right?"}
+    Confirm -->|yes| Save["Save config"]
+    Confirm -->|no| FilePrompt["Prompt for subnets file"]
+    FilePrompt --> Rescan["Merge subnets + re-scan"]
+    Rescan --> Found
+    Save --> RuntimeRescan["Runtime re-scan timer<br/>(default 300s)"]
     Manual -->|yes| RangePrompt["Prompt for CIDR / IP range"]
     RangePrompt --> RangeScan["Scan the range"]
     RangeScan --> RangeFound{"Miners found?"}
@@ -246,6 +252,25 @@ flowchart TD
     Manual -->|no| Done
 ```
 
+### Subnet auto-detection (`default_subnets`)
+
+`default_subnets()` in `discovery.py` enumerates all local IPv4 interfaces using `socket.getaddrinfo(socket.gethostname(), None, AF_INET)`, supplemented by the UDP-trick primary-route IP from `get_local_ip()`. Loopback addresses are filtered and duplicate /24s are deduplicated. This covers trunk-port and VLAN sub-interface setups automatically.
+
+`default_subnet()` (singular) is a backwards-compat wrapper that returns the first result or `None`.
+
+### Subnets file (`--subnets-file`)
+
+For sites where the collector host doesn't have interfaces on every VLAN, operators can supply a plain text file:
+
+```
+# One CIDR or IP range per line; # comments and blank lines ignored
+192.168.1.0/27
+192.168.2.0/27
+192.168.3.0/27
+```
+
+`load_subnets_file(path)` in `discovery.py` parses this format. The `--subnets-file FILE` CLI flag calls it, writes the resulting list to `discovery.subnets` in config, and runs a scan. The setup wizard also prompts for a file path when the user indicates the auto-detected miner count looks wrong.
+
 ### How probing works
 
 Each IP in the target range is probed concurrently (up to 128 threads). Three probe functions run per IP:
@@ -254,7 +279,7 @@ Each IP in the target range is probed concurrently (up to 128 threads). Three pr
 |-------|--------|-----------------|
 | Braiins | `GET /api/v1/miner/details` | HTTP 200 or 401 |
 | LuxOS | TCP 4028 `{"command":"version"}` | Response contains `LUXminer` |
-| Vnish | `GET /api/v1/info` | HTTP 200 or 401, response contains `firmware_version` |
+| Vnish | `GET /api/v1/info` | HTTP 200, response contains `firmware_version` |
 
 Probes time out after 2 seconds. Results are sorted by IP and deduplicated by MAC address when merging with existing config.
 
@@ -288,7 +313,7 @@ Location: `~/.wright-telemetry/config.json`
     "collector_type": "braiins",
     "discovery": {
         "enabled": true,
-        "subnets": ["192.168.1.0/24"],
+        "subnets": ["192.168.1.0/24", "192.168.2.0/27"],  // one or more CIDRs or IP ranges
         "scan_interval_seconds": 300,
         "default_username": "root",
         "default_password_b64": "string (base64, optional)"
