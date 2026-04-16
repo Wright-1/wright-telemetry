@@ -16,6 +16,7 @@ import threading
 from typing import Any, Optional
 
 from wright_telemetry.api_client import wright_api_v1_url
+from wright_telemetry.config import load_config, save_config, mask_config
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class AgentController:
         self._lock = threading.Lock()
         self._mode = "normal"
         self._mode_changed = threading.Event()
+        self._config_reload = threading.Event()
         self._event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
 
     @property
@@ -67,6 +69,16 @@ class AgentController:
             except queue.Empty:
                 break
         return events
+
+    def request_config_reload(self) -> None:
+        """Signal the scheduler to reload config from disk."""
+        self._config_reload.set()
+
+    def check_config_reload(self) -> bool:
+        """Return True if a config reload was requested, clearing the flag."""
+        triggered = self._config_reload.is_set()
+        self._config_reload.clear()
+        return triggered
 
 
 class WebSocketClient:
@@ -132,8 +144,124 @@ class WebSocketClient:
             elif command == "stop_fan_detection":
                 logger.info("Portal requested normal mode")
                 self.controller.request_normal()
+            elif command in ("get_config", "update_config"):
+                self._handle_config_command(command, msg)
             else:
                 logger.debug("Unknown portal command: %s", command)
+
+    def _handle_config_command(self, command: str, msg: dict[str, Any]) -> None:
+        """Handle get_config / update_config commands with consent check."""
+        cfg = load_config()
+        if cfg is None:
+            self.controller.push_event({
+                "event": "config_error",
+                "error": "No configuration file found on this agent.",
+            })
+            return
+
+        consent = cfg.get("consent", {})
+        if not consent.get("remote_config", False):
+            self.controller.push_event({
+                "event": "config_error",
+                "error": (
+                    "Remote configuration is not enabled on this agent. "
+                    "Run 'wright-telemetry --setup' on the agent machine "
+                    "and enable the 'Remote Configuration' option."
+                ),
+            })
+            return
+
+        if command == "get_config":
+            self.controller.push_event({
+                "event": "config_response",
+                "config": mask_config(cfg),
+            })
+        elif command == "update_config":
+            payload = msg.get("payload")
+            if not isinstance(payload, dict) or not payload:
+                self.controller.push_event({
+                    "event": "config_error",
+                    "error": "update_config requires a non-empty 'payload' object.",
+                })
+                return
+            try:
+                self._apply_config_update(cfg, payload)
+            except Exception as exc:
+                logger.exception("Failed to apply config update")
+                self.controller.push_event({
+                    "event": "config_error",
+                    "error": f"Failed to update configuration: {exc}",
+                })
+
+    def _apply_config_update(self, cfg: dict[str, Any], payload: dict[str, Any]) -> None:
+        """Validate, merge, save, and emit updated config."""
+        VALID_COLLECTOR_TYPES = ("braiins", "luxos", "vnish")
+
+        if "poll_interval_seconds" in payload:
+            val = payload["poll_interval_seconds"]
+            if not isinstance(val, (int, float)) or val < 1:
+                self.controller.push_event({
+                    "event": "config_error",
+                    "error": "poll_interval_seconds must be a positive number.",
+                })
+                return
+
+        if "collector_type" in payload:
+            val = payload["collector_type"]
+            if val not in VALID_COLLECTOR_TYPES:
+                self.controller.push_event({
+                    "event": "config_error",
+                    "error": f"collector_type must be one of: {', '.join(VALID_COLLECTOR_TYPES)}",
+                })
+                return
+
+        if "update_check_interval" in payload:
+            val = payload["update_check_interval"]
+            if not isinstance(val, (int, float)) or val < 10:
+                self.controller.push_event({
+                    "event": "config_error",
+                    "error": "update_check_interval must be at least 10 seconds.",
+                })
+                return
+
+        FORBIDDEN_KEYS = ("wright_api_key",)
+        for key in FORBIDDEN_KEYS:
+            if key in payload:
+                self.controller.push_event({
+                    "event": "config_error",
+                    "error": f"'{key}' cannot be changed remotely for security reasons.",
+                })
+                return
+
+        SCALAR_KEYS = (
+            "poll_interval_seconds", "collector_type", "wright_api_url",
+            "facility_id", "disable_auto_update", "update_check_interval",
+        )
+        for key in SCALAR_KEYS:
+            if key in payload:
+                cfg[key] = payload[key]
+
+        if "discovery" in payload and isinstance(payload["discovery"], dict):
+            disc = cfg.get("discovery", {})
+            disc.update(payload["discovery"])
+            cfg["discovery"] = disc
+
+        if "consent" in payload and isinstance(payload["consent"], dict):
+            cons = cfg.get("consent", {})
+            cons.update(payload["consent"])
+            cfg["consent"] = cons
+
+        if "miners" in payload and isinstance(payload["miners"], list):
+            cfg["miners"] = payload["miners"]
+
+        save_config(cfg)
+        logger.info("Configuration updated remotely and saved to disk")
+        self.controller.request_config_reload()
+        self.controller.push_event({
+            "event": "config_updated",
+            "success": True,
+            "config": mask_config(cfg),
+        })
 
     async def _connect_loop(self) -> None:
         import websockets
