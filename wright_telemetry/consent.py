@@ -55,6 +55,25 @@ METRICS: dict[str, dict[str, str]] = {
             "failures and automatically file support reports on your behalf."
         ),
     },
+    "remote_config": {
+        "label": "Remote Configuration",
+        "endpoint": "WebSocket command channel",
+        "description": (
+            "Allows Wright One support and your customer portal to view and\n"
+            "update this agent's configuration remotely. This helps Wright\n"
+            "One's team troubleshoot setup issues on your behalf and lets you\n"
+            "adjust settings like poll intervals, miner lists, and discovery\n"
+            "options from your dashboard without needing SSH access to this\n"
+            "machine. Passwords are never transmitted -- they are always\n"
+            "masked before leaving your machine.\n"
+            "\n"
+            "Additionally, this agent may periodically send diagnostic logs\n"
+            "to Wright One's centralized logging service to help our team\n"
+            "identify and resolve issues with your collector. These logs\n"
+            "contain operational information (timestamps, error messages,\n"
+            "connection status) and never include miner passwords or API keys."
+        ),
+    },
 }
 
 DEFAULT_CONSENT: dict[str, bool] = {key: False for key in METRICS}

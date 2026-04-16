@@ -177,6 +177,9 @@ def configure_logging(
         )
         loki_handler.setFormatter(formatter)
         root.addHandler(loki_handler)
-        logging.getLogger(__name__).debug("Loki log handler enabled -> %s", _LOKI_DEFAULT_URL)
+        logging.getLogger(__name__).info(
+            "Diagnostic logs are being sent to Wright One for troubleshooting (%s)",
+            _LOKI_DEFAULT_URL,
+        )
     else:
         logging.getLogger(__name__).debug("Loki log handler disabled (WRIGHT_LOKI_AUTH not set)")
