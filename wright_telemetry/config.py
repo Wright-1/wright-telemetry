@@ -6,6 +6,7 @@ Config is stored at ``~/.wright-telemetry/config.json``.
 from __future__ import annotations
 
 import base64
+import copy
 import getpass
 import json
 import os
@@ -27,6 +28,8 @@ from wright_telemetry.discovery import (
 
 CONFIG_DIR = Path.home() / ".wright-telemetry"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+
+SENSITIVE_MASK = "********"
 
 _DEFAULT_WRIGHT_API_URL = "https://api.wrightfan.com/api"
 _DEFAULT_POLL_INTERVAL = 30
@@ -55,6 +58,20 @@ def save_config(cfg: dict[str, Any]) -> None:
         os.chmod(CONFIG_FILE, 0o600)
     except OSError:
         pass
+
+
+def mask_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Return a deep copy of *cfg* with sensitive fields replaced."""
+    masked = copy.deepcopy(cfg)
+    if "wright_api_key" in masked:
+        masked["wright_api_key"] = SENSITIVE_MASK
+    for miner in masked.get("miners", []):
+        if "password_b64" in miner:
+            miner["password_b64"] = SENSITIVE_MASK
+    discovery = masked.get("discovery", {})
+    if "default_password_b64" in discovery:
+        discovery["default_password_b64"] = SENSITIVE_MASK
+    return masked
 
 
 def mark_miner_wright_fans(miner_url: str, wright_fans: bool = True) -> None:
