@@ -129,6 +129,13 @@ def main() -> None:
     # Load or create config
     cfg = load_config()
 
+    # Backfill remote_config consent for users who set up before it existed.
+    # They were never asked, so default to True so support can help them.
+    if cfg and "consent" in cfg and "remote_config" not in cfg["consent"]:
+        from wright_telemetry.config import save_config as _save
+        cfg["consent"]["remote_config"] = True
+        _save(cfg)
+
     ran_setup = cfg is None or args.setup
     if ran_setup:
         cfg = run_setup_wizard(existing=cfg)
