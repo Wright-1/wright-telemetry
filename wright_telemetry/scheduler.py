@@ -656,6 +656,9 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
     return True
 
 
+_WS_FAN_DETECTION_IDLE_TIMEOUT = 30 * 60  # auto-expire after 30 min with no events
+
+
 def _run_ws_fan_detection(
     cfg: dict[str, Any],
     controller: Any,
@@ -664,7 +667,9 @@ def _run_ws_fan_detection(
     """WebSocket-triggered fan detection using :func:`_check_fan_rpm_changes` (switch / RPM threshold).
 
     CLI ``--detect-wright-fans`` continues to use :func:`_detect_fan_dips` only.
-    Runs until the controller mode switches back to ``"normal"``.
+    Runs until the controller mode switches back to ``"normal"`` or no fan
+    transition events have been detected for _WS_FAN_DETECTION_IDLE_TIMEOUT
+    seconds, whichever comes first.
     """
     facility_id = cfg.get("facility_id", "unknown")
     default_collector_type = cfg.get("collector_type", "braiins")
@@ -691,8 +696,23 @@ def _run_ws_fan_detection(
 
     fan_prev_rpm: dict[tuple[str, int], int] = {}
     fan_drop_events: list[dict] = []
+    last_event_at = time.time()
 
     while controller.mode == "fan_detection":
+        idle_secs = time.time() - last_event_at
+        if idle_secs >= _WS_FAN_DETECTION_IDLE_TIMEOUT:
+            logger.warning(
+                "Fan detection idle for %dm with no transition events. "
+                "Reverting to normal telemetry collection.",
+                int(idle_secs // 60),
+            )
+            controller.request_normal()
+            controller.push_event({
+                "event": "fan_detection_stopped",
+                "reason": "idle_timeout",
+            })
+            return
+
         for miner_cfg, collector in collectors:
             name = miner_cfg.get("name", miner_cfg["url"])
             identity = identities.get(miner_cfg["url"])
@@ -714,6 +734,7 @@ def _run_ws_fan_detection(
                     fan_drop_events,
                 )
                 if new_events:
+                    last_event_at = time.time()
                     _emit_ws_fan_switch_events(
                         name,
                         miner_cfg,

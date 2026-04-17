@@ -299,6 +299,12 @@ class WebSocketClient:
                         await self._message_handler(ws)
                     finally:
                         forwarder.cancel()
+                        if self.controller.mode != "normal":
+                            logger.info(
+                                "Connection lost while in '%s' mode — reverting to normal",
+                                self.controller.mode,
+                            )
+                            self.controller.request_normal()
 
             except asyncio.CancelledError:
                 break
