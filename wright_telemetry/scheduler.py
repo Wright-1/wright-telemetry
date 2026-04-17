@@ -656,7 +656,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
     return True
 
 
-_WS_FAN_DETECTION_IDLE_TIMEOUT = 30 * 60  # auto-expire after 30 min with no events
+_DEFAULT_FAN_DETECTION_IDLE_TIMEOUT = 15 * 60  # 15 minutes
 
 
 def _run_ws_fan_detection(
@@ -668,9 +668,12 @@ def _run_ws_fan_detection(
 
     CLI ``--detect-wright-fans`` continues to use :func:`_detect_fan_dips` only.
     Runs until the controller mode switches back to ``"normal"`` or no fan
-    transition events have been detected for _WS_FAN_DETECTION_IDLE_TIMEOUT
-    seconds, whichever comes first.
+    transition events have been detected for ``fan_detection_idle_timeout``
+    seconds (configurable, default 15 min), whichever comes first.
     """
+    idle_timeout = cfg.get(
+        "fan_detection_idle_timeout", _DEFAULT_FAN_DETECTION_IDLE_TIMEOUT
+    )
     facility_id = cfg.get("facility_id", "unknown")
     default_collector_type = cfg.get("collector_type", "braiins")
 
@@ -700,7 +703,7 @@ def _run_ws_fan_detection(
 
     while controller.mode == "fan_detection":
         idle_secs = time.time() - last_event_at
-        if idle_secs >= _WS_FAN_DETECTION_IDLE_TIMEOUT:
+        if idle_secs >= idle_timeout:
             logger.warning(
                 "Fan detection idle for %dm with no transition events. "
                 "Reverting to normal telemetry collection.",
