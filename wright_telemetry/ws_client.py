@@ -224,6 +224,15 @@ class WebSocketClient:
                 })
                 return
 
+        if "fan_detection_idle_timeout" in payload:
+            val = payload["fan_detection_idle_timeout"]
+            if not isinstance(val, (int, float)) or val < 60:
+                self.controller.push_event({
+                    "event": "config_error",
+                    "error": "fan_detection_idle_timeout must be at least 60 seconds.",
+                })
+                return
+
         FORBIDDEN_KEYS = ("wright_api_key",)
         for key in FORBIDDEN_KEYS:
             if key in payload:
@@ -236,6 +245,7 @@ class WebSocketClient:
         SCALAR_KEYS = (
             "poll_interval_seconds", "collector_type", "wright_api_url",
             "facility_id", "disable_auto_update", "update_check_interval",
+            "fan_detection_idle_timeout",
         )
         for key in SCALAR_KEYS:
             if key in payload:
@@ -299,6 +309,12 @@ class WebSocketClient:
                         await self._message_handler(ws)
                     finally:
                         forwarder.cancel()
+                        if self.controller.mode != "normal":
+                            logger.info(
+                                "Connection lost while in '%s' mode — reverting to normal",
+                                self.controller.mode,
+                            )
+                            self.controller.request_normal()
 
             except asyncio.CancelledError:
                 break

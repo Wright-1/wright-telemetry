@@ -21,7 +21,7 @@ from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
-from wright_telemetry.config import decode_password, mark_miner_wright_fans
+from wright_telemetry.config import decode_password, load_config, mark_miner_wright_fans
 from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
@@ -656,6 +656,9 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
     return True
 
 
+_DEFAULT_FAN_DETECTION_IDLE_TIMEOUT = 15 * 60  # 15 minutes
+
+
 def _run_ws_fan_detection(
     cfg: dict[str, Any],
     controller: Any,
@@ -664,8 +667,13 @@ def _run_ws_fan_detection(
     """WebSocket-triggered fan detection using :func:`_check_fan_rpm_changes` (switch / RPM threshold).
 
     CLI ``--detect-wright-fans`` continues to use :func:`_detect_fan_dips` only.
-    Runs until the controller mode switches back to ``"normal"``.
+    Runs until the controller mode switches back to ``"normal"`` or no fan
+    transition events have been detected for ``fan_detection_idle_timeout``
+    seconds (configurable, default 15 min), whichever comes first.
     """
+    idle_timeout = cfg.get(
+        "fan_detection_idle_timeout", _DEFAULT_FAN_DETECTION_IDLE_TIMEOUT
+    )
     facility_id = cfg.get("facility_id", "unknown")
     default_collector_type = cfg.get("collector_type", "braiins")
 
@@ -691,8 +699,23 @@ def _run_ws_fan_detection(
 
     fan_prev_rpm: dict[tuple[str, int], int] = {}
     fan_drop_events: list[dict] = []
+    last_event_at = time.time()
 
     while controller.mode == "fan_detection":
+        idle_secs = time.time() - last_event_at
+        if idle_secs >= idle_timeout:
+            logger.warning(
+                "Fan detection idle for %dm with no transition events. "
+                "Reverting to normal telemetry collection.",
+                int(idle_secs // 60),
+            )
+            controller.request_normal()
+            controller.push_event({
+                "event": "fan_detection_stopped",
+                "reason": "idle_timeout",
+            })
+            return
+
         for miner_cfg, collector in collectors:
             name = miner_cfg.get("name", miner_cfg["url"])
             identity = identities.get(miner_cfg["url"])
@@ -714,6 +737,7 @@ def _run_ws_fan_detection(
                     fan_drop_events,
                 )
                 if new_events:
+                    last_event_at = time.time()
                     _emit_ws_fan_switch_events(
                         name,
                         miner_cfg,
@@ -731,6 +755,14 @@ def _run_ws_fan_detection(
 
     controller.push_event({"event": "fan_detection_stopped"})
     logger.info("WebSocket fan detection stopped, returning to normal mode")
+
+
+def _reload_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Re-read config from disk, falling back to *cfg* if the file is missing."""
+    fresh = load_config()
+    if fresh is None:
+        return cfg
+    return fresh
 
 
 def run(cfg: dict[str, Any], controller: Any = None) -> None:
@@ -840,6 +872,16 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         logger.info("Discovered %d new miner(s): %s", len(new_miner_cfgs), ", ".join(m["url"] for m in new_miner_cfgs))
 
                     last_scan = now
+
+                if controller and controller.check_config_reload():
+                    cfg = _reload_cfg(cfg)
+                    poll_interval = cfg.get("poll_interval_seconds", 30)
+                    metrics = consented_metrics(cfg.get("consent", {}))
+                    default_collector_type = cfg.get("collector_type", "braiins")
+                    discovery_cfg = cfg.get("discovery", {})
+                    discovery_enabled = discovery_cfg.get("enabled", False)
+                    scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
+                    logger.info("Configuration reloaded from disk")
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
 
