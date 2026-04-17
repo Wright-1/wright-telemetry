@@ -21,7 +21,7 @@ from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
-from wright_telemetry.config import decode_password, mark_miner_wright_fans
+from wright_telemetry.config import decode_password, load_config, mark_miner_wright_fans
 from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
@@ -757,6 +757,14 @@ def _run_ws_fan_detection(
     logger.info("WebSocket fan detection stopped, returning to normal mode")
 
 
+def _reload_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Re-read config from disk, falling back to *cfg* if the file is missing."""
+    fresh = load_config()
+    if fresh is None:
+        return cfg
+    return fresh
+
+
 def run(cfg: dict[str, Any], controller: Any = None) -> None:
     """Main entry point -- runs forever with crash recovery."""
     poll_interval = cfg.get("poll_interval_seconds", 30)
@@ -864,6 +872,16 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         logger.info("Discovered %d new miner(s): %s", len(new_miner_cfgs), ", ".join(m["url"] for m in new_miner_cfgs))
 
                     last_scan = now
+
+                if controller and controller.check_config_reload():
+                    cfg = _reload_cfg(cfg)
+                    poll_interval = cfg.get("poll_interval_seconds", 30)
+                    metrics = consented_metrics(cfg.get("consent", {}))
+                    default_collector_type = cfg.get("collector_type", "braiins")
+                    discovery_cfg = cfg.get("discovery", {})
+                    discovery_enabled = discovery_cfg.get("enabled", False)
+                    scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
+                    logger.info("Configuration reloaded from disk")
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
 
