@@ -177,6 +177,22 @@ def main() -> None:
     import wright_telemetry.collectors.luxos    # noqa: F401  -- triggers @register
     import wright_telemetry.collectors.vnish    # noqa: F401  -- triggers @register
 
+    # Connect to the portal WebSocket as early as possible so the portal
+    # knows the agent is online before discovery / baseline scans run.
+    # The client copies api_url/api_key/facility_id at construction time
+    # and never re-reads the config file, so subsequent save_config() calls
+    # (e.g. after discovery persists IPs) cannot interfere.
+    from wright_telemetry.ws_client import AgentController, WebSocketClient
+
+    controller = AgentController()
+    ws_client = WebSocketClient(
+        controller,
+        api_url=cfg.get("wright_api_url", ""),
+        api_key=cfg.get("wright_api_key", ""),
+        facility_id=cfg.get("facility_id", ""),
+    )
+    ws_client.start()
+
     # After setup: collect baselines and show help (fan detection: use --detect-wright-fans)
     if ran_setup and not args.detect_wright_fans:
         from wright_telemetry.scheduler import run_baseline_collection
@@ -199,17 +215,6 @@ def main() -> None:
         save_config(cfg)
 
     from wright_telemetry.scheduler import run
-    from wright_telemetry.ws_client import AgentController, WebSocketClient
-
-    controller = AgentController()
-    ws_client = WebSocketClient(
-        controller,
-        api_url=cfg.get("wright_api_url", ""),
-        api_key=cfg.get("wright_api_key", ""),
-        facility_id=cfg.get("facility_id", ""),
-    )
-    ws_client.start()
-
     run(cfg, controller=controller)
 
 
