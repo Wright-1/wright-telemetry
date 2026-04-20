@@ -11,6 +11,7 @@ import ipaddress
 import logging
 import socket
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -382,12 +383,15 @@ def discover_miners(
             )
             return []
 
-    all_miners: list[DiscoveredMiner] = []
+    all_hosts: list[str] = []
     for subnet in subnets:
         logger.info("Scanning %s for miners…", subnet)
-        all_miners.extend(scan_subnet(subnet, firmware_types, progress_cb))
+        try:
+            all_hosts.extend(parse_ip_target(subnet))
+        except ValueError as exc:
+            logger.error("Invalid target %r: %s", subnet, exc)
 
-    return all_miners
+    return scan_hosts(all_hosts, firmware_types, progress_cb)
 
 
 # ------------------------------------------------------------------
