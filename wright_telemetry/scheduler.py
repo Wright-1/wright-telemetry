@@ -48,10 +48,14 @@ def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     subnets = discovery_cfg.get("subnets")
     default_user = discovery_cfg.get("default_username", "root")
     default_pw_b64 = discovery_cfg.get("default_password_b64", "")
-    collector_type = cfg.get("collector_type", "braiins")
-    firmware_types = firmware_types_for_collector(collector_type)
+    # Support both list format and legacy single-string format
+    collector_types = cfg.get("collector_types") or cfg.get("collector_type", "braiins")
+    firmware_types = firmware_types_for_collector(collector_types)
 
     found = discover_miners(subnets=subnets, firmware_types=firmware_types)
+    for miner in found:
+        # TODO: POST each discovered miner to the API miners table
+        pass
     discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
 
     merged = merge_miners(manual_miners, discovered_cfgs)

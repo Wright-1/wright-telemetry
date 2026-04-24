@@ -266,17 +266,34 @@ _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
 }
 
 
-def firmware_types_for_collector(collector_type: str) -> Optional[list[str]]:
-    """Map config ``collector_type`` to discovery probe keys.
+def firmware_types_for_collector(
+    collector_type: "str | list[str]",
+) -> Optional[list[str]]:
+    """Map config ``collector_types`` (or legacy ``collector_type``) to probe keys.
 
-    Returns a single-firmware list so we only hit APIs for the rig the user
-    selected. Returns ``None`` if *collector_type* is unknown so discovery
-    falls back to probing every registered firmware (forward compatibility).
+    Accepts a list (new format) or a single string (backwards-compat).
+    Returns only the entries that match a registered probe.
+    Returns ``None`` if nothing matches so discovery falls back to all probes.
     """
-    key = (collector_type or "").strip().lower() or "braiins"
-    if key in _PROBES:
-        return [key]
-    return None
+    if isinstance(collector_type, list):
+        types = [t.strip().lower() for t in collector_type if t]
+    else:
+        types = [(collector_type or "").strip().lower() or "braiins"]
+
+    valid = [t for t in types if t in _PROBES]
+    return valid if valid else None
+
+
+def _register_miner_with_api(miner: "DiscoveredMiner") -> None:
+    """POST a newly discovered miner to the Wright Fan miners table.
+
+    TODO: implement once API endpoint is confirmed.
+    Needs wright_api_key, facility_id, and the API base URL from config.
+    """
+    logger.debug(
+        "TODO: register miner ip=%s firmware=%s mac=%s with API",
+        miner.ip, miner.firmware, miner.mac_address,
+    )
 
 
 # ------------------------------------------------------------------
