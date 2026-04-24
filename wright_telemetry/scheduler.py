@@ -35,6 +35,25 @@ from wright_telemetry.models import MinerIdentity, TelemetryPayload
 logger = logging.getLogger(__name__)
 
 _MAX_BACKOFF = 300  # 5 minutes
+_FD_WARN_THRESHOLD = 100  # warn if FDs grow by this much from startup baseline
+_FD_CHECK_INTERVAL = 300  # only check once every N seconds
+
+
+def _check_fd_growth(baseline: int, last_check: float) -> tuple[int, float]:
+    now = time.monotonic()
+    if now - last_check < _FD_CHECK_INTERVAL:
+        return baseline, last_check
+    import psutil
+    count = psutil.Process().num_fds()
+    grown = count - baseline
+    if grown >= _FD_WARN_THRESHOLD:
+        logger.warning(
+            "File descriptor count has grown by %d since startup "
+            "(current: %d, baseline: %d). Possible connection leak — "
+            "check logs for unclosed sessions.",
+            grown, count, baseline,
+        )
+    return baseline, now
 
 
 def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -819,6 +838,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
             consecutive_crashes = 0
             last_scan = time.time()
+            try:
+                import psutil as _psutil
+                _fd_baseline = _psutil.Process().num_fds()
+            except Exception:
+                _fd_baseline = 0
+            _fd_last_check = 0.0
             known_urls = {m["url"] for m in miners}
             # Include MACs back-propagated from identity fetch
             known_macs = {m["mac_address"] for m in miners if m.get("mac_address")}
@@ -899,6 +924,9 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     logger.info("Configuration reloaded from disk")
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
+
+                if _fd_baseline:
+                    _fd_baseline, _fd_last_check = _check_fd_growth(_fd_baseline, _fd_last_check)
 
                 if controller and controller.wait_for_mode_change(timeout=poll_interval):
                     if controller.mode == "fan_detection":

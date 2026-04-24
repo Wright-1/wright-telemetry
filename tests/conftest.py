@@ -2,13 +2,50 @@
 
 from __future__ import annotations
 
+import gc
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 import responses
+
+try:
+    import psutil as _psutil
+    _PROC = _psutil.Process(os.getpid())
+except ImportError:
+    _psutil = None
+    _PROC = None
+
+@pytest.fixture(autouse=True)
+def check_fd_leaks():
+    if _PROC is None or sys.platform == "win32":
+        yield
+        return
+
+    gc.collect()
+    fd_before = _PROC.num_fds()
+
+    yield
+
+    gc.collect()
+    fd_after = _PROC.num_fds()
+
+    leaked = fd_after - fd_before
+    if leaked > 0:
+        try:
+            conns = _PROC.connections()
+            detail = "\n".join(
+                f"  fd={c.fd} {c.type.name} {c.laddr} -> {c.raddr} [{c.status}]"
+                for c in conns
+            )
+        except Exception:
+            detail = "  (could not enumerate connections)"
+        pytest.fail(f"Test leaked {leaked} file descriptor(s).\nOpen connections:\n{detail}")
+
 
 BRAIINS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "braiins"
 LUXOS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "luxos"
