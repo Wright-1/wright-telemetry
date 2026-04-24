@@ -111,6 +111,62 @@ class WrightAPIClient:
             logger.warning("Failed to mark Wright fans for miner %s: %s", mac, exc)
             return False
 
+    def register_miner(
+        self,
+        identity: MinerIdentity,
+        miner_cfg: dict[str, Any],
+    ) -> bool:
+        """Upsert a miner record in the API miners table.
+
+        POST /telemetry/{facilityId}/miners — creates or updates the row keyed
+        on (facilityId, minerUid).  Skips miners whose uid is still 'unknown'.
+        """
+        if not identity.uid or identity.uid == "unknown":
+            return False
+        url = wright_api_v1_url(self.api_url, "telemetry", self.facility_id, "miners")
+        mac_raw = identity.mac_address or ""
+        mac = normalize_mac_address(mac_raw) or mac_raw.strip() or None
+        payload: dict[str, Any] = {
+            "minerUid": identity.uid,
+            "minerMac": mac,
+            "minerIp": identity.ip_address or None,
+            "minerHostname": identity.hostname or None,
+            "minerSerial": identity.serial_number if identity.serial_number != "unknown" else None,
+            "wrightFans": miner_cfg.get("wright_fans"),
+            "os": miner_cfg.get("firmware"),
+        }
+        try:
+            resp = self._session.post(url, json=payload, timeout=_POST_TIMEOUT)
+            resp.raise_for_status()
+            logger.info(
+                "Registered miner uid=%s mac=%s (HTTP %d)",
+                identity.uid, mac, resp.status_code,
+            )
+            return True
+        except Exception as exc:
+            logger.warning("Failed to register miner uid=%s: %s", identity.uid, exc)
+            return False
+
+    def send_agent_config(self, config: dict[str, Any], agent_version: str) -> bool:
+        """POST the agent's current config snapshot to /telemetry/{facilityId}/agent-config."""
+        import platform
+        url = wright_api_v1_url(self.api_url, "telemetry", self.facility_id, "agent-config")
+        payload = {
+            "config": config,
+            "agent_version": agent_version,
+            "os": platform.platform(),
+            "time_running": 0,
+        }
+        try:
+            wire = encrypt_payload(payload, self.api_key)
+            resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)
+            resp.raise_for_status()
+            logger.info("Sent agent config snapshot (HTTP %d)", resp.status_code)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to send agent config snapshot: %s", exc)
+            return False
+
     def send(self, payload: TelemetryPayload) -> bool:
         """Encrypt and POST a telemetry payload.  Returns True on success."""
         url = wright_api_v1_url(self.api_url, "telemetry")

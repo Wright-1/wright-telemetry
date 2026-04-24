@@ -18,6 +18,7 @@ import logging
 import sys
 
 from wright_telemetry import __version__
+from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.config import CONFIG_DIR, load_config, run_setup_wizard
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
@@ -154,6 +155,15 @@ def main() -> None:
     ran_setup = cfg is None or args.setup
     if ran_setup:
         cfg = run_setup_wizard(existing=cfg)
+        if cfg:
+            _client = WrightAPIClient(
+                api_url=cfg.get("wright_api_url", ""),
+                api_key=cfg.get("wright_api_key", ""),
+                facility_id=cfg.get("facility_id", ""),
+            )
+            safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
+            _client.send_agent_config(safe_cfg, __version__)
+            _client.close()
 
     if cfg is None:
         print("No configuration found. Please run: wright-telemetry --setup")
