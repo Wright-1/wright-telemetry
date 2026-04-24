@@ -33,8 +33,10 @@ SENSITIVE_MASK = "********"
 
 _DEFAULT_WRIGHT_API_URL = "https://api.wrightfan.com/api"
 _DEFAULT_POLL_INTERVAL = 30
-_DEFAULT_COLLECTOR_TYPE = "braiins"
+_DEFAULT_COLLECTOR_TYPES = ["braiins"]
 _DEFAULT_SCAN_INTERVAL = 300  # seconds between runtime re-scans
+
+_KNOWN_FIRMWARE_TYPES = ["braiins", "luxos", "vnish"]
 
 
 # ------------------------------------------------------------------
@@ -138,7 +140,7 @@ def _wizard_add_miner(index: int) -> dict[str, Any]:
     return miner
 
 
-def _wizard_range_scan(collector_type: str = _DEFAULT_COLLECTOR_TYPE) -> list[dict[str, Any]]:
+def _wizard_range_scan(collector_types: list[str] = _DEFAULT_COLLECTOR_TYPES) -> list[dict[str, Any]]:
     """Prompt for a CIDR block or IP range, scan it, return miner configs."""
     print()
     print("  Enter a CIDR block or IP range to scan for miners.")
@@ -162,7 +164,7 @@ def _wizard_range_scan(collector_type: str = _DEFAULT_COLLECTOR_TYPE) -> list[di
     print()
     print(f"  Scanning {target} for miners ({num_hosts} host(s))…")
     print("  Hang tight — probing each host for your selected firmware API.")
-    fw = firmware_types_for_collector(collector_type)
+    fw = firmware_types_for_collector(collector_types)
     found = run_interactive_range_scan(target, firmware_types=fw)
 
     if not found:
@@ -180,7 +182,7 @@ def _wizard_range_scan(collector_type: str = _DEFAULT_COLLECTOR_TYPE) -> list[di
 
 def _wizard_discovery(
     existing_discovery: Optional[dict[str, Any]] = None,
-    collector_type: str = _DEFAULT_COLLECTOR_TYPE,
+    collector_types: list[str] = _DEFAULT_COLLECTOR_TYPES,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Run the discovery portion of the setup wizard.
 
@@ -219,7 +221,7 @@ def _wizard_discovery(
     default_pw = _ask_password("Default password (hidden)")
     default_pw_b64 = _encode_password(default_pw) if default_pw else disc.get("default_password_b64", "")
 
-    fw = firmware_types_for_collector(collector_type)
+    fw = firmware_types_for_collector(collector_types)
 
     def _run_scan(scan_subnets: list[str]) -> list[Any]:
         print()
@@ -308,10 +310,23 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
             default=str(cfg.get("poll_interval_seconds", _DEFAULT_POLL_INTERVAL)),
         )
     )
-    cfg["collector_type"] = _ask(
-        "Collector type",
-        default=cfg.get("collector_type", _DEFAULT_COLLECTOR_TYPE),
+    # Backwards-compat: old configs stored a single string in collector_type
+    existing_types: list[str] = (
+        cfg.get("collector_types")
+        or ([cfg["collector_type"]] if cfg.get("collector_type") else _DEFAULT_COLLECTOR_TYPES)
     )
+    print()
+    print(f"  Available OS types: {', '.join(_KNOWN_FIRMWARE_TYPES)}")
+    print("  For mixed facilities (e.g. Braiins + LuxOS) enter multiple, comma-separated.")
+    raw_types = _ask(
+        "Collector OS type(s)",
+        default=", ".join(existing_types),
+    )
+    parsed_types = [t.strip().lower() for t in raw_types.split(",") if t.strip()]
+    valid_types = [t for t in parsed_types if t in _KNOWN_FIRMWARE_TYPES]
+    cfg["collector_types"] = valid_types if valid_types else list(_DEFAULT_COLLECTOR_TYPES)
+    # Remove the old key if present to avoid confusion
+    cfg.pop("collector_type", None)
 
     # -- Miners --
     print("\n" + "-" * 60)
@@ -338,7 +353,7 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
         print()
         discovered_miners, discovery_cfg = _wizard_discovery(
             cfg.get("discovery"),
-            collector_type=cfg.get("collector_type", _DEFAULT_COLLECTOR_TYPE),
+            collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
         )
         cfg["discovery"] = discovery_cfg
         miners.extend(discovered_miners)
@@ -349,7 +364,7 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     add_manual = _ask("Would you like to add miners manually? (y/n)", default="n")
     if add_manual.lower() in ("y", "yes"):
         range_miners = _wizard_range_scan(
-            collector_type=cfg.get("collector_type", _DEFAULT_COLLECTOR_TYPE),
+            collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
         )
         miners.extend(range_miners)
 
