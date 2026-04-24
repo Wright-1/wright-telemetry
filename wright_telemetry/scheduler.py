@@ -283,12 +283,15 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
         facility_id=facility_id,
     )
 
+    collectors: list = []
     try:
         collectors = _build_collectors(all_miners, default_collector_type)
         _authenticate_all(collectors)
         identities = _fetch_identities(collectors)
     except KeyboardInterrupt:
         print("\n[BASELINE] Skipped.")
+        for _, c in collectors:
+            c.close()
         return
 
     fan_rpm_history: dict[tuple[str, int], deque] = {}
@@ -353,11 +356,15 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
 
     except KeyboardInterrupt:
         print("\n[BASELINE] Baseline collection skipped.")
+        for _, c in collectors:
+            c.close()
         return
 
     done = len(baselined)
     total = len(collectors)
     print(f"\n[BASELINE] Complete — {done}/{total} miner(s) baselined as stock.\n")
+    for _, c in collectors:
+        c.close()
 
 
 def _detect_fan_dips(
@@ -622,6 +629,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
     last_detection_time = time.time()
 
     while not stop_event.is_set():
+        collectors = []
         try:
             collectors = _build_collectors(all_miners, default_collector_type)
             _authenticate_all(collectors)
@@ -685,6 +693,9 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                 consecutive_crashes, backoff,
             )
             time.sleep(backoff)
+        finally:
+            for _, c in collectors:
+                c.close()
     return True
 
 
@@ -821,6 +832,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     consecutive_crashes = 0
 
     while True:
+        collectors = []
         try:
             logger.info("Starting collection loop (poll every %ds, %d metric(s))", poll_interval, len(metrics))
 
@@ -948,3 +960,6 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 consecutive_crashes, backoff,
             )
             time.sleep(backoff)
+        finally:
+            for _, c in collectors:
+                c.close()
