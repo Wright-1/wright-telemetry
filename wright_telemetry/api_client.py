@@ -56,6 +56,9 @@ class WrightAPIClient:
             "X-Facility-ID": self.facility_id,
         })
 
+    def close(self) -> None:
+        self._session.close()
+
     def mark_stock_fans(
         self,
         mac_address: str,

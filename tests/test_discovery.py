@@ -255,22 +255,34 @@ class TestDiscoveredToMinerCfgs:
 class TestDefaultSubnets:
 
     def test_returns_list(self):
-        result = default_subnets()
+        fake_infos = [(None, None, None, None, ("10.0.0.1", 0))]
+        with patch("socket.getaddrinfo", return_value=fake_infos):
+            with patch("wright_telemetry.discovery.get_local_ip", return_value=None):
+                result = default_subnets()
         assert isinstance(result, list)
 
     def test_no_loopback(self):
-        result = default_subnets()
+        fake_infos = [(None, None, None, None, ("10.0.0.1", 0)), (None, None, None, None, ("127.0.0.1", 0))]
+        with patch("socket.getaddrinfo", return_value=fake_infos):
+            with patch("wright_telemetry.discovery.get_local_ip", return_value=None):
+                result = default_subnets()
         for subnet in result:
             assert not subnet.startswith("127.")
 
     def test_all_valid_cidr24(self):
-        result = default_subnets()
+        fake_infos = [(None, None, None, None, ("10.0.0.1", 0))]
+        with patch("socket.getaddrinfo", return_value=fake_infos):
+            with patch("wright_telemetry.discovery.get_local_ip", return_value=None):
+                result = default_subnets()
         for subnet in result:
             net = ipaddress.IPv4Network(subnet, strict=False)
             assert net.prefixlen == 24
 
     def test_no_duplicates(self):
-        result = default_subnets()
+        fake_infos = [(None, None, None, None, ("10.0.0.1", 0)), (None, None, None, None, ("10.0.0.2", 0))]
+        with patch("socket.getaddrinfo", return_value=fake_infos):
+            with patch("wright_telemetry.discovery.get_local_ip", return_value=None):
+                result = default_subnets()
         assert len(result) == len(set(result))
 
     def test_uses_getaddrinfo_result(self):

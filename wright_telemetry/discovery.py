@@ -43,12 +43,10 @@ class DiscoveredMiner:
 def get_local_ip() -> Optional[str]:
     """Return the primary LAN IP of this machine (best-effort)."""
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0)
-        s.connect(("10.255.255.255", 1))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(0)
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
     except Exception:
         return None
 

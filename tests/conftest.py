@@ -37,7 +37,7 @@ def check_fd_leaks():
     leaked = fd_after - fd_before
     if leaked > 0:
         try:
-            conns = _PROC.connections()
+            conns = _psutil.net_connections(kind="all")
             detail = "\n".join(
                 f"  fd={c.fd} {c.type.name} {c.laddr} -> {c.raddr} [{c.status}]"
                 for c in conns
@@ -127,14 +127,18 @@ def mock_braiins_api(braiins_fixtures) -> responses.RequestsMock:
 def braiins_collector():
     """Return an unauthenticated BraiinsCollector pointed at the test URL."""
     from wright_telemetry.collectors.braiins import BraiinsCollector
-    return BraiinsCollector(url=MINER_URL, username="root", password="test123")
+    collector = BraiinsCollector(url=MINER_URL, username="root", password="test123")
+    yield collector
+    collector.close()
 
 
 @pytest.fixture()
 def braiins_collector_no_auth():
     """Return a BraiinsCollector with no credentials."""
     from wright_telemetry.collectors.braiins import BraiinsCollector
-    return BraiinsCollector(url=MINER_URL)
+    collector = BraiinsCollector(url=MINER_URL)
+    yield collector
+    collector.close()
 
 
 # ---------------------------------------------------------------------------
@@ -231,11 +235,15 @@ def mock_vnish_api(vnish_fixtures) -> responses.RequestsMock:
 def vnish_collector():
     """Return an unauthenticated VnishCollector pointed at the test URL."""
     from wright_telemetry.collectors.vnish import VnishCollector
-    return VnishCollector(url=VNISH_URL, password="test123")
+    collector = VnishCollector(url=VNISH_URL, password="test123")
+    yield collector
+    collector.close()
 
 
 @pytest.fixture()
 def vnish_collector_no_auth():
     """Return a VnishCollector with no credentials."""
     from wright_telemetry.collectors.vnish import VnishCollector
-    return VnishCollector(url=VNISH_URL)
+    collector = VnishCollector(url=VNISH_URL)
+    yield collector
+    collector.close()

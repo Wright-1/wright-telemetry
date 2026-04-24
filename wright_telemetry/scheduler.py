@@ -887,6 +887,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         if old_identity:
                             old_identity.ip_address = new_cfg["url"].removeprefix("http://").removeprefix("https://").split("/")[0].split(":")[0]
                             identities[new_cfg["url"]] = old_identity
+                        collectors[i][1].close()
                         collectors[i] = (new_cfg, new_collector)
                         known_urls.discard(old_url)
                         known_urls.add(new_cfg["url"])
@@ -937,6 +938,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")
+            api_client.close()
             break
         except Exception:
             consecutive_crashes += 1
