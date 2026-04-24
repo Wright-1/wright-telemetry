@@ -53,9 +53,6 @@ def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     firmware_types = firmware_types_for_collector(collector_types)
 
     found = discover_miners(subnets=subnets, firmware_types=firmware_types)
-    for miner in found:
-        # TODO: POST each discovered miner to the API miners table
-        pass
     discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
 
     merged = merge_miners(manual_miners, discovered_cfgs)
@@ -133,6 +130,18 @@ def _fetch_identities(
             )
     return identities
 
+
+def _register_miners_with_api(
+    collectors: list[tuple[dict[str, Any], MinerCollector]],
+    identities: dict[str, MinerIdentity],
+    api_client: WrightAPIClient,
+) -> None:
+    """Upsert each miner's record in the API miners table after identities are known."""
+    for miner_cfg, _ in collectors:
+        identity = identities.get(miner_cfg["url"])
+        if identity is None:
+            continue
+        api_client.register_miner(identity, miner_cfg)
 
 
 def _print_baseline_dashboard(name: str, baseline: Any) -> None:
@@ -806,6 +815,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
+            _register_miners_with_api(collectors, identities, api_client)
 
             consecutive_crashes = 0
             last_scan = time.time()
@@ -868,6 +878,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
                         _authenticate_all(new_collectors)
                         new_ids = _fetch_identities(new_collectors)
+                        _register_miners_with_api(new_collectors, new_ids, api_client)
 
                         collectors.extend(new_collectors)
                         identities.update(new_ids)

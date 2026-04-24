@@ -284,18 +284,6 @@ def firmware_types_for_collector(
     return valid if valid else None
 
 
-def _register_miner_with_api(miner: "DiscoveredMiner") -> None:
-    """POST a newly discovered miner to the Wright Fan miners table.
-
-    TODO: implement once API endpoint is confirmed.
-    Needs wright_api_key, facility_id, and the API base URL from config.
-    """
-    logger.debug(
-        "TODO: register miner ip=%s firmware=%s mac=%s with API",
-        miner.ip, miner.firmware, miner.mac_address,
-    )
-
-
 # ------------------------------------------------------------------
 # Scanning
 # ------------------------------------------------------------------
