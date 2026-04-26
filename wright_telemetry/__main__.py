@@ -18,7 +18,8 @@ import logging
 import sys
 
 from wright_telemetry import __version__
-from wright_telemetry.config import CONFIG_DIR, load_config, run_setup_wizard
+from wright_telemetry.api_client import WrightAPIClient
+from wright_telemetry.config import CONFIG_DIR, load_config, run_setup_wizard, run_setup_wizard_miners
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
 from wright_telemetry.updater import check_for_update
@@ -152,8 +153,38 @@ def main() -> None:
         _save(cfg)
 
     ran_setup = cfg is None or args.setup
+
+    from wright_telemetry.ws_client import AgentController, WebSocketClient
+    controller = AgentController()
+    ws_client = None
+
     if ran_setup:
         cfg = run_setup_wizard(existing=cfg)
+
+        if cfg is None:
+            print("No configuration found. Please run: wright-telemetry --setup")
+            sys.exit(1)
+
+        if cfg.get("consent", {}).get("remote_config"):
+            _client = WrightAPIClient(
+                api_url=cfg.get("wright_api_url", ""),
+                api_key=cfg.get("wright_api_key", ""),
+                facility_id=cfg.get("facility_id", ""),
+            )
+            safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
+            _client.send_agent_config(safe_cfg, __version__)
+            _client.close()
+
+        # Start websocket before discovery so the portal sees the agent online.
+        ws_client = WebSocketClient(
+            controller,
+            api_url=cfg.get("wright_api_url", ""),
+            api_key=cfg.get("wright_api_key", ""),
+            facility_id=cfg.get("facility_id", ""),
+        )
+        ws_client.start()
+
+        cfg = run_setup_wizard_miners(cfg)
 
     if cfg is None:
         print("No configuration found. Please run: wright-telemetry --setup")
@@ -177,21 +208,14 @@ def main() -> None:
     import wright_telemetry.collectors.luxos    # noqa: F401  -- triggers @register
     import wright_telemetry.collectors.vnish    # noqa: F401  -- triggers @register
 
-    # Connect to the portal WebSocket as early as possible so the portal
-    # knows the agent is online before discovery / baseline scans run.
-    # The client copies api_url/api_key/facility_id at construction time
-    # and never re-reads the config file, so subsequent save_config() calls
-    # (e.g. after discovery persists IPs) cannot interfere.
-    from wright_telemetry.ws_client import AgentController, WebSocketClient
-
-    controller = AgentController()
-    ws_client = WebSocketClient(
-        controller,
-        api_url=cfg.get("wright_api_url", ""),
-        api_key=cfg.get("wright_api_key", ""),
-        facility_id=cfg.get("facility_id", ""),
-    )
-    ws_client.start()
+    if ws_client is None:
+        ws_client = WebSocketClient(
+            controller,
+            api_url=cfg.get("wright_api_url", ""),
+            api_key=cfg.get("wright_api_key", ""),
+            facility_id=cfg.get("facility_id", ""),
+        )
+        ws_client.start()
 
     # After setup: collect baselines and show help (fan detection: use --detect-wright-fans)
     if ran_setup and not args.detect_wright_fans:
