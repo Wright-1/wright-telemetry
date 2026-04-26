@@ -119,6 +119,7 @@ class LokiHandler(logging.Handler):
         if self._timer:
             self._timer.cancel()
         self.flush()
+        self._session.close()
         super().close()
 
 

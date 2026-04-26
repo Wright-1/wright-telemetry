@@ -35,6 +35,25 @@ from wright_telemetry.models import MinerIdentity, TelemetryPayload
 logger = logging.getLogger(__name__)
 
 _MAX_BACKOFF = 300  # 5 minutes
+_FD_WARN_THRESHOLD = 100  # warn if FDs grow by this much from startup baseline
+_FD_CHECK_INTERVAL = 300  # only check once every N seconds
+
+
+def _check_fd_growth(baseline: int, last_check: float) -> tuple[int, float]:
+    now = time.monotonic()
+    if now - last_check < _FD_CHECK_INTERVAL:
+        return baseline, last_check
+    import psutil
+    count = psutil.Process().num_fds()
+    grown = count - baseline
+    if grown >= _FD_WARN_THRESHOLD:
+        logger.warning(
+            "File descriptor count has grown by %d since startup "
+            "(current: %d, baseline: %d). Possible connection leak — "
+            "check logs for unclosed sessions.",
+            grown, count, baseline,
+        )
+    return baseline, now
 
 
 def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -264,12 +283,15 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
         facility_id=facility_id,
     )
 
+    collectors: list = []
     try:
         collectors = _build_collectors(all_miners, default_collector_type)
         _authenticate_all(collectors)
         identities = _fetch_identities(collectors)
     except KeyboardInterrupt:
         print("\n[BASELINE] Skipped.")
+        for _, c in collectors:
+            c.close()
         return
 
     fan_rpm_history: dict[tuple[str, int], deque] = {}
@@ -334,11 +356,15 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
 
     except KeyboardInterrupt:
         print("\n[BASELINE] Baseline collection skipped.")
+        for _, c in collectors:
+            c.close()
         return
 
     done = len(baselined)
     total = len(collectors)
     print(f"\n[BASELINE] Complete — {done}/{total} miner(s) baselined as stock.\n")
+    for _, c in collectors:
+        c.close()
 
 
 def _detect_fan_dips(
@@ -603,6 +629,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
     last_detection_time = time.time()
 
     while not stop_event.is_set():
+        collectors = []
         try:
             collectors = _build_collectors(all_miners, default_collector_type)
             _authenticate_all(collectors)
@@ -666,6 +693,9 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                 consecutive_crashes, backoff,
             )
             time.sleep(backoff)
+        finally:
+            for _, c in collectors:
+                c.close()
     return True
 
 
@@ -802,6 +832,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     consecutive_crashes = 0
 
     while True:
+        collectors = []
         try:
             logger.info("Starting collection loop (poll every %ds, %d metric(s))", poll_interval, len(metrics))
 
@@ -819,6 +850,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
             consecutive_crashes = 0
             last_scan = time.time()
+            try:
+                import psutil as _psutil
+                _fd_baseline = _psutil.Process().num_fds()
+            except Exception:
+                _fd_baseline = 0
+            _fd_last_check = 0.0
             known_urls = {m["url"] for m in miners}
             # Include MACs back-propagated from identity fetch
             known_macs = {m["mac_address"] for m in miners if m.get("mac_address")}
@@ -862,6 +899,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         if old_identity:
                             old_identity.ip_address = new_cfg["url"].removeprefix("http://").removeprefix("https://").split("/")[0].split(":")[0]
                             identities[new_cfg["url"]] = old_identity
+                        collectors[i][1].close()
                         collectors[i] = (new_cfg, new_collector)
                         known_urls.discard(old_url)
                         known_urls.add(new_cfg["url"])
@@ -900,6 +938,9 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
 
+                if _fd_baseline:
+                    _fd_baseline, _fd_last_check = _check_fd_growth(_fd_baseline, _fd_last_check)
+
                 if controller and controller.wait_for_mode_change(timeout=poll_interval):
                     if controller.mode == "fan_detection":
                         _run_ws_fan_detection(cfg, controller, api_client)
@@ -909,6 +950,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")
+            api_client.close()
             break
         except Exception:
             consecutive_crashes += 1
@@ -918,3 +960,6 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 consecutive_crashes, backoff,
             )
             time.sleep(backoff)
+        finally:
+            for _, c in collectors:
+                c.close()

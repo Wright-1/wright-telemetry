@@ -55,6 +55,9 @@ class MinerCollector(ABC):
     def fetch_errors(self) -> ErrorData:
         """Fetch miner error log."""
 
+    def close(self) -> None:
+        """Release any held network connections or resources."""
+
     # Convenience mapping: metric name -> fetch method
     def get_fetcher(self, metric: str) -> Any:
         mapping = {
