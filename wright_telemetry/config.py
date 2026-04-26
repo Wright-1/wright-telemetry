@@ -313,12 +313,23 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
         default=cfg.get("collector_type", _DEFAULT_COLLECTOR_TYPE),
     )
 
+    # -- Consent --
+    cfg["consent"] = run_consent_wizard(cfg.get("consent"))
+
+    # Save credentials + consent so the caller can POST the config and start
+    # the websocket before we proceed to miner discovery.
+    save_config(cfg)
+    return cfg
+
+
+def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Phase 2 of setup: miner discovery, auto-update, and final save."""
+
     # -- Miners --
     print("\n" + "-" * 60)
     print("  MINERS")
     print("-" * 60)
 
-    # Carry over manually-added miners from previous config
     manual_miners = [m for m in cfg.get("miners", []) if not m.get("discovered")]
 
     if manual_miners:
@@ -329,7 +340,6 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
 
     miners = list(manual_miners)
 
-    # Optional network discovery
     run_discovery = _ask(
         "\n  Scan your local network to discover miners automatically? (y/n)",
         default="y",
@@ -345,7 +355,6 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     else:
         cfg.setdefault("discovery", {})["enabled"] = False
 
-    # Optional manual entry — CIDR / range first, then individual
     add_manual = _ask("Would you like to add miners manually? (y/n)", default="n")
     if add_manual.lower() in ("y", "yes"):
         range_miners = _wizard_range_scan(
@@ -365,9 +374,6 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
 
     cfg["miners"] = miners
 
-    # -- Consent --
-    cfg["consent"] = run_consent_wizard(cfg.get("consent"))
-
     # -- Auto-update --
     print("\n" + "-" * 60)
     print("  AUTO-UPDATE")
@@ -381,7 +387,6 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     ans = _ask("Enable automatic updates? (y/n)", default=default_ans)
     cfg["disable_auto_update"] = ans.lower() not in ("y", "yes")
 
-    # -- Save --
     save_config(cfg)
     print(f"\n  Configuration saved to {CONFIG_FILE}")
 
