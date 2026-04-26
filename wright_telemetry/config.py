@@ -26,8 +26,8 @@ from wright_telemetry.discovery import (
     run_interactive_range_scan,
 )
 
-CONFIG_DIR = Path.home() / ".wright-telemetry"
-CONFIG_FILE = CONFIG_DIR / "config.json"
+CONFIG_DIR = Path(os.environ["WRIGHT_CONFIG"]).parent if "WRIGHT_CONFIG" in os.environ else Path.home() / ".wright-telemetry"
+CONFIG_FILE = Path(os.environ["WRIGHT_CONFIG"]) if "WRIGHT_CONFIG" in os.environ else CONFIG_DIR / "config.json"
 
 SENSITIVE_MASK = "********"
 
