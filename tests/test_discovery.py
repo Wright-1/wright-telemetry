@@ -141,6 +141,8 @@ class TestProbeVnish:
 
 class TestFirmwareTypesForCollector:
 
+    # --- legacy string path ---
+
     def test_braiins(self):
         assert firmware_types_for_collector("braiins") == ["braiins"]
 
@@ -152,6 +154,18 @@ class TestFirmwareTypesForCollector:
 
     def test_empty_defaults_to_braiins(self):
         assert firmware_types_for_collector("") == ["braiins"]
+
+    # --- list path (multi-OS facilities) ---
+
+    def test_list_known_types_normalised(self):
+        # case and whitespace should be normalised; all known types accepted
+        assert firmware_types_for_collector(["BRAIINS", " luxos ", "vnish"]) == ["braiins", "luxos", "vnish"]
+
+    def test_list_filters_unknown_and_empty(self):
+        # unknown strings and empty entries are dropped; all-unknown → None
+        assert firmware_types_for_collector(["braiins", "future-fw", ""]) == ["braiins"]
+        assert firmware_types_for_collector(["future-fw"]) is None
+        assert firmware_types_for_collector([]) is None
 
 
 # ---------------------------------------------------------------

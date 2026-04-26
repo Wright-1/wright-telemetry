@@ -1,11 +1,11 @@
-"""Tests for remote config commands (mask, get, update)."""
+"""Tests for remote config commands (mask, get, update) and config migration."""
 
 import copy
 import json
 import pytest
 from unittest.mock import patch, MagicMock
 
-from wright_telemetry.config import mask_config, SENSITIVE_MASK
+from wright_telemetry.config import mask_config, run_setup_wizard, SENSITIVE_MASK
 
 
 SAMPLE_CONFIG = {
@@ -81,3 +81,45 @@ class TestMaskConfig:
         masked = mask_config(cfg)
         assert masked["wright_api_key"] == SENSITIVE_MASK
         assert masked["miners"] == []
+
+
+# ---------------------------------------------------------------
+# Backward-compat: collector_type string → collector_types list
+#
+# Old installs stored a single string in ``collector_type``.  The
+# wizard must read it, promote it to a list in ``collector_types``,
+# and drop the old key so callers only ever see the new format.
+# ---------------------------------------------------------------
+
+def _wizard_answers(overrides: dict) -> dict:
+    """Minimal set of _ask() return values to get through the wizard."""
+    defaults = {
+        "Wright Fan API Key": "key",
+        "Wright Fan API URL": "https://api.wrightfan.com/api",
+        "Facility ID": "fac-001",
+        "Poll interval in seconds": "30",
+        "Collector OS type(s)": overrides.pop("Collector OS type(s)", "braiins"),
+        "Keep existing manual miners? (y/n)": "n",
+        "\n  Scan your local network to discover miners automatically? (y/n)": "n",
+        "Would you like to add miners manually? (y/n)": "n",
+        "Enable automatic updates? (y/n)": "y",
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+def _run_wizard(existing: dict, ask_map: dict) -> dict:
+    """Run the wizard with mocked _ask / _ask_password / consent / save."""
+    def fake_ask(prompt, default=""):
+        for key, val in ask_map.items():
+            if key in prompt:
+                return val
+        return default
+
+    with (
+        patch("wright_telemetry.config._ask", side_effect=fake_ask),
+        patch("wright_telemetry.config._ask_password", return_value=""),
+        patch("wright_telemetry.config.run_consent_wizard", return_value={}),
+        patch("wright_telemetry.config.save_config"),
+    ):
+        return run_setup_wizard(existing)

@@ -48,8 +48,9 @@ def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     subnets = discovery_cfg.get("subnets")
     default_user = discovery_cfg.get("default_username", "root")
     default_pw_b64 = discovery_cfg.get("default_password_b64", "")
-    collector_type = cfg.get("collector_type", "braiins")
-    firmware_types = firmware_types_for_collector(collector_type)
+    # Support both list format and legacy single-string format
+    collector_types = cfg.get("collector_types") or cfg.get("collector_type", "braiins")
+    firmware_types = firmware_types_for_collector(collector_types)
 
     found = discover_miners(subnets=subnets, firmware_types=firmware_types)
     discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
@@ -129,6 +130,18 @@ def _fetch_identities(
             )
     return identities
 
+
+def _register_miners_with_api(
+    collectors: list[tuple[dict[str, Any], MinerCollector]],
+    identities: dict[str, MinerIdentity],
+    api_client: WrightAPIClient,
+) -> None:
+    """Upsert each miner's record in the API miners table after identities are known."""
+    for miner_cfg, _ in collectors:
+        identity = identities.get(miner_cfg["url"])
+        if identity is None:
+            continue
+        api_client.register_miner(identity, miner_cfg)
 
 
 def _print_baseline_dashboard(name: str, baseline: Any) -> None:
@@ -802,6 +815,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
+            _register_miners_with_api(collectors, identities, api_client)
 
             consecutive_crashes = 0
             last_scan = time.time()
@@ -864,6 +878,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
                         _authenticate_all(new_collectors)
                         new_ids = _fetch_identities(new_collectors)
+                        _register_miners_with_api(new_collectors, new_ids, api_client)
 
                         collectors.extend(new_collectors)
                         identities.update(new_ids)

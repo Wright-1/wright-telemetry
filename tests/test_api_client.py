@@ -1,4 +1,4 @@
-"""Tests for WrightAPIClient.send()."""
+"""Tests for WrightAPIClient.send() and register_miner()."""
 
 from __future__ import annotations
 
