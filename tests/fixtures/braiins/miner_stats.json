@@ -1,12 +1,15 @@
 {
   "miner_stats": {
-    "ghs_5s": 145230.5,
-    "ghs_30m": 144980.2,
-    "ghs_av": 145100.0,
-    "total_mh": 8752619400000,
+    "real_hashrate": {
+      "gigahash_per_second": 145230.5
+    },
+    "nominal_hashrate": {
+      "gigahash_per_second": 147000.0
+    },
     "hardware_errors": 12,
     "utility": 8.45,
-    "work_utility": 145230.5
+    "work_utility": 145230.5,
+    "total_mh": 8752619400000
   },
   "pool_stats": {
     "pools": [

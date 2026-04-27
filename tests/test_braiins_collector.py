@@ -122,7 +122,9 @@ class TestFetchHashrate:
 
     def test_stats_sections_present(self, mock_braiins_api, braiins_collector):
         hr = braiins_collector.fetch_hashrate()
-        assert hr.miner_stats["ghs_5s"] == 145230.5
+        # Real Braiins API nests hashrate under real_hashrate / nominal_hashrate
+        assert hr.miner_stats["real_hashrate"]["gigahash_per_second"] == 145230.5
+        assert hr.miner_stats["nominal_hashrate"]["gigahash_per_second"] == 147000.0
         assert hr.pool_stats["pools"][0]["url"] == "stratum+tcp://pool.example.com:3333"
         assert hr.power_stats["watts"] == 3245
 

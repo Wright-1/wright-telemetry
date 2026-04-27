@@ -134,7 +134,9 @@ class TestHashrateDataFromBraiins:
 
     def test_full_data(self):
         hr = HashrateData.from_braiins(_b("miner_stats.json"))
-        assert hr.miner_stats["ghs_5s"] == 145230.5
+        # Braiins stores the raw nested API structure (real_hashrate / nominal_hashrate)
+        assert hr.miner_stats["real_hashrate"]["gigahash_per_second"] == 145230.5
+        assert hr.miner_stats["nominal_hashrate"]["gigahash_per_second"] == 147000.0
         assert hr.power_stats["watts"] == 3245
 
     def test_empty_sections(self):
@@ -463,8 +465,11 @@ class TestCrossOsHashrateNormalization:
         }
 
     def test_ghs_5s(self, all_hashrate):
-        for fw, hr in all_hashrate.items():
-            assert hr.miner_stats["ghs_5s"] == pytest.approx(145230.5), f"{fw}: ghs_5s mismatch"
+        # Braiins preserves the raw nested API structure; LuxOS and Vnish normalise to ghs_5s.
+        braiins_ghs = all_hashrate["braiins"].miner_stats["real_hashrate"]["gigahash_per_second"]
+        assert braiins_ghs == pytest.approx(145230.5), "braiins: real_hashrate mismatch"
+        for fw in ("luxos", "vnish"):
+            assert all_hashrate[fw].miner_stats["ghs_5s"] == pytest.approx(145230.5), f"{fw}: ghs_5s mismatch"
 
     def test_power_watts(self, all_hashrate):
         for fw, hr in all_hashrate.items():
