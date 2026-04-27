@@ -17,11 +17,12 @@ from collections import deque
 from dataclasses import asdict
 from typing import Any
 
+from wright_telemetry import __version__
 from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
-from wright_telemetry.config import decode_password, load_config, mark_miner_wright_fans, save_config
+from wright_telemetry.config import decode_password, load_config, mark_miner_wright_fans, mask_config, save_config
 from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
@@ -941,6 +942,11 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     discovery_enabled = discovery_cfg.get("enabled", False)
                     scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
                     logger.info("Configuration reloaded from disk")
+                    try:
+                        safe_cfg = {k: v for k, v in cfg.items() if k != "wright_api_key"}
+                        api_client.send_agent_config(safe_cfg, __version__)
+                    except Exception as exc:
+                        logger.warning("Failed to send agent config after reload: %s", exc)
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
 

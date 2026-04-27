@@ -186,6 +186,16 @@ def main() -> None:
 
         cfg = run_setup_wizard_miners(cfg)
 
+        if cfg.get("consent", {}).get("remote_config"):
+            _client = WrightAPIClient(
+                api_url=cfg.get("wright_api_url", ""),
+                api_key=cfg.get("wright_api_key", ""),
+                facility_id=cfg.get("facility_id", ""),
+            )
+            safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
+            _client.send_agent_config(safe_cfg, __version__)
+            _client.close()
+
     if cfg is None:
         print("No configuration found. Please run: wright-telemetry --setup")
         sys.exit(1)
@@ -237,6 +247,16 @@ def main() -> None:
         from wright_telemetry.config import save_config
 
         save_config(cfg)
+
+    if cfg.get("consent", {}).get("remote_config"):
+        _client = WrightAPIClient(
+            api_url=cfg.get("wright_api_url", ""),
+            api_key=cfg.get("wright_api_key", ""),
+            facility_id=cfg.get("facility_id", ""),
+        )
+        safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
+        _client.send_agent_config(safe_cfg, __version__)
+        _client.close()
 
     from wright_telemetry.scheduler import run
     run(cfg, controller=controller)
