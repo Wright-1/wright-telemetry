@@ -21,7 +21,7 @@ from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
-from wright_telemetry.config import decode_password, load_config, mark_miner_wright_fans
+from wright_telemetry.config import decode_password, load_config, mark_miner_wright_fans, save_config
 from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
@@ -123,6 +123,7 @@ def _fetch_identities(
     so that subsequent re-discovery cycles can use it for deduplication.
     """
     identities: dict[str, MinerIdentity] = {}
+    cfg_dirty = False
     for miner_cfg, collector in collectors:
         url = miner_cfg["url"]
         name = miner_cfg.get("name", url)
@@ -131,14 +132,26 @@ def _fetch_identities(
         try:
             identity = collector.fetch_identity()
             identity.ip_address = ip
+            # Restore wright_fans from config only if it was previously detected
+            if miner_cfg.get("wright_fans") is True:
+                identity.wright_fans = True
+            # Back-propagate all identity fields into miner_cfg for persistence
+            for field, value in [
+                ("uid", identity.uid),
+                ("serial_number", identity.serial_number),
+                ("hostname", identity.hostname),
+                ("mac_address", identity.mac_address),
+                ("ip_address", identity.ip_address),
+                ("firmware", identity.firmware),
+            ]:
+                if value and miner_cfg.get(field) != value:
+                    miner_cfg[field] = value
+                    cfg_dirty = True
             identities[url] = identity
-            # Back-propagate MAC into config so re-discovery can match by MAC
-            if identity.mac_address and identity.mac_address != "unknown":
-                miner_cfg["mac_address"] = identity.mac_address
             logger.info(
-                "Identified miner '%s': uid=%s, serial=%s, mac=%s, ip=%s",
+                "Identified miner '%s': uid=%s, serial=%s, mac=%s, ip=%s, firmware=%s",
                 name, identity.uid, identity.serial_number,
-                identity.mac_address, ip,
+                identity.mac_address, ip, identity.firmware,
             )
         except Exception as exc:
             logger.warning("Could not fetch identity for '%s': %s", name, exc)
@@ -146,7 +159,22 @@ def _fetch_identities(
                 uid="unknown", serial_number="unknown",
                 hostname=name, mac_address="unknown",
                 ip_address=ip,
+                firmware=miner_cfg.get("firmware"),
             )
+    if cfg_dirty:
+        try:
+            fresh = load_config()
+            if fresh is not None:
+                for miner_cfg, _ in collectors:
+                    for saved in fresh.get("miners", []):
+                        if saved.get("url") == miner_cfg["url"]:
+                            for field in ("uid", "serial_number", "hostname", "mac_address", "ip_address", "firmware"):
+                                if miner_cfg.get(field):
+                                    saved[field] = miner_cfg[field]
+                            break
+                save_config(fresh)
+        except Exception as exc:
+            logger.warning("Could not persist identity fields to config: %s", exc)
     return identities
 
 

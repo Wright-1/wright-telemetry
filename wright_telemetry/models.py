@@ -15,6 +15,7 @@ class MinerIdentity:
     mac_address: str
     wright_fans: Optional[bool] = None
     ip_address: str = ""
+    firmware: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

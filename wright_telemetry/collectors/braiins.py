@@ -157,6 +157,7 @@ class BraiinsCollector(MinerCollector):
             serial_number=raw.get("serial_number", ""),
             hostname=raw.get("hostname", ""),
             mac_address=raw.get("mac_address", ""),
+            firmware="braiins",
         )
 
     # ------------------------------------------------------------------

@@ -96,6 +96,7 @@ class VnishCollector(MinerCollector):
             serial_number=raw.get("serial", ""),
             hostname=raw.get("hostname", ""),
             mac_address=raw.get("mac", ""),
+            firmware="vnish",
         )
 
     # ------------------------------------------------------------------
