@@ -150,18 +150,6 @@ def _fetch_identities(
     return identities
 
 
-def _register_miners_with_api(
-    collectors: list[tuple[dict[str, Any], MinerCollector]],
-    identities: dict[str, MinerIdentity],
-    api_client: WrightAPIClient,
-) -> None:
-    """Upsert each miner's record in the API miners table after identities are known."""
-    for miner_cfg, _ in collectors:
-        identity = identities.get(miner_cfg["url"])
-        if identity is None:
-            continue
-        api_client.register_miner(identity, miner_cfg)
-
 
 def _print_baseline_dashboard(name: str, baseline: Any) -> None:
     """Print a human-readable baseline summary to the terminal."""
@@ -349,7 +337,10 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
                     ]
                     print(f"[BASELINE] Baseline established for '{name}' — marking as stock fans")
                     logger.info("Baseline established for '%s' (mac=%s): %s", name, mac, fan_baselines)
-                    api_client.mark_stock_fans(mac, fan_baselines, detected_at)
+                    mark_miner_wright_fans(url, wright_fans=False)
+                    miner_cfg["wright_fans"] = False
+                    if identity:
+                        identity.wright_fans = False
                     baselined.add(url)
 
             time.sleep(_FAN_DETECTION_POLL_INTERVAL)
@@ -520,50 +511,39 @@ def _emit_ws_fan_switch_events(
             "transition_type": ev["transition_type"],
         })
         if ev["transition_type"] == "on":
-            marked = api_client.mark_wright_fans(mac, [ev["fan_position"]], detected_at)
-            if marked:
-                mark_miner_wright_fans(miner_cfg["url"])
-                miner_cfg["wright_fans"] = True
-                if identity:
-                    identity.wright_fans = True
-                controller.push_event({
-                    "event": "wright_fan_detected",
-                    "miner": name,
-                    "miner_url": miner_cfg["url"],
-                    "fan_position": ev["fan_position"],
-                })
-                logger.info(
-                    "Wright fan detected: miner '%s' fan #%d",
-                    name,
-                    ev["fan_position"],
-                )
-            else:
-                logger.warning(
-                    "Wright fan ON transition for '%s' fan #%d but portal did not accept "
-                    "mark_wright_fans (mac=%r); check MAC vs telemetry readings",
-                    name,
-                    ev["fan_position"],
-                    mac or None,
-                )
+            mark_miner_wright_fans(miner_cfg["url"])
+            miner_cfg["wright_fans"] = True
+            if identity:
+                identity.wright_fans = True
+            controller.push_event({
+                "event": "wright_fan_detected",
+                "miner": name,
+                "miner_url": miner_cfg["url"],
+                "fan_position": ev["fan_position"],
+            })
+            logger.info(
+                "Wright fan detected: miner '%s' fan #%d",
+                name,
+                ev["fan_position"],
+            )
 
 
 def _handle_wright_fan_dip_detection(
     name: str,
+    miner_cfg: dict[str, Any],
     identity: Any,
     dipped: list[int],
-    api_client: WrightAPIClient,
 ) -> None:
     """After :func:`_detect_fan_dips` fires (CLI ``--detect-wright-fans`` only)."""
-    mac_raw = (identity.mac_address if identity else "") or ""
-    mac = normalize_mac_address(mac_raw) or mac_raw.strip()
-    detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     logger.info(
-        "All fans dipped on '%s' (mac=%s positions=%s) — calling wright-fans endpoint",
+        "All fans dipped on '%s' (positions=%s) — marking as Wright fans",
         name,
-        mac,
         dipped,
     )
-    api_client.mark_wright_fans(mac, dipped, detected_at)
+    mark_miner_wright_fans(miner_cfg["url"])
+    miner_cfg["wright_fans"] = True
+    if identity:
+        identity.wright_fans = True
     print(
         f"[WRIGHT FAN] All fans dipped on '{name}' "
         f"(positions {dipped}) — marking as Wright fans"
@@ -671,9 +651,9 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                         if dipped:
                             _handle_wright_fan_dip_detection(
                                 name,
+                                miner_cfg,
                                 identity,
                                 dipped,
-                                api_client,
                             )
                             last_detection_time = time.time()
                     except Exception as exc:
@@ -846,7 +826,6 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
-            _register_miners_with_api(collectors, identities, api_client)
 
             consecutive_crashes = 0
             last_scan = time.time()
@@ -916,7 +895,6 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
                         _authenticate_all(new_collectors)
                         new_ids = _fetch_identities(new_collectors)
-                        _register_miners_with_api(new_collectors, new_ids, api_client)
 
                         collectors.extend(new_collectors)
                         identities.update(new_ids)
