@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from wright_telemetry import __version__
 from wright_telemetry.api_client import WrightAPIClient
-from wright_telemetry.config import CONFIG_DIR, load_config, run_setup_wizard, run_setup_wizard_miners
+from wright_telemetry.config import CONFIG_DIR, load_config, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
 from wright_telemetry.updater import check_for_update
@@ -68,7 +69,6 @@ def main() -> None:
     args = _parse_args()
 
     if args.loki_auth:
-        import os
         os.environ["WRIGHT_LOKI_AUTH"] = args.loki_auth
 
     if args.discover:
@@ -141,6 +141,12 @@ def main() -> None:
     if args.uninstall:
         uninstall_service()
         sys.exit(0)
+
+    # Ask where the config file lives before we try to load it.
+    # Skipped when WRIGHT_CONFIG env var is already set (service installs,
+    # CI) or when stdin is not a TTY (running non-interactively).
+    if "WRIGHT_CONFIG" not in os.environ and sys.stdin.isatty():
+        prompt_config_location()
 
     # Load or create config
     cfg = load_config()

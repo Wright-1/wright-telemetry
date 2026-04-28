@@ -29,6 +29,25 @@ from wright_telemetry.discovery import (
 CONFIG_DIR = Path(os.environ["WRIGHT_CONFIG"]).parent if "WRIGHT_CONFIG" in os.environ else Path.home() / ".wright-telemetry"
 CONFIG_FILE = Path(os.environ["WRIGHT_CONFIG"]) if "WRIGHT_CONFIG" in os.environ else CONFIG_DIR / "config.json"
 
+
+def set_config_location(path: Path) -> None:
+    """Update the active config file path (and derived dir) at runtime."""
+    global CONFIG_FILE, CONFIG_DIR
+    CONFIG_FILE = path
+    CONFIG_DIR = path.parent
+
+
+def prompt_config_location() -> None:
+    """Ask the user where they want the config file saved and update the
+    active path.  Called once on first run before the setup wizard."""
+    print()
+    raw = _ask("Where would you like to save the config file?", default=str(CONFIG_FILE))
+    chosen = Path(raw.strip()).expanduser().resolve()
+    if chosen.suffix.lower() != ".json":
+        chosen = chosen / "config.json"
+    set_config_location(chosen)
+    print(f"  Config will be saved to: {CONFIG_FILE}")
+
 SENSITIVE_MASK = "********"
 
 _DEFAULT_WRIGHT_API_URL = "https://api.wrightfan.com/api"
