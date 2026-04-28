@@ -115,31 +115,6 @@ def decode_password(b64: str) -> str:
     return base64.b64decode(b64.encode("utf-8")).decode("utf-8")
 
 
-def _wizard_add_miner(index: int) -> dict[str, Any]:
-    """Walk the user through adding a single miner manually."""
-    print(f"\n--- Miner #{index + 1} ---")
-    name = _ask("Give this miner a friendly name (e.g. 'Rack A - Slot 3')")
-    url = _ask("Miner IP or URL (e.g. http://192.168.1.100)")
-    if url and not url.startswith("http"):
-        url = f"http://{url}"
-
-    print()
-    print("  If your miner requires a login, enter the credentials below.")
-    print("  Press Enter to skip if your miner has no password set.")
-    username = _ask("Miner username", default="root")
-    password = _ask_password("Miner password (hidden)")
-
-    miner: dict[str, Any] = {
-        "name": name,
-        "url": url,
-        "username": username,
-    }
-    if password:
-        miner["password_b64"] = _encode_password(password)
-
-    return miner
-
-
 def _wizard_range_scan(collector_types: list[str] = _DEFAULT_COLLECTOR_TYPES) -> list[dict[str, Any]]:
     """Prompt for a CIDR block or IP range, scan it, return miner configs."""
     print()
@@ -345,15 +320,7 @@ def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
     print("  MINERS")
     print("-" * 60)
 
-    manual_miners = [m for m in cfg.get("miners", []) if not m.get("discovered")]
-
-    if manual_miners:
-        print(f"\n  You have {len(manual_miners)} manually-added miner(s).")
-        keep = _ask("Keep existing manual miners? (y/n)", default="y")
-        if keep.lower() not in ("y", "yes"):
-            manual_miners = []
-
-    miners = list(manual_miners)
+    miners: list[dict[str, Any]] = []
 
     run_discovery = _ask(
         "\n  Scan your local network to discover miners automatically? (y/n)",
@@ -370,22 +337,12 @@ def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
     else:
         cfg.setdefault("discovery", {})["enabled"] = False
 
-    add_manual = _ask("Would you like to add miners manually? (y/n)", default="n")
-    if add_manual.lower() in ("y", "yes"):
+    scan_range = _ask("Would you like to scan a specific subnet or IP range? (y/n)", default="n")
+    if scan_range.lower() in ("y", "yes"):
         range_miners = _wizard_range_scan(
             collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
         )
         miners.extend(range_miners)
-
-        if not range_miners:
-            add_individual = _ask("Add individual miners by IP? (y/n)", default="n")
-            if add_individual.lower() in ("y", "yes"):
-                while True:
-                    miner = _wizard_add_miner(len(miners))
-                    miners.append(miner)
-                    more = _ask("Add another miner? (y/n)", default="n")
-                    if more.lower() not in ("y", "yes"):
-                        break
 
     cfg["miners"] = miners
 
