@@ -1,6 +1,11 @@
 """Configuration management and interactive setup wizard.
 
-Config is stored at ``~/.wright-telemetry/config.json``.
+When running as a frozen executable the config file is placed next to the
+exe (``<exe-dir>/config.json``).  Existing installs that already have a
+config at ``~/.wright-telemetry/config.json`` continue to use that path
+automatically.  When running as plain Python (dev) the legacy
+``~/.wright-telemetry/config.json`` path is used.  The ``WRIGHT_CONFIG``
+env var always takes highest priority.
 """
 
 from __future__ import annotations
@@ -26,8 +31,36 @@ from wright_telemetry.discovery import (
     run_interactive_range_scan,
 )
 
-CONFIG_DIR = Path(os.environ["WRIGHT_CONFIG"]).parent if "WRIGHT_CONFIG" in os.environ else Path.home() / ".wright-telemetry"
-CONFIG_FILE = Path(os.environ["WRIGHT_CONFIG"]) if "WRIGHT_CONFIG" in os.environ else CONFIG_DIR / "config.json"
+def _resolve_config_file() -> Path:
+    """Determine the config file path at startup.
+
+    Priority:
+    1. ``WRIGHT_CONFIG`` env var – explicit override (backwards-compat for
+       power users / CI).
+    2. Frozen exe (PyInstaller) + legacy ``~/.wright-telemetry/config.json``
+       already exists but no config next to the exe → keep using the legacy
+       path so existing installs are not broken.
+    3. Frozen exe, otherwise → ``config.json`` in the same directory as the
+       exe (portable / dev-console friendly).
+    4. Running as plain Python (dev) → ``~/.wright-telemetry/config.json``.
+    """
+    if "WRIGHT_CONFIG" in os.environ:
+        return Path(os.environ["WRIGHT_CONFIG"])
+
+    if getattr(sys, "frozen", False):
+        exe_side = Path(sys.executable).parent / "config.json"
+        legacy   = Path.home() / ".wright-telemetry" / "config.json"
+        # Use the legacy path only when it already exists and there is no
+        # config file next to the exe yet (i.e. an existing install).
+        if legacy.exists() and not exe_side.exists():
+            return legacy
+        return exe_side
+
+    return Path.home() / ".wright-telemetry" / "config.json"
+
+
+CONFIG_FILE = _resolve_config_file()
+CONFIG_DIR  = CONFIG_FILE.parent
 
 SENSITIVE_MASK = "********"
 
