@@ -22,7 +22,7 @@ from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
-from wright_telemetry.config import decode_password, load_config, mark_miner_wright_fans, mask_config, save_config
+from wright_telemetry.config import decode_password, load_config, mask_config, save_config
 from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
@@ -178,6 +178,24 @@ def _fetch_identities(
             logger.warning("Could not persist identity fields to config: %s", exc)
     return identities
 
+
+
+def _mark_miner_wright_fans(
+    api_client: WrightAPIClient,
+    facility_id: str,
+    identity: MinerIdentity,
+    wright_fans: bool,
+) -> None:
+    """Send metric_type='mark_miner' to set wright_fans on the miner record in the DB."""
+    try:
+        api_client.send(TelemetryPayload(
+            metric_type="mark_miner",
+            facility_id=facility_id,
+            miner_identity=identity,
+            data={"wright_fans": wright_fans},
+        ))
+    except Exception as exc:
+        logger.warning("Failed to mark wright fans for miner '%s': %s", identity.uid, exc)
 
 
 def _print_baseline_dashboard(name: str, baseline: Any) -> None:
@@ -366,10 +384,9 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
                     ]
                     print(f"[BASELINE] Baseline established for '{name}' — marking as stock fans")
                     logger.info("Baseline established for '%s' (mac=%s): %s", name, mac, fan_baselines)
-                    mark_miner_wright_fans(url, wright_fans=False)
-                    miner_cfg["wright_fans"] = False
-                    if identity:
-                        identity.wright_fans = False
+                    identity_obj = identities.get(url)
+                    if identity_obj:
+                        _mark_miner_wright_fans(api_client, facility_id, identity_obj, False)
                     baselined.add(url)
 
             time.sleep(_FAN_DETECTION_POLL_INTERVAL)
@@ -540,10 +557,8 @@ def _emit_ws_fan_switch_events(
             "transition_type": ev["transition_type"],
         })
         if ev["transition_type"] == "on":
-            mark_miner_wright_fans(miner_cfg["url"])
-            miner_cfg["wright_fans"] = True
             if identity:
-                identity.wright_fans = True
+                _mark_miner_wright_fans(api_client, facility_id, identity, True)
             controller.push_event({
                 "event": "wright_fan_detected",
                 "miner": name,
@@ -562,6 +577,8 @@ def _handle_wright_fan_dip_detection(
     miner_cfg: dict[str, Any],
     identity: Any,
     dipped: list[int],
+    api_client: WrightAPIClient,
+    facility_id: str,
 ) -> None:
     """After :func:`_detect_fan_dips` fires (CLI ``--detect-wright-fans`` only)."""
     logger.info(
@@ -569,10 +586,8 @@ def _handle_wright_fan_dip_detection(
         name,
         dipped,
     )
-    mark_miner_wright_fans(miner_cfg["url"])
-    miner_cfg["wright_fans"] = True
     if identity:
-        identity.wright_fans = True
+        _mark_miner_wright_fans(api_client, facility_id, identity, True)
     print(
         f"[WRIGHT FAN] All fans dipped on '{name}' "
         f"(positions {dipped}) — marking as Wright fans"
@@ -683,6 +698,8 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                                 miner_cfg,
                                 identity,
                                 dipped,
+                                api_client,
+                                facility_id,
                             )
                             last_detection_time = time.time()
                     except Exception as exc:
