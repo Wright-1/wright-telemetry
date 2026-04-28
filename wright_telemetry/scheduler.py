@@ -22,14 +22,13 @@ from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
-from wright_telemetry.config import decode_password, load_config, mask_config, save_config
+from wright_telemetry.config import decode_password, load_config, mask_config
 from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
     discover_miners,
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
-    merge_miners,
 )
 from wright_telemetry.models import MinerIdentity, TelemetryPayload
 
@@ -58,12 +57,11 @@ def _check_fd_growth(baseline: int, last_check: float) -> tuple[int, float]:
 
 
 def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return the effective miner list (manual + freshly discovered)."""
+    """Discover miners by scanning configured subnets."""
     discovery_cfg = cfg.get("discovery", {})
-    manual_miners = [m for m in cfg.get("miners", []) if not m.get("discovered")]
 
     if not discovery_cfg.get("enabled", False):
-        return cfg.get("miners", [])
+        return []
 
     subnets = discovery_cfg.get("subnets")
     default_user = discovery_cfg.get("default_username", "root")
@@ -75,12 +73,8 @@ def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     found = discover_miners(subnets=subnets, firmware_types=firmware_types)
     discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
 
-    merged = merge_miners(manual_miners, discovered_cfgs)
-    logger.info(
-        "Miner resolution: %d manual + %d discovered = %d total",
-        len(manual_miners), len(discovered_cfgs), len(merged),
-    )
-    return merged
+    logger.info("Discovered %d miner(s) via subnet scan", len(discovered_cfgs))
+    return discovered_cfgs
 
 
 def _build_collectors(
@@ -124,7 +118,6 @@ def _fetch_identities(
     so that subsequent re-discovery cycles can use it for deduplication.
     """
     identities: dict[str, MinerIdentity] = {}
-    cfg_dirty = False
     for miner_cfg, collector in collectors:
         url = miner_cfg["url"]
         name = miner_cfg.get("name", url)
@@ -133,10 +126,8 @@ def _fetch_identities(
         try:
             identity = collector.fetch_identity()
             identity.ip_address = ip
-            # Restore wright_fans from config only if it was previously detected
-            if miner_cfg.get("wright_fans") is True:
-                identity.wright_fans = True
-            # Back-propagate all identity fields into miner_cfg for persistence
+            # Back-propagate identity fields into miner_cfg for in-process use
+            # (e.g. MAC-based deduplication in the re-discovery loop)
             for field, value in [
                 ("uid", identity.uid),
                 ("serial_number", identity.serial_number),
@@ -147,7 +138,6 @@ def _fetch_identities(
             ]:
                 if value and miner_cfg.get(field) != value:
                     miner_cfg[field] = value
-                    cfg_dirty = True
             identities[url] = identity
             logger.info(
                 "Identified miner '%s': uid=%s, serial=%s, mac=%s, ip=%s, firmware=%s",
@@ -162,20 +152,6 @@ def _fetch_identities(
                 ip_address=ip,
                 firmware=miner_cfg.get("firmware"),
             )
-    if cfg_dirty:
-        try:
-            fresh = load_config()
-            if fresh is not None:
-                for miner_cfg, _ in collectors:
-                    for saved in fresh.get("miners", []):
-                        if saved.get("url") == miner_cfg["url"]:
-                            for field in ("uid", "serial_number", "hostname", "mac_address", "ip_address", "firmware"):
-                                if miner_cfg.get(field):
-                                    saved[field] = miner_cfg[field]
-                            break
-                save_config(fresh)
-        except Exception as exc:
-            logger.warning("Could not persist identity fields to config: %s", exc)
     return identities
 
 

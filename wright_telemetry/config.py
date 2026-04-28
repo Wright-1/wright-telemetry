@@ -67,25 +67,10 @@ def mask_config(cfg: dict[str, Any]) -> dict[str, Any]:
     masked = copy.deepcopy(cfg)
     if "wright_api_key" in masked:
         masked["wright_api_key"] = SENSITIVE_MASK
-    for miner in masked.get("miners", []):
-        if "password_b64" in miner:
-            miner["password_b64"] = SENSITIVE_MASK
     discovery = masked.get("discovery", {})
     if "default_password_b64" in discovery:
         discovery["default_password_b64"] = SENSITIVE_MASK
     return masked
-
-
-def mark_miner_wright_fans(miner_url: str, wright_fans: bool = True) -> None:
-    """Set ``wright_fans`` on the miner matching *miner_url* and persist."""
-    cfg = load_config()
-    if cfg is None:
-        return
-    for miner in cfg.get("miners", []):
-        if miner.get("url") == miner_url:
-            miner["wright_fans"] = wright_fans
-            break
-    save_config(cfg)
 
 
 # ------------------------------------------------------------------
@@ -343,8 +328,6 @@ def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
             collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
         )
         miners.extend(range_miners)
-
-    cfg["miners"] = miners
 
     # -- Auto-update --
     print("\n" + "-" * 60)
