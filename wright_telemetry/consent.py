@@ -117,15 +117,6 @@ def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, boo
                 break
             print("  Please enter 'y' or 'n'.")
 
-    enabled = [METRICS[k]["label"] for k, v in consent.items() if v]
-    print("\n" + "=" * 60)
-    if enabled:
-        print("  Enabled metrics: " + ", ".join(enabled))
-    else:
-        print("  No metrics enabled. The collector will run but won't send any data.")
-    print("  You can change these any time by running: wright-telemetry --setup")
-    print("=" * 60 + "\n")
-
     return consent
 
 

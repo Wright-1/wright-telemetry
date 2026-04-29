@@ -42,9 +42,13 @@ def prompt_config_location() -> None:
     active path.  Called once on first run before the setup wizard."""
     print()
     raw = _ask("Where would you like to save the config file?", default=str(CONFIG_FILE))
-    chosen = Path(raw.strip()).expanduser().resolve()
+    # Users sometimes paste shell-escaped paths (e.g. "My\ Folder") because
+    # they copied the path from a terminal.  Python's input() receives the
+    # backslashes literally, so unescape them here.
+    raw = raw.strip().replace("\\ ", " ")
+    chosen = Path(raw).expanduser().resolve()
     if chosen.suffix.lower() != ".json":
-        chosen = chosen / "config.json"
+        chosen = chosen.with_suffix(".json")
     set_config_location(chosen)
     print(f"  Config will be saved to: {CONFIG_FILE}")
 
@@ -310,8 +314,32 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     # -- Consent --
     cfg["consent"] = run_consent_wizard(cfg.get("consent"))
 
-    # Save credentials + consent so the caller can POST the config and start
-    # the websocket before we proceed to miner discovery.
+    # -- Auto-update --
+    current_auto_update = not cfg.get("disable_auto_update", False)
+    status = "ON" if current_auto_update else "OFF"
+    default_ans = "y" if current_auto_update else "n"
+    print("-" * 60)
+    print(f"  Automatic Updates  (currently {status})")
+    print()
+    print("  Wright Telemetry can check for new releases every hour and")
+    print("  apply them automatically without any action on your part.")
+    print()
+    ans = _ask("Enable automatic updates? (y/n)", default=default_ans)
+    cfg["disable_auto_update"] = ans.lower() not in ("y", "yes")
+
+    # -- Summary --
+    from wright_telemetry.consent import METRICS
+    enabled = [METRICS[k]["label"] for k, v in cfg.get("consent", {}).items() if v]
+    print("\n" + "=" * 60)
+    if enabled:
+        print("  Enabled metrics: " + ", ".join(enabled))
+    else:
+        print("  No metrics enabled. The collector will run but won't send any data.")
+    print("  You can change these any time by running: wright-telemetry --setup")
+    print("=" * 60 + "\n")
+
+    # Save credentials, consent, and auto-update preference so the caller
+    # can POST the complete config before proceeding to miner discovery.
     save_config(cfg)
     return cfg
 
@@ -347,19 +375,6 @@ def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
             collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
         )
         miners.extend(range_miners)
-
-    # -- Auto-update --
-    print("\n" + "-" * 60)
-    print("  AUTO-UPDATE")
-    print("-" * 60)
-    print()
-    print("  Wright Telemetry can check for new releases every hour and")
-    print("  apply them automatically without any action on your part.")
-    print()
-    current_auto_update = not cfg.get("disable_auto_update", False)
-    default_ans = "y" if current_auto_update else "n"
-    ans = _ask("Enable automatic updates? (y/n)", default=default_ans)
-    cfg["disable_auto_update"] = ans.lower() not in ("y", "yes")
 
     save_config(cfg)
     print(f"\n  Configuration saved to {CONFIG_FILE}")
