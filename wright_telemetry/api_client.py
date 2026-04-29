@@ -61,10 +61,10 @@ class WrightAPIClient:
 
     
     def send_agent_config(self, config: dict[str, Any], agent_version: str) -> bool:
-        """POST agent config snapshot via the encrypted /v1/telemetry endpoint."""
+        """POST agent config snapshot via the dedicated /v1/telemetry/agent-config endpoint."""
         import platform
         import time
-        url = wright_api_v1_url(self.api_url, "telemetry")
+        url = wright_api_v1_url(self.api_url, "telemetry", "agent-config")
         payload = {
             "facility_id": self.facility_id,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
