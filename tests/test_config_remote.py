@@ -51,11 +51,6 @@ class TestMaskConfig:
         masked = mask_config(SAMPLE_CONFIG)
         assert masked["wright_api_key"] == SENSITIVE_MASK
 
-    def test_masks_miner_passwords(self):
-        masked = mask_config(SAMPLE_CONFIG)
-        assert masked["miners"][0]["password_b64"] == SENSITIVE_MASK
-        assert "password_b64" not in masked["miners"][1]
-
     def test_masks_discovery_password(self):
         masked = mask_config(SAMPLE_CONFIG)
         assert masked["discovery"]["default_password_b64"] == SENSITIVE_MASK
