@@ -49,6 +49,9 @@ class BraiinsCollector(MinerCollector):
         self._session.headers.setdefault("Accept", "application/json")
         self._session.headers.setdefault("User-Agent", "WrightTelemetry/braiins-collector")
 
+    def close(self) -> None:
+        self._session.close()
+
     # ------------------------------------------------------------------
     # Authentication
     # ------------------------------------------------------------------
@@ -154,6 +157,7 @@ class BraiinsCollector(MinerCollector):
             serial_number=raw.get("serial_number", ""),
             hostname=raw.get("hostname", ""),
             mac_address=raw.get("mac_address", ""),
+            firmware="braiins",
         )
 
     # ------------------------------------------------------------------

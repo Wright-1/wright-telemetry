@@ -104,6 +104,7 @@ class LuxOSCollector(MinerCollector):
             serial_number=cfg.get("SerialNumber", ""),
             hostname=cfg.get("Hostname", ""),
             mac_address=cfg.get("MACAddr", ""),
+            firmware="luxos",
         )
 
     # ------------------------------------------------------------------

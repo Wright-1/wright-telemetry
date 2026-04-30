@@ -17,49 +17,64 @@ from collections import deque
 from dataclasses import asdict
 from typing import Any
 
+from wright_telemetry import __version__
 from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
-from wright_telemetry.config import decode_password, load_config, mark_miner_wright_fans
+from wright_telemetry.config import decode_password, load_config, mask_config
 from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import consented_metrics
 from wright_telemetry.discovery import (
     discover_miners,
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
-    merge_miners,
 )
 from wright_telemetry.models import MinerIdentity, TelemetryPayload
 
 logger = logging.getLogger(__name__)
 
 _MAX_BACKOFF = 300  # 5 minutes
+_FD_WARN_THRESHOLD = 100  # warn if FDs grow by this much from startup baseline
+_FD_CHECK_INTERVAL = 300  # only check once every N seconds
+
+
+def _check_fd_growth(baseline: int, last_check: float) -> tuple[int, float]:
+    now = time.monotonic()
+    if now - last_check < _FD_CHECK_INTERVAL:
+        return baseline, last_check
+    import psutil
+    count = psutil.Process().num_fds()
+    grown = count - baseline
+    if grown >= _FD_WARN_THRESHOLD:
+        logger.warning(
+            "File descriptor count has grown by %d since startup "
+            "(current: %d, baseline: %d). Possible connection leak — "
+            "check logs for unclosed sessions.",
+            grown, count, baseline,
+        )
+    return baseline, now
 
 
 def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return the effective miner list (manual + freshly discovered)."""
+    """Discover miners by scanning configured subnets."""
     discovery_cfg = cfg.get("discovery", {})
-    manual_miners = [m for m in cfg.get("miners", []) if not m.get("discovered")]
 
     if not discovery_cfg.get("enabled", False):
-        return cfg.get("miners", [])
+        return []
 
     subnets = discovery_cfg.get("subnets")
     default_user = discovery_cfg.get("default_username", "root")
     default_pw_b64 = discovery_cfg.get("default_password_b64", "")
-    collector_type = cfg.get("collector_type", "braiins")
-    firmware_types = firmware_types_for_collector(collector_type)
+    # Support both list format and legacy single-string format
+    collector_types = cfg.get("collector_types") or cfg.get("collector_type", "braiins")
+    firmware_types = firmware_types_for_collector(collector_types)
 
     found = discover_miners(subnets=subnets, firmware_types=firmware_types)
     discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
 
-    merged = merge_miners(manual_miners, discovered_cfgs)
-    logger.info(
-        "Miner resolution: %d manual + %d discovered = %d total",
-        len(manual_miners), len(discovered_cfgs), len(merged),
-    )
-    return merged
+    logger.info("Discovered %d miner(s) via subnet scan", len(discovered_cfgs))
+    return discovered_cfgs
 
 
 def _build_collectors(
@@ -111,14 +126,23 @@ def _fetch_identities(
         try:
             identity = collector.fetch_identity()
             identity.ip_address = ip
+            # Back-propagate identity fields into miner_cfg for in-process use
+            # (e.g. MAC-based deduplication in the re-discovery loop)
+            for field, value in [
+                ("uid", identity.uid),
+                ("serial_number", identity.serial_number),
+                ("hostname", identity.hostname),
+                ("mac_address", identity.mac_address),
+                ("ip_address", identity.ip_address),
+                ("firmware", identity.firmware),
+            ]:
+                if value and miner_cfg.get(field) != value:
+                    miner_cfg[field] = value
             identities[url] = identity
-            # Back-propagate MAC into config so re-discovery can match by MAC
-            if identity.mac_address and identity.mac_address != "unknown":
-                miner_cfg["mac_address"] = identity.mac_address
             logger.info(
-                "Identified miner '%s': uid=%s, serial=%s, mac=%s, ip=%s",
+                "Identified miner '%s': uid=%s, serial=%s, mac=%s, ip=%s, firmware=%s",
                 name, identity.uid, identity.serial_number,
-                identity.mac_address, ip,
+                identity.mac_address, ip, identity.firmware,
             )
         except Exception as exc:
             logger.warning("Could not fetch identity for '%s': %s", name, exc)
@@ -126,9 +150,28 @@ def _fetch_identities(
                 uid="unknown", serial_number="unknown",
                 hostname=name, mac_address="unknown",
                 ip_address=ip,
+                firmware=miner_cfg.get("firmware"),
             )
     return identities
 
+
+
+def _mark_miner_wright_fans(
+    api_client: WrightAPIClient,
+    facility_id: str,
+    identity: MinerIdentity,
+    wright_fans: bool,
+) -> None:
+    """Send metric_type='mark_miner' to set wright_fans on the miner record in the DB."""
+    try:
+        api_client.send(TelemetryPayload(
+            metric_type="mark_miner",
+            facility_id=facility_id,
+            miner_identity=identity,
+            data={"wright_fans": wright_fans},
+        ))
+    except Exception as exc:
+        logger.warning("Failed to mark wright fans for miner '%s': %s", identity.uid, exc)
 
 
 def _print_baseline_dashboard(name: str, baseline: Any) -> None:
@@ -251,12 +294,15 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
         facility_id=facility_id,
     )
 
+    collectors: list = []
     try:
         collectors = _build_collectors(all_miners, default_collector_type)
         _authenticate_all(collectors)
         identities = _fetch_identities(collectors)
     except KeyboardInterrupt:
         print("\n[BASELINE] Skipped.")
+        for _, c in collectors:
+            c.close()
         return
 
     fan_rpm_history: dict[tuple[str, int], deque] = {}
@@ -314,18 +360,24 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
                     ]
                     print(f"[BASELINE] Baseline established for '{name}' — marking as stock fans")
                     logger.info("Baseline established for '%s' (mac=%s): %s", name, mac, fan_baselines)
-                    api_client.mark_stock_fans(mac, fan_baselines, detected_at)
+                    identity_obj = identities.get(url)
+                    if identity_obj:
+                        _mark_miner_wright_fans(api_client, facility_id, identity_obj, False)
                     baselined.add(url)
 
             time.sleep(_FAN_DETECTION_POLL_INTERVAL)
 
     except KeyboardInterrupt:
         print("\n[BASELINE] Baseline collection skipped.")
+        for _, c in collectors:
+            c.close()
         return
 
     done = len(baselined)
     total = len(collectors)
     print(f"\n[BASELINE] Complete — {done}/{total} miner(s) baselined as stock.\n")
+    for _, c in collectors:
+        c.close()
 
 
 def _detect_fan_dips(
@@ -481,50 +533,37 @@ def _emit_ws_fan_switch_events(
             "transition_type": ev["transition_type"],
         })
         if ev["transition_type"] == "on":
-            marked = api_client.mark_wright_fans(mac, [ev["fan_position"]], detected_at)
-            if marked:
-                mark_miner_wright_fans(miner_cfg["url"])
-                miner_cfg["wright_fans"] = True
-                if identity:
-                    identity.wright_fans = True
-                controller.push_event({
-                    "event": "wright_fan_detected",
-                    "miner": name,
-                    "miner_url": miner_cfg["url"],
-                    "fan_position": ev["fan_position"],
-                })
-                logger.info(
-                    "Wright fan detected: miner '%s' fan #%d",
-                    name,
-                    ev["fan_position"],
-                )
-            else:
-                logger.warning(
-                    "Wright fan ON transition for '%s' fan #%d but portal did not accept "
-                    "mark_wright_fans (mac=%r); check MAC vs telemetry readings",
-                    name,
-                    ev["fan_position"],
-                    mac or None,
-                )
+            if identity:
+                _mark_miner_wright_fans(api_client, facility_id, identity, True)
+            controller.push_event({
+                "event": "wright_fan_detected",
+                "miner": name,
+                "miner_url": miner_cfg["url"],
+                "fan_position": ev["fan_position"],
+            })
+            logger.info(
+                "Wright fan detected: miner '%s' fan #%d",
+                name,
+                ev["fan_position"],
+            )
 
 
 def _handle_wright_fan_dip_detection(
     name: str,
+    miner_cfg: dict[str, Any],
     identity: Any,
     dipped: list[int],
     api_client: WrightAPIClient,
+    facility_id: str,
 ) -> None:
     """After :func:`_detect_fan_dips` fires (CLI ``--detect-wright-fans`` only)."""
-    mac_raw = (identity.mac_address if identity else "") or ""
-    mac = normalize_mac_address(mac_raw) or mac_raw.strip()
-    detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     logger.info(
-        "All fans dipped on '%s' (mac=%s positions=%s) — calling wright-fans endpoint",
+        "All fans dipped on '%s' (positions=%s) — marking as Wright fans",
         name,
-        mac,
         dipped,
     )
-    api_client.mark_wright_fans(mac, dipped, detected_at)
+    if identity:
+        _mark_miner_wright_fans(api_client, facility_id, identity, True)
     print(
         f"[WRIGHT FAN] All fans dipped on '{name}' "
         f"(positions {dipped}) — marking as Wright fans"
@@ -590,6 +629,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
     last_detection_time = time.time()
 
     while not stop_event.is_set():
+        collectors = []
         try:
             collectors = _build_collectors(all_miners, default_collector_type)
             _authenticate_all(collectors)
@@ -631,9 +671,11 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                         if dipped:
                             _handle_wright_fan_dip_detection(
                                 name,
+                                miner_cfg,
                                 identity,
                                 dipped,
                                 api_client,
+                                facility_id,
                             )
                             last_detection_time = time.time()
                     except Exception as exc:
@@ -653,6 +695,9 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                 consecutive_crashes, backoff,
             )
             time.sleep(backoff)
+        finally:
+            for _, c in collectors:
+                c.close()
     return True
 
 
@@ -789,6 +834,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     consecutive_crashes = 0
 
     while True:
+        collectors = []
         try:
             logger.info("Starting collection loop (poll every %ds, %d metric(s))", poll_interval, len(metrics))
 
@@ -805,6 +851,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
             consecutive_crashes = 0
             last_scan = time.time()
+            try:
+                import psutil as _psutil
+                _fd_baseline = _psutil.Process().num_fds()
+            except Exception:
+                _fd_baseline = 0
+            _fd_last_check = 0.0
             known_urls = {m["url"] for m in miners}
             # Include MACs back-propagated from identity fetch
             known_macs = {m["mac_address"] for m in miners if m.get("mac_address")}
@@ -848,6 +900,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         if old_identity:
                             old_identity.ip_address = new_cfg["url"].removeprefix("http://").removeprefix("https://").split("/")[0].split(":")[0]
                             identities[new_cfg["url"]] = old_identity
+                        collectors[i][1].close()
                         collectors[i] = (new_cfg, new_collector)
                         known_urls.discard(old_url)
                         known_urls.add(new_cfg["url"])
@@ -882,8 +935,16 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     discovery_enabled = discovery_cfg.get("enabled", False)
                     scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
                     logger.info("Configuration reloaded from disk")
+                    try:
+                        safe_cfg = {k: v for k, v in cfg.items() if k != "wright_api_key"}
+                        api_client.send_agent_config(safe_cfg, __version__)
+                    except Exception as exc:
+                        logger.warning("Failed to send agent config after reload: %s", exc)
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
+
+                if _fd_baseline:
+                    _fd_baseline, _fd_last_check = _check_fd_growth(_fd_baseline, _fd_last_check)
 
                 if controller and controller.wait_for_mode_change(timeout=poll_interval):
                     if controller.mode == "fan_detection":
@@ -894,6 +955,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")
+            api_client.close()
             break
         except Exception:
             consecutive_crashes += 1
@@ -903,3 +965,6 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 consecutive_crashes, backoff,
             )
             time.sleep(backoff)
+        finally:
+            for _, c in collectors:
+                c.close()

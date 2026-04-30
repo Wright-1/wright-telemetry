@@ -2,13 +2,50 @@
 
 from __future__ import annotations
 
+import gc
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 import responses
+
+try:
+    import psutil as _psutil
+    _PROC = _psutil.Process(os.getpid())
+except ImportError:
+    _psutil = None
+    _PROC = None
+
+@pytest.fixture(autouse=True)
+def check_fd_leaks():
+    if _PROC is None or sys.platform == "win32":
+        yield
+        return
+
+    gc.collect()
+    fd_before = _PROC.num_fds()
+
+    yield
+
+    gc.collect()
+    fd_after = _PROC.num_fds()
+
+    leaked = fd_after - fd_before
+    if leaked > 0:
+        try:
+            conns = _psutil.net_connections(kind="all")
+            detail = "\n".join(
+                f"  fd={c.fd} {c.type.name} {c.laddr} -> {c.raddr} [{c.status}]"
+                for c in conns
+            )
+        except Exception:
+            detail = "  (could not enumerate connections)"
+        pytest.fail(f"Test leaked {leaked} file descriptor(s).\nOpen connections:\n{detail}")
+
 
 BRAIINS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "braiins"
 LUXOS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "luxos"
@@ -90,14 +127,18 @@ def mock_braiins_api(braiins_fixtures) -> responses.RequestsMock:
 def braiins_collector():
     """Return an unauthenticated BraiinsCollector pointed at the test URL."""
     from wright_telemetry.collectors.braiins import BraiinsCollector
-    return BraiinsCollector(url=MINER_URL, username="root", password="test123")
+    collector = BraiinsCollector(url=MINER_URL, username="root", password="test123")
+    yield collector
+    collector.close()
 
 
 @pytest.fixture()
 def braiins_collector_no_auth():
     """Return a BraiinsCollector with no credentials."""
     from wright_telemetry.collectors.braiins import BraiinsCollector
-    return BraiinsCollector(url=MINER_URL)
+    collector = BraiinsCollector(url=MINER_URL)
+    yield collector
+    collector.close()
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +235,15 @@ def mock_vnish_api(vnish_fixtures) -> responses.RequestsMock:
 def vnish_collector():
     """Return an unauthenticated VnishCollector pointed at the test URL."""
     from wright_telemetry.collectors.vnish import VnishCollector
-    return VnishCollector(url=VNISH_URL, password="test123")
+    collector = VnishCollector(url=VNISH_URL, password="test123")
+    yield collector
+    collector.close()
 
 
 @pytest.fixture()
 def vnish_collector_no_auth():
     """Return a VnishCollector with no credentials."""
     from wright_telemetry.collectors.vnish import VnishCollector
-    return VnishCollector(url=VNISH_URL)
+    collector = VnishCollector(url=VNISH_URL)
+    yield collector
+    collector.close()

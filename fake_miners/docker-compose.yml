@@ -1,0 +1,122 @@
+# Fake miner fleet for local testing of wright-telemetry without real hardware.
+#
+# USAGE
+# -----
+#   1. Install docker-mac-net-connect (one-time, macOS only):
+#        curl -fsSL https://github.com/chipmk/docker-mac-net-connect/releases/download/v0.1.7/docker-mac-net-connect_darwin_arm64.tar.gz \
+#          | tar -xz -C /tmp
+#        sudo mv /tmp/docker-mac-net-connect /usr/local/bin/
+#        sudo chmod +x /usr/local/bin/docker-mac-net-connect
+#        sudo docker-mac-net-connect   # run once; re-run after reboot
+#
+#      This tunnels Docker bridge networks to the macOS host so that
+#      172.28.0.x is reachable directly — allowing wright-telemetry to
+#      run natively on the host and reach both the fake miners AND
+#      your local API on localhost:3001.
+#
+#   2. Start the fake fleet:
+#        docker compose -f fake_miners/docker-compose.yml up -d --build
+#
+#   3. Point wright-telemetry at the fake subnet:
+#        wright-telemetry --setup
+#        # when prompted for subnet enter: 172.28.0.0/24
+#
+#   4. Tear down:
+#        docker compose -f fake_miners/docker-compose.yml down
+#
+# IP LAYOUT
+# ---------
+#   172.28.0.10 – .19   Braiins fakes  (HTTP port 80)
+#   172.28.0.20 – .29   Vnish fakes    (HTTP port 80)
+#   172.28.0.30 – .39   LuxOS fakes    (TCP  port 4028)
+#
+# ADDING MORE MINERS
+# ------------------
+#   Duplicate any service block, bump the IP's last octet and MINER_INDEX,
+#   then re-run `docker compose up -d --build`.
+#
+# EDITING FIXTURES
+# ----------------
+#   The tests/fixtures/ directory is mounted read-only into every container.
+#   Edit a JSON file → restart the relevant container:
+#       docker compose -f fake_miners/docker-compose.yml restart braiins-0
+
+# ── Shared service template (YAML anchor) ────────────────────────────────────
+x-miner-base: &miner-base
+  build:
+    context: ..                          # repo root
+    dockerfile: fake_miners/Dockerfile
+  volumes:
+    - ../tests/fixtures:/fixtures:ro     # live fixture mount — no rebuild needed
+  restart: unless-stopped
+
+# ── Isolated bridge network ───────────────────────────────────────────────────
+networks:
+  miners-test:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/24
+
+# ── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ── Braiins ─────────────────────────────────────────────────────────────────
+  braiins-0:
+    <<: *miner-base
+    environment:
+      FIRMWARE: braiins
+      MINER_INDEX: "0"
+    networks:
+      miners-test:
+        ipv4_address: 172.28.0.10
+
+  braiins-1:
+    <<: *miner-base
+    environment:
+      FIRMWARE: braiins
+      MINER_INDEX: "1"
+    networks:
+      miners-test:
+        ipv4_address: 172.28.0.11
+
+  # ── Vnish ───────────────────────────────────────────────────────────────────
+  vnish-0:
+    <<: *miner-base
+    environment:
+      FIRMWARE: vnish
+      MINER_INDEX: "0"
+    networks:
+      miners-test:
+        ipv4_address: 172.28.0.20
+
+  vnish-1:
+    <<: *miner-base
+    environment:
+      FIRMWARE: vnish
+      MINER_INDEX: "1"
+    networks:
+      miners-test:
+        ipv4_address: 172.28.0.21
+
+  # ── LuxOS ───────────────────────────────────────────────────────────────────
+  luxos-0:
+    <<: *miner-base
+    environment:
+      FIRMWARE: luxos
+      MINER_INDEX: "0"
+    networks:
+      miners-test:
+        ipv4_address: 172.28.0.30
+
+  luxos-1:
+    <<: *miner-base
+    environment:
+      FIRMWARE: luxos
+      MINER_INDEX: "1"
+    networks:
+      miners-test:
+        ipv4_address: 172.28.0.31
+
+

@@ -8,12 +8,12 @@ collector loop.
 from __future__ import annotations
 
 import logging
+from typing import Any, Optional
 
 import requests
 import urllib3
 
 from wright_telemetry.encryption import encrypt_payload
-from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.models import TelemetryPayload
 
 logger = logging.getLogger(__name__)
@@ -55,60 +55,35 @@ class WrightAPIClient:
             "X-Facility-ID": self.facility_id,
         })
 
-    def mark_stock_fans(
-        self,
-        mac_address: str,
-        fan_baselines: list[dict],
-        detected_at: str,
-    ) -> bool:
-        """POST to /api/v1/miners/stock-fans to record baseline RPMs and mark as stock."""
-        url = wright_api_v1_url(self.api_url, "miners", "stock-fans")
-        mac = normalize_mac_address(mac_address) or (mac_address or "").strip()
-        payload = {
-            "mac_address": mac,
-            "fan_baselines": fan_baselines,
-            "detected_at": detected_at,
-            "facility_id": self.facility_id,
-        }
-        try:
-            wire = encrypt_payload(payload, self.api_key)
-            resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)
-            resp.raise_for_status()
-            logger.info(
-                "Marked stock fans for miner %s (HTTP %d)",
-                mac, resp.status_code,
-            )
-            return True
-        except Exception as exc:
-            logger.warning("Failed to mark stock fans for miner %s: %s", mac, exc)
-            return False
+    def close(self) -> None:
+        self._session.close()
 
-    def mark_wright_fans(
-        self,
-        mac_address: str,
-        fan_positions: list[int],
-        detected_at: str,
-    ) -> bool:
-        """POST to /v1/miners/wright-fans to mark fans as Wright fans by MAC address."""
-        url = wright_api_v1_url(self.api_url, "miners", "wright-fans")
-        mac = normalize_mac_address(mac_address) or (mac_address or "").strip()
+
+    
+    def send_agent_config(self, config: dict[str, Any], agent_version: str) -> bool:
+        """POST agent config snapshot via the dedicated /v1/telemetry/agent-config endpoint."""
+        import platform
+        import time
+        url = wright_api_v1_url(self.api_url, "telemetry", "agent-config")
         payload = {
-            "mac_address": mac,
-            "fan_positions": fan_positions,
-            "detected_at": detected_at,
             "facility_id": self.facility_id,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "metric_type": "agent_config",
+            "data": {
+                "config": config,
+                "agent_version": agent_version,
+                "os": platform.platform(),
+                "time_running": 0,
+            },
         }
         try:
             wire = encrypt_payload(payload, self.api_key)
             resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)
             resp.raise_for_status()
-            logger.info(
-                "Marked %d Wright fans for miner %s (HTTP %d)",
-                len(fan_positions), mac, resp.status_code,
-            )
+            logger.info("Sent agent config snapshot (HTTP %d)", resp.status_code)
             return True
         except Exception as exc:
-            logger.warning("Failed to mark Wright fans for miner %s: %s", mac, exc)
+            logger.warning("Failed to send agent config snapshot: %s", exc)
             return False
 
     def send(self, payload: TelemetryPayload) -> bool:

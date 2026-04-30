@@ -26,15 +26,40 @@ from wright_telemetry.discovery import (
     run_interactive_range_scan,
 )
 
-CONFIG_DIR = Path.home() / ".wright-telemetry"
-CONFIG_FILE = CONFIG_DIR / "config.json"
+CONFIG_DIR = Path(os.environ["WRIGHT_CONFIG"]).parent if "WRIGHT_CONFIG" in os.environ else Path.home() / ".wright-telemetry"
+CONFIG_FILE = Path(os.environ["WRIGHT_CONFIG"]) if "WRIGHT_CONFIG" in os.environ else CONFIG_DIR / "config.json"
+
+
+def set_config_location(path: Path) -> None:
+    """Update the active config file path (and derived dir) at runtime."""
+    global CONFIG_FILE, CONFIG_DIR
+    CONFIG_FILE = path
+    CONFIG_DIR = path.parent
+
+
+def prompt_config_location() -> None:
+    """Ask the user where they want the config file saved and update the
+    active path.  Called once on first run before the setup wizard."""
+    print()
+    raw = _ask("Where would you like to save the config file?", default=str(CONFIG_FILE))
+    # Users sometimes paste shell-escaped paths (e.g. "My\ Folder") because
+    # they copied the path from a terminal.  Python's input() receives the
+    # backslashes literally, so unescape them here.
+    raw = raw.strip().replace("\\ ", " ")
+    chosen = Path(raw).expanduser().resolve()
+    if chosen.suffix.lower() != ".json":
+        chosen = chosen.with_suffix(".json")
+    set_config_location(chosen)
+    print(f"  Config will be saved to: {CONFIG_FILE}")
 
 SENSITIVE_MASK = "********"
 
 _DEFAULT_WRIGHT_API_URL = "https://api.wrightfan.com/api"
 _DEFAULT_POLL_INTERVAL = 30
-_DEFAULT_COLLECTOR_TYPE = "braiins"
+_DEFAULT_COLLECTOR_TYPES = ["braiins"]
 _DEFAULT_SCAN_INTERVAL = 300  # seconds between runtime re-scans
+
+_KNOWN_FIRMWARE_TYPES = ["braiins", "luxos", "vnish"]
 
 
 # ------------------------------------------------------------------
@@ -65,25 +90,10 @@ def mask_config(cfg: dict[str, Any]) -> dict[str, Any]:
     masked = copy.deepcopy(cfg)
     if "wright_api_key" in masked:
         masked["wright_api_key"] = SENSITIVE_MASK
-    for miner in masked.get("miners", []):
-        if "password_b64" in miner:
-            miner["password_b64"] = SENSITIVE_MASK
     discovery = masked.get("discovery", {})
     if "default_password_b64" in discovery:
         discovery["default_password_b64"] = SENSITIVE_MASK
     return masked
-
-
-def mark_miner_wright_fans(miner_url: str, wright_fans: bool = True) -> None:
-    """Set ``wright_fans`` on the miner matching *miner_url* and persist."""
-    cfg = load_config()
-    if cfg is None:
-        return
-    for miner in cfg.get("miners", []):
-        if miner.get("url") == miner_url:
-            miner["wright_fans"] = wright_fans
-            break
-    save_config(cfg)
 
 
 # ------------------------------------------------------------------
@@ -113,32 +123,7 @@ def decode_password(b64: str) -> str:
     return base64.b64decode(b64.encode("utf-8")).decode("utf-8")
 
 
-def _wizard_add_miner(index: int) -> dict[str, Any]:
-    """Walk the user through adding a single miner manually."""
-    print(f"\n--- Miner #{index + 1} ---")
-    name = _ask("Give this miner a friendly name (e.g. 'Rack A - Slot 3')")
-    url = _ask("Miner IP or URL (e.g. http://192.168.1.100)")
-    if url and not url.startswith("http"):
-        url = f"http://{url}"
-
-    print()
-    print("  If your miner requires a login, enter the credentials below.")
-    print("  Press Enter to skip if your miner has no password set.")
-    username = _ask("Miner username", default="root")
-    password = _ask_password("Miner password (hidden)")
-
-    miner: dict[str, Any] = {
-        "name": name,
-        "url": url,
-        "username": username,
-    }
-    if password:
-        miner["password_b64"] = _encode_password(password)
-
-    return miner
-
-
-def _wizard_range_scan(collector_type: str = _DEFAULT_COLLECTOR_TYPE) -> list[dict[str, Any]]:
+def _wizard_range_scan(collector_types: list[str] = _DEFAULT_COLLECTOR_TYPES) -> list[dict[str, Any]]:
     """Prompt for a CIDR block or IP range, scan it, return miner configs."""
     print()
     print("  Enter a CIDR block or IP range to scan for miners.")
@@ -162,7 +147,7 @@ def _wizard_range_scan(collector_type: str = _DEFAULT_COLLECTOR_TYPE) -> list[di
     print()
     print(f"  Scanning {target} for miners ({num_hosts} host(s))…")
     print("  Hang tight — probing each host for your selected firmware API.")
-    fw = firmware_types_for_collector(collector_type)
+    fw = firmware_types_for_collector(collector_types)
     found = run_interactive_range_scan(target, firmware_types=fw)
 
     if not found:
@@ -180,7 +165,7 @@ def _wizard_range_scan(collector_type: str = _DEFAULT_COLLECTOR_TYPE) -> list[di
 
 def _wizard_discovery(
     existing_discovery: Optional[dict[str, Any]] = None,
-    collector_type: str = _DEFAULT_COLLECTOR_TYPE,
+    collector_types: list[str] = _DEFAULT_COLLECTOR_TYPES,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Run the discovery portion of the setup wizard.
 
@@ -219,7 +204,7 @@ def _wizard_discovery(
     default_pw = _ask_password("Default password (hidden)")
     default_pw_b64 = _encode_password(default_pw) if default_pw else disc.get("default_password_b64", "")
 
-    fw = firmware_types_for_collector(collector_type)
+    fw = firmware_types_for_collector(collector_types)
 
     def _run_scan(scan_subnets: list[str]) -> list[Any]:
         print()
@@ -308,28 +293,67 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
             default=str(cfg.get("poll_interval_seconds", _DEFAULT_POLL_INTERVAL)),
         )
     )
-    cfg["collector_type"] = _ask(
-        "Collector type",
-        default=cfg.get("collector_type", _DEFAULT_COLLECTOR_TYPE),
+    # Backwards-compat: old configs stored a single string in collector_type
+    existing_types: list[str] = (
+        cfg.get("collector_types")
+        or ([cfg["collector_type"]] if cfg.get("collector_type") else _DEFAULT_COLLECTOR_TYPES)
     )
+    print()
+    print(f"  Available OS types: {', '.join(_KNOWN_FIRMWARE_TYPES)}")
+    print("  For mixed facilities (e.g. Braiins + LuxOS) enter multiple, comma-separated.")
+    raw_types = _ask(
+        "Collector OS type(s)",
+        default=", ".join(existing_types),
+    )
+    parsed_types = [t.strip().lower() for t in raw_types.split(",") if t.strip()]
+    valid_types = [t for t in parsed_types if t in _KNOWN_FIRMWARE_TYPES]
+    cfg["collector_types"] = valid_types if valid_types else list(_DEFAULT_COLLECTOR_TYPES)
+    # Remove the old key if present to avoid confusion
+    cfg.pop("collector_type", None)
+
+    # -- Consent --
+    cfg["consent"] = run_consent_wizard(cfg.get("consent"))
+
+    # -- Auto-update --
+    current_auto_update = not cfg.get("disable_auto_update", False)
+    status = "ON" if current_auto_update else "OFF"
+    default_ans = "y" if current_auto_update else "n"
+    print("-" * 60)
+    print(f"  Automatic Updates  (currently {status})")
+    print()
+    print("  Wright Telemetry can check for new releases every hour and")
+    print("  apply them automatically without any action on your part.")
+    print()
+    ans = _ask("Enable automatic updates? (y/n)", default=default_ans)
+    cfg["disable_auto_update"] = ans.lower() not in ("y", "yes")
+
+    # -- Summary --
+    from wright_telemetry.consent import METRICS
+    enabled = [METRICS[k]["label"] for k, v in cfg.get("consent", {}).items() if v]
+    print("\n" + "=" * 60)
+    if enabled:
+        print("  Enabled metrics: " + ", ".join(enabled))
+    else:
+        print("  No metrics enabled. The collector will run but won't send any data.")
+    print("  You can change these any time by running: wright-telemetry --setup")
+    print("=" * 60 + "\n")
+
+    # Save credentials, consent, and auto-update preference so the caller
+    # can POST the complete config before proceeding to miner discovery.
+    save_config(cfg)
+    return cfg
+
+
+def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Phase 2 of setup: miner discovery, auto-update, and final save."""
 
     # -- Miners --
     print("\n" + "-" * 60)
     print("  MINERS")
     print("-" * 60)
 
-    # Carry over manually-added miners from previous config
-    manual_miners = [m for m in cfg.get("miners", []) if not m.get("discovered")]
+    miners: list[dict[str, Any]] = []
 
-    if manual_miners:
-        print(f"\n  You have {len(manual_miners)} manually-added miner(s).")
-        keep = _ask("Keep existing manual miners? (y/n)", default="y")
-        if keep.lower() not in ("y", "yes"):
-            manual_miners = []
-
-    miners = list(manual_miners)
-
-    # Optional network discovery
     run_discovery = _ask(
         "\n  Scan your local network to discover miners automatically? (y/n)",
         default="y",
@@ -338,50 +362,20 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
         print()
         discovered_miners, discovery_cfg = _wizard_discovery(
             cfg.get("discovery"),
-            collector_type=cfg.get("collector_type", _DEFAULT_COLLECTOR_TYPE),
+            collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
         )
         cfg["discovery"] = discovery_cfg
         miners.extend(discovered_miners)
     else:
         cfg.setdefault("discovery", {})["enabled"] = False
 
-    # Optional manual entry — CIDR / range first, then individual
-    add_manual = _ask("Would you like to add miners manually? (y/n)", default="n")
-    if add_manual.lower() in ("y", "yes"):
+    scan_range = _ask("Would you like to scan a specific subnet or IP range? (y/n)", default="n")
+    if scan_range.lower() in ("y", "yes"):
         range_miners = _wizard_range_scan(
-            collector_type=cfg.get("collector_type", _DEFAULT_COLLECTOR_TYPE),
+            collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
         )
         miners.extend(range_miners)
 
-        if not range_miners:
-            add_individual = _ask("Add individual miners by IP? (y/n)", default="n")
-            if add_individual.lower() in ("y", "yes"):
-                while True:
-                    miner = _wizard_add_miner(len(miners))
-                    miners.append(miner)
-                    more = _ask("Add another miner? (y/n)", default="n")
-                    if more.lower() not in ("y", "yes"):
-                        break
-
-    cfg["miners"] = miners
-
-    # -- Consent --
-    cfg["consent"] = run_consent_wizard(cfg.get("consent"))
-
-    # -- Auto-update --
-    print("\n" + "-" * 60)
-    print("  AUTO-UPDATE")
-    print("-" * 60)
-    print()
-    print("  Wright Telemetry can check for new releases every hour and")
-    print("  apply them automatically without any action on your part.")
-    print()
-    current_auto_update = not cfg.get("disable_auto_update", False)
-    default_ans = "y" if current_auto_update else "n"
-    ans = _ask("Enable automatic updates? (y/n)", default=default_ans)
-    cfg["disable_auto_update"] = ans.lower() not in ("y", "yes")
-
-    # -- Save --
     save_config(cfg)
     print(f"\n  Configuration saved to {CONFIG_FILE}")
 

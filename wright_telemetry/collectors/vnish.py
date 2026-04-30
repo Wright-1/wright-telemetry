@@ -47,6 +47,9 @@ class VnishCollector(MinerCollector):
     # Authentication
     # ------------------------------------------------------------------
 
+    def close(self) -> None:
+        self._session.close()
+
     def authenticate(self) -> None:
         if not self.password:
             logger.debug("No Vnish password configured -- skipping auth for %s", self.url)
@@ -93,6 +96,7 @@ class VnishCollector(MinerCollector):
             serial_number=raw.get("serial", ""),
             hostname=raw.get("hostname", ""),
             mac_address=raw.get("mac", ""),
+            firmware="vnish",
         )
 
     # ------------------------------------------------------------------

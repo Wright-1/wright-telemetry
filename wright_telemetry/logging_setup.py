@@ -22,10 +22,8 @@ from typing import Any, Optional
 import requests
 
 from wright_telemetry import __version__
-from wright_telemetry.config import CONFIG_DIR
-
-LOG_DIR = CONFIG_DIR
-LOG_FILE = LOG_DIR / "collector.log"
+# LOG_DIR / LOG_FILE are resolved dynamically inside configure_logging so that
+# a runtime call to set_config_location() is reflected in the log file path.
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
 _LOKI_DEFAULT_URL = "https://logs.wrightfan.com/loki/api/v1/push"
@@ -119,6 +117,7 @@ class LokiHandler(logging.Handler):
         if self._timer:
             self._timer.cancel()
         self.flush()
+        self._session.close()
         super().close()
 
 
@@ -136,7 +135,10 @@ def configure_logging(
     level: int = logging.INFO,
 ) -> None:
     """Set up all log handlers (stdout, file, Loki)."""
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    from wright_telemetry.config import CONFIG_DIR
+    log_dir = CONFIG_DIR
+    log_file = log_dir / "collector.log"
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     root = logging.getLogger()
     root.setLevel(level)
@@ -154,7 +156,7 @@ def configure_logging(
 
     # -- Rotating file --
     file_handler = RotatingFileHandler(
-        str(LOG_FILE),
+        str(log_file),
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=3,
     )

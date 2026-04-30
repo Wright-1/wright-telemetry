@@ -141,6 +141,8 @@ class TestProbeVnish:
 
 class TestFirmwareTypesForCollector:
 
+    # --- legacy string path ---
+
     def test_braiins(self):
         assert firmware_types_for_collector("braiins") == ["braiins"]
 
@@ -152,6 +154,18 @@ class TestFirmwareTypesForCollector:
 
     def test_empty_defaults_to_braiins(self):
         assert firmware_types_for_collector("") == ["braiins"]
+
+    # --- list path (multi-OS facilities) ---
+
+    def test_list_known_types_normalised(self):
+        # case and whitespace should be normalised; all known types accepted
+        assert firmware_types_for_collector(["BRAIINS", " luxos ", "vnish"]) == ["braiins", "luxos", "vnish"]
+
+    def test_list_filters_unknown_and_empty(self):
+        # unknown strings and empty entries are dropped; all-unknown → None
+        assert firmware_types_for_collector(["braiins", "future-fw", ""]) == ["braiins"]
+        assert firmware_types_for_collector(["future-fw"]) is None
+        assert firmware_types_for_collector([]) is None
 
 
 # ---------------------------------------------------------------
@@ -241,22 +255,34 @@ class TestDiscoveredToMinerCfgs:
 class TestDefaultSubnets:
 
     def test_returns_list(self):
-        result = default_subnets()
+        fake_infos = [(None, None, None, None, ("10.0.0.1", 0))]
+        with patch("socket.getaddrinfo", return_value=fake_infos):
+            with patch("wright_telemetry.discovery.get_local_ip", return_value=None):
+                result = default_subnets()
         assert isinstance(result, list)
 
     def test_no_loopback(self):
-        result = default_subnets()
+        fake_infos = [(None, None, None, None, ("10.0.0.1", 0)), (None, None, None, None, ("127.0.0.1", 0))]
+        with patch("socket.getaddrinfo", return_value=fake_infos):
+            with patch("wright_telemetry.discovery.get_local_ip", return_value=None):
+                result = default_subnets()
         for subnet in result:
             assert not subnet.startswith("127.")
 
     def test_all_valid_cidr24(self):
-        result = default_subnets()
+        fake_infos = [(None, None, None, None, ("10.0.0.1", 0))]
+        with patch("socket.getaddrinfo", return_value=fake_infos):
+            with patch("wright_telemetry.discovery.get_local_ip", return_value=None):
+                result = default_subnets()
         for subnet in result:
             net = ipaddress.IPv4Network(subnet, strict=False)
             assert net.prefixlen == 24
 
     def test_no_duplicates(self):
-        result = default_subnets()
+        fake_infos = [(None, None, None, None, ("10.0.0.1", 0)), (None, None, None, None, ("10.0.0.2", 0))]
+        with patch("socket.getaddrinfo", return_value=fake_infos):
+            with patch("wright_telemetry.discovery.get_local_ip", return_value=None):
+                result = default_subnets()
         assert len(result) == len(set(result))
 
     def test_uses_getaddrinfo_result(self):
