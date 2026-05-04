@@ -18,7 +18,13 @@ import logging
 import os
 import sys
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
 from wright_telemetry import __version__
+
+console = Console()
 from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.config import CONFIG_DIR, load_config, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
 from wright_telemetry.logging_setup import configure_logging
@@ -28,16 +34,20 @@ from wright_telemetry.updater import check_for_update
 
 def _print_help_menu() -> None:
     """Print a formatted list of available commands."""
-    print("\n  ┌─ Wright Telemetry — Available Commands ───────────────────────────────────┐")
-    print("  │  wright-telemetry                         Start the collector              │")
-    print("  │  wright-telemetry --setup                 Re-run the setup wizard          │")
-    print("  │  wright-telemetry --detect-wright-fans    Start Wright Fan detection mode  │")
-    print("  │  wright-telemetry --discover              Scan all local subnets for miners│")
-    print("  │  wright-telemetry --subnets-file FILE     Import VLANs from file and scan  │")
-    print("  │  wright-telemetry --install               Install as a background service  │")
-    print("  │  wright-telemetry --uninstall             Remove the background service    │")
-    print("  │  wright-telemetry --version               Print version and exit           │")
-    print("  └────────────────────────────────────────────────────────────────────────────┘\n")
+    table = Table(box=None, show_header=False, padding=(0, 2), expand=False)
+    table.add_column("Command", style="cyan bold", no_wrap=True)
+    table.add_column("Description")
+    table.add_row("wright-telemetry", "Start the collector")
+    table.add_row("wright-telemetry --setup", "Re-run the setup wizard")
+    table.add_row("wright-telemetry --detect-wright-fans", "Start Wright Fan detection mode")
+    table.add_row("wright-telemetry --discover", "Scan all local subnets for miners")
+    table.add_row("wright-telemetry --subnets-file FILE", "Import VLANs from file and scan")
+    table.add_row("wright-telemetry --install", "Install as a background service")
+    table.add_row("wright-telemetry --uninstall", "Remove the background service")
+    table.add_row("wright-telemetry --version", "Print version and exit")
+    console.print()
+    console.print(Panel(table, title="[bold]Wright Telemetry — Available Commands[/]", style="cyan"))
+    console.print()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -239,9 +249,9 @@ def main() -> None:
 
         run_baseline_collection(cfg)
         _print_help_menu()
-        print("  Wright Fan detection mode monitors fan RPM for dips that indicate Wright")
-        print("  fans are installed. You can start it anytime with:")
-        print("    wright-telemetry --detect-wright-fans\n")
+        console.print("  Wright Fan detection mode monitors fan RPM for dips that indicate Wright")
+        console.print("  fans are installed. You can start it anytime with:")
+        console.print("  [cyan bold]wright-telemetry --detect-wright-fans[/]\n")
 
     if args.detect_wright_fans:
         from wright_telemetry.scheduler import run_fan_detection

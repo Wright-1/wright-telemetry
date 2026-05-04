@@ -7,7 +7,24 @@ exactly what is collected and why.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
+
+import questionary
+from rich.console import Console
+from rich.panel import Panel
+
+console = Console()
+
+_WIZARD_STYLE = questionary.Style([
+    ("qmark",       "fg:#22d3ee bold"),
+    ("question",    "bold"),
+    ("answer",      "fg:#22d3ee"),
+    ("pointer",     "fg:#22d3ee bold"),
+    ("highlighted", "fg:#22d3ee bold"),
+    ("selected",    "fg:#4ade80"),
+    ("instruction", "fg:#6b7280 italic"),
+])
 
 METRICS: dict[str, dict[str, str]] = {
     "cooling": {
@@ -86,36 +103,37 @@ def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, boo
     """
     consent = dict(existing) if existing else dict(DEFAULT_CONSENT)
 
-    print("\n" + "=" * 60)
-    print("  DATA SHARING PREFERENCES")
-    print("=" * 60)
-    print(
+
+    console.print()
+    console.print(Panel(
+        "[bold]DATA SHARING PREFERENCES[/]",
+        style="cyan",
+        expand=False,
+    ))
+    console.print(
         "\nWright Telemetry collects data from your miner to power your\n"
-        "dashboard.  Every category below is OFF by default.  We'll\n"
+        "dashboard.  Every category below is [bold]OFF[/] by default.  We'll\n"
         "explain exactly what each one does so you can decide.\n"
     )
 
     for key, info in METRICS.items():
         current = consent.get(key, False)
-        status = "ON" if current else "OFF"
-        print("-" * 60)
-        print(f"  {info['label']}  (currently {status})")
-        print(f"  API call: {info['endpoint']}")
-        print()
-        print(f"  {info['description']}")
-        print()
+        status_str = "[bold green]ON[/]" if current else "[dim]OFF[/]"
+        console.print()
+        console.rule(f"[bold]{info['label']}[/]  {status_str}")
+        console.print(f"\n  [dim]API call:[/] [cyan]{info['endpoint']}[/]\n")
+        for line in info["description"].split("\n"):
+            console.print(f"  {line}")
+        console.print()
 
-        while True:
-            answer = input(f"  Enable {info['label']}? (y/n) [{('Y/n' if current else 'y/N')}]: ").strip().lower()
-            if answer == "":
-                break  # keep current value
-            if answer in ("y", "yes"):
-                consent[key] = True
-                break
-            if answer in ("n", "no"):
-                consent[key] = False
-                break
-            print("  Please enter 'y' or 'n'.")
+        result = questionary.confirm(
+            f"Enable {info['label']}?",
+            default=current,
+            style=_WIZARD_STYLE,
+        ).ask()
+        if result is None:
+            sys.exit(0)
+        consent[key] = result
 
     return consent
 
