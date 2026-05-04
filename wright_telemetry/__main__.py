@@ -162,12 +162,21 @@ def main() -> None:
     # Load or create config
     cfg = load_config()
 
-    # Backfill remote_config consent for users who set up before it existed.
-    # They were never asked, so default to True so support can help them.
-    if cfg and "consent" in cfg and "remote_config" not in cfg["consent"]:
-        from wright_telemetry.config import save_config as _save
-        cfg["consent"]["remote_config"] = True
-        _save(cfg)
+    # Backfill consent fields that were added after the initial release so
+    # existing configs are not forced through setup again.
+    if cfg and "consent" in cfg:
+        _needs_save = False
+        if "remote_config" not in cfg["consent"]:
+            # Pre-existing users were implicitly opted in, so keep them opted in.
+            cfg["consent"]["remote_config"] = True
+            _needs_save = True
+        if "auto_update" not in cfg["consent"]:
+            # Derive from the old top-level flag; default ON if flag was absent.
+            cfg["consent"]["auto_update"] = not cfg.get("disable_auto_update", True)
+            _needs_save = True
+        if _needs_save:
+            from wright_telemetry.config import save_config as _save
+            _save(cfg)
 
     # If an existing config is missing required fields, notify and re-run setup.
     if cfg is not None and not args.setup:

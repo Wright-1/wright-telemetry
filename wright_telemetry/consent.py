@@ -72,6 +72,20 @@ METRICS: dict[str, dict[str, str]] = {
             "failures and automatically file support reports on your behalf."
         ),
     },
+    "auto_update": {
+        "label": "Automatic Updates",
+        "endpoint": "GitHub Releases API",
+        "description": (
+            "Allows Wright One to automatically download and apply new versions\n"
+            "of this agent in the background. Checks run hourly and require no\n"
+            "action on your part.\n"
+            "\n"
+            "By enabling this, you authorize Wright One to push code changes to\n"
+            "your machine at any time. Wright One commits to ensuring that every\n"
+            "update respects your data-sharing preferences and consent settings,\n"
+            "and will never alter the metrics you have enabled or disabled here."
+        ),
+    },
     "remote_config": {
         "label": "Remote Configuration",
         "endpoint": "WebSocket command channel",
@@ -116,7 +130,11 @@ def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, boo
         "explain exactly what each one does so you can decide.\n"
     )
 
-    for key, info in METRICS.items():
+    keys = list(METRICS.keys())
+    i = 0
+    while i < len(keys):
+        key = keys[i]
+        info = METRICS[key]
         current = consent.get(key, False)
         status_str = "[bold green]ON[/]" if current else "[dim]OFF[/]"
         console.print()
@@ -126,14 +144,27 @@ def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, boo
             console.print(f"  {line}")
         console.print()
 
-        result = questionary.confirm(
+        choices = ["Yes", "No"]
+        if i > 0:
+            choices.append("← Go back")
+
+        result = questionary.select(
             f"Enable {info['label']}?",
-            default=current,
+            choices=choices,
+            default="Yes" if current else "No",
             style=_WIZARD_STYLE,
         ).ask()
+
         if result is None:
             sys.exit(0)
-        consent[key] = result
+        elif result == "← Go back":
+            i -= 1
+        elif result == "Yes":
+            consent[key] = True
+            i += 1
+        else:
+            consent[key] = False
+            i += 1
 
     return consent
 

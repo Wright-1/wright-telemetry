@@ -439,18 +439,8 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     # -- Consent --
     cfg["consent"] = run_consent_wizard(cfg.get("consent"))
 
-    # -- Auto-update --
-    current_auto_update = not cfg.get("disable_auto_update", False)
-    status_str = "[bold green]ON[/]" if current_auto_update else "[bold red]OFF[/]"
-    console.print()
-    console.rule("[bold]Automatic Updates[/]")
-    console.print()
-    console.print(f"  Automatic updates are currently {status_str}.")
-    console.print()
-    console.print("  Wright Telemetry can check for new releases every hour and")
-    console.print("  apply them automatically without any action on your part.")
-    console.print()
-    cfg["disable_auto_update"] = not _confirm("Enable automatic updates?", default=current_auto_update)
+    # -- Auto-update: derived from consent so updater.py needs no changes --
+    cfg["disable_auto_update"] = not cfg["consent"].get("auto_update", False)
 
     # -- Summary --
     from wright_telemetry.consent import METRICS
