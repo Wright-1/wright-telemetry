@@ -33,34 +33,100 @@ from wright_telemetry.discovery import (
     run_interactive_range_scan,
 )
 
-CONFIG_DIR = Path(os.environ["WRIGHT_CONFIG"]).parent if "WRIGHT_CONFIG" in os.environ else Path.home() / ".wright-telemetry"
-CONFIG_FILE = Path(os.environ["WRIGHT_CONFIG"]) if "WRIGHT_CONFIG" in os.environ else CONFIG_DIR / "config.json"
+_DEFAULT_CONFIG_DIR = Path.home() / ".wright-telemetry"
+_CONFIG_POINTER = _DEFAULT_CONFIG_DIR / ".config_path"
+
+if "WRIGHT_CONFIG" in os.environ:
+    CONFIG_DIR = Path(os.environ["WRIGHT_CONFIG"]).parent
+    CONFIG_FILE = Path(os.environ["WRIGHT_CONFIG"])
+elif _CONFIG_POINTER.exists():
+    CONFIG_FILE = Path(_CONFIG_POINTER.read_text().strip())
+    CONFIG_DIR = CONFIG_FILE.parent
+else:
+    CONFIG_DIR = _DEFAULT_CONFIG_DIR
+    CONFIG_FILE = CONFIG_DIR / "config.json"
 
 
 console = Console()
 
 
 def set_config_location(path: Path) -> None:
-    """Update the active config file path (and derived dir) at runtime."""
+    """Update the active config file path (and derived dir) at runtime, and
+    persist the choice so future runs start from the same location."""
     global CONFIG_FILE, CONFIG_DIR
     CONFIG_FILE = path
     CONFIG_DIR = path.parent
+    _DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _CONFIG_POINTER.write_text(str(path))
 
 
-def prompt_config_location() -> None:
-    """Ask the user where they want the config file saved and update the
-    active path.  Called once on first run before the setup wizard."""
+def prompt_config_location(force: bool = False) -> None:
+    """Use the default config if it exists, otherwise ask where to create one.
+    Pass ``force=True`` (via --set-config) to always show the selection UI."""
     console.print()
-    raw = _ask("Where would you like to save the config file?", default=str(CONFIG_FILE))
-    # Users sometimes paste shell-escaped paths (e.g. "My\ Folder") because
-    # they copied the path from a terminal.  Python's input() receives the
-    # backslashes literally, so unescape them here.
-    raw = raw.strip().replace("\\ ", " ")
-    chosen = Path(raw).expanduser().resolve()
-    if chosen.suffix.lower() != ".json":
-        chosen = chosen.with_suffix(".json")
-    set_config_location(chosen)
-    console.print(f"  Config will be saved to: [cyan]{CONFIG_FILE}[/]")
+
+    if not force and CONFIG_FILE.exists():
+        console.print(f"  Found existing config at [cyan]{CONFIG_FILE}[/]")
+        console.print(f"  [dim]To choose a different config file, run: [cyan]{sys.argv[0]} --set-config[/][/]")
+        return
+
+    console.print(
+        "  The [bold]config file[/] stores your Wright Fan API credentials, miner\n"
+        "  settings, and discovery preferences. It is read each time the\n"
+        "  collector starts."
+    )
+    console.print()
+
+    if CONFIG_FILE.exists():
+        choices = [
+            Choice(f"Keep using current config  ({CONFIG_FILE})", value="existing"),
+            Choice("Use or create at a specific path", value="custom"),
+        ]
+    else:
+        choices = [
+            Choice(f"Create at default path  ({CONFIG_FILE})", value="default"),
+            Choice("Use or create at a specific path", value="custom"),
+        ]
+
+    selection = questionary.select(
+        "Config file:",
+        choices=choices,
+        style=_WIZARD_STYLE,
+    ).ask()
+    if selection is None:
+        sys.exit(0)
+
+    if selection in ("existing", "default"):
+        console.print(f"  Using config at: [cyan]{CONFIG_FILE}[/]")
+        return
+
+    console.print("  [dim]Enter a path to an existing config to load it, or a new path to create one there.[/]")
+    while True:
+        # Users sometimes paste shell-escaped paths (e.g. "My\ Folder") because
+        # they copied the path from a terminal.  Python's input() receives the
+        # backslashes literally, so unescape them here.
+        raw = _ask("Config file path", default=str(CONFIG_FILE))
+        raw = raw.strip().replace("\\ ", " ")
+        chosen = Path(raw).expanduser().resolve()
+        if chosen.is_dir():
+            chosen = chosen / "config.json"
+        elif chosen.suffix.lower() != ".json":
+            chosen = chosen.with_suffix(".json")
+
+        if not chosen.parent.exists():
+            console.print(f"  [red]Directory does not exist: {chosen.parent}  — please enter a valid path.[/]")
+            continue
+
+        if chosen.exists():
+            console.print(f"  Found existing config at: [cyan]{chosen}[/]")
+            if _confirm("Use this config?", default=True):
+                set_config_location(chosen)
+                break
+        else:
+            console.print(f"  No config found at [cyan]{chosen}[/] — a new config will be created there.")
+            if _confirm("Create config here?", default=True):
+                set_config_location(chosen)
+                break
 
 SENSITIVE_MASK = "********"
 

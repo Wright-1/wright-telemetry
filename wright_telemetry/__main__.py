@@ -56,6 +56,7 @@ def _parse_args() -> argparse.Namespace:
         description="Collects miner telemetry and sends it to the Wright Fan dashboard.",
     )
     parser.add_argument("--setup", action="store_true", help="Re-run the setup wizard")
+    parser.add_argument("--set-config", action="store_true", help="Choose or create the config file interactively")
     parser.add_argument("--discover", action="store_true", help="Scan all local subnets for miners and exit")
     parser.add_argument("--subnets-file", metavar="FILE", help="Import VLANs from a text file (one CIDR per line), save to config, and scan")
     parser.add_argument("--install", action="store_true", help="Install as a background service")
@@ -155,8 +156,8 @@ def main() -> None:
     # Ask where the config file lives before we try to load it.
     # Skipped when WRIGHT_CONFIG env var is already set (service installs,
     # CI) or when stdin is not a TTY (running non-interactively).
-    if "WRIGHT_CONFIG" not in os.environ and sys.stdin.isatty():
-        prompt_config_location()
+    if sys.stdin.isatty() and (args.set_config or ("WRIGHT_CONFIG" not in os.environ)):
+        prompt_config_location(force=args.set_config)
 
     # Load or create config
     cfg = load_config()
