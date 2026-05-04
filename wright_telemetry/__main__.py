@@ -26,7 +26,7 @@ from wright_telemetry import __version__
 
 console = Console()
 from wright_telemetry.api_client import WrightAPIClient
-from wright_telemetry.config import CONFIG_DIR, load_config, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
+from wright_telemetry.config import CONFIG_DIR, is_config_complete, load_config, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
 from wright_telemetry.updater import check_for_update
@@ -168,6 +168,20 @@ def main() -> None:
         from wright_telemetry.config import save_config as _save
         cfg["consent"]["remote_config"] = True
         _save(cfg)
+
+    # If an existing config is missing required fields, notify and re-run setup.
+    if cfg is not None and not args.setup:
+        complete, missing = is_config_complete(cfg)
+        if not complete:
+            console.print()
+            console.print(Panel(
+                "[bold]Incomplete configuration[/] — the following required fields are missing or empty:\n\n"
+                + "\n".join(f"  • [cyan]{f}[/]" for f in missing)
+                + "\n\n[dim]The setup wizard will run to fill them in.[/]",
+                style="yellow",
+                expand=False,
+            ))
+            args.setup = True
 
     ran_setup = cfg is None or args.setup
 

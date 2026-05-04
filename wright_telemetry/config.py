@@ -133,7 +133,7 @@ SENSITIVE_MASK = "********"
 _DEFAULT_WRIGHT_API_URL = "https://api.wrightfan.com/api"
 _DEFAULT_POLL_INTERVAL = 30
 _DEFAULT_COLLECTOR_TYPES = ["braiins"]
-_DEFAULT_SCAN_INTERVAL = 300  # seconds between runtime re-scans
+_DEFAULT_SCAN_INTERVAL = 30   # seconds between runtime re-scans
 
 _KNOWN_FIRMWARE_TYPES = ["braiins", "luxos", "vnish"]
 
@@ -141,6 +141,15 @@ _KNOWN_FIRMWARE_TYPES = ["braiins", "luxos", "vnish"]
 # ------------------------------------------------------------------
 # Load / save
 # ------------------------------------------------------------------
+
+_REQUIRED_FIELD_LABELS: dict[str, str] = {
+    "wright_api_key":        "Wright Fan API Key",
+    "wright_api_url":        "Wright Fan API URL",
+    "facility_id":           "Facility ID",
+    "poll_interval_seconds": "Poll Interval",
+    "collector_types":       "Collector OS Types",
+    "consent":               "Data Sharing Preferences",
+}
 
 def load_config() -> Optional[dict[str, Any]]:
     """Load config from disk. Returns None if the file doesn't exist."""
@@ -161,6 +170,31 @@ def save_config(cfg: dict[str, Any]) -> None:
         pass
 
 
+def is_config_complete(cfg: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Return ``(complete, missing_labels)`` for *cfg*.
+
+    *missing_labels* contains human-readable names for any required fields
+    that are absent or empty, so callers can surface them to the user.
+    """
+    missing: list[str] = []
+
+    for key in ("wright_api_key", "wright_api_url", "facility_id"):
+        if not str(cfg.get(key, "")).strip():
+            missing.append(_REQUIRED_FIELD_LABELS[key])
+
+    if not cfg.get("poll_interval_seconds"):
+        missing.append(_REQUIRED_FIELD_LABELS["poll_interval_seconds"])
+
+    types = cfg.get("collector_types")
+    if not types or not isinstance(types, list):
+        missing.append(_REQUIRED_FIELD_LABELS["collector_types"])
+
+    if not isinstance(cfg.get("consent"), dict):
+        missing.append(_REQUIRED_FIELD_LABELS["consent"])
+
+    return len(missing) == 0, missing
+
+
 def mask_config(cfg: dict[str, Any]) -> dict[str, Any]:
     """Return a deep copy of *cfg* with sensitive fields replaced."""
     masked = copy.deepcopy(cfg)
@@ -176,8 +210,13 @@ def mask_config(cfg: dict[str, Any]) -> dict[str, Any]:
 # Setup wizard
 # ------------------------------------------------------------------
 
-def _ask(prompt: str, default: str = "") -> str:
-    answer = questionary.text(prompt, default=default, style=_WIZARD_STYLE).ask()
+def _require_nonempty(val: str) -> bool | str:
+    return True if val.strip() else "This field is required."
+
+
+
+def _ask(prompt: str, default: str = "", validate=None) -> str:
+    answer = questionary.text(prompt, default=default, style=_WIZARD_STYLE, validate=validate).ask()
     if answer is None:
         sys.exit(0)
     return answer
@@ -283,10 +322,7 @@ def _wizard_discovery(
         console.print("  [yellow]No subnets specified — skipping discovery.[/]")
         return [], disc
 
-    scan_interval = int(_ask(
-        "Re-scan interval in seconds (0 = disable runtime re-scan)",
-        default=str(disc.get("scan_interval_seconds", _DEFAULT_SCAN_INTERVAL)),
-    ))
+    scan_interval = _DEFAULT_SCAN_INTERVAL
 
     console.print()
     console.print("  [bold]Default credentials[/] applied to every discovered miner.")
@@ -363,6 +399,7 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     cfg["wright_api_key"] = _ask(
         "Wright Fan API Key",
         default=cfg.get("wright_api_key", ""),
+        validate=_require_nonempty,
     )
     console.print()
     console.print("  Wright Fan API URL: use the API base from the portal")
@@ -371,17 +408,14 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     cfg["wright_api_url"] = _ask(
         "Wright Fan API URL",
         default=cfg.get("wright_api_url", _DEFAULT_WRIGHT_API_URL),
+        validate=_require_nonempty,
     )
     cfg["facility_id"] = _ask(
         "Facility ID",
         default=cfg.get("facility_id", ""),
+        validate=_require_nonempty,
     )
-    cfg["poll_interval_seconds"] = int(
-        _ask(
-            "Poll interval in seconds",
-            default=str(cfg.get("poll_interval_seconds", _DEFAULT_POLL_INTERVAL)),
-        )
-    )
+    cfg["poll_interval_seconds"] = cfg.get("poll_interval_seconds", _DEFAULT_POLL_INTERVAL)
     # Backwards-compat: old configs stored a single string in collector_type
     existing_types: list[str] = (
         cfg.get("collector_types")
@@ -394,7 +428,7 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     selected_types = questionary.checkbox(
         "Collector OS type(s):",
         choices=[Choice(fw, checked=(fw in existing_types)) for fw in _KNOWN_FIRMWARE_TYPES],
-        style=_WIZARD_STYLE,
+        instruction="(space to select, enter to confirm)",
     ).ask()
     if selected_types is None:
         sys.exit(0)
