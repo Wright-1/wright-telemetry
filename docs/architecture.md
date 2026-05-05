@@ -203,7 +203,7 @@ Headers:
 Body: {"nonce": "...", "ciphertext": "..."}
 ```
 
-`wright_api_url` must be the full API base URL for your environment (the collector appends `/v1/telemetry`, `/v1/ws/agent`, and so on). Production is typically `https://api.wrightfan.com`; development often uses `https://dev.wrightfan.com/api`, with `/api` included in the configured base rather than in those path suffixes.
+`wright_api_url` must be the full API base URL for your environment (the collector appends `/v1/telemetry`, `/v1/ws/agent`, and so on). Production is typically `https://api.wrightfan.com`; development often uses `https://api.dev.wrightfan.com/api`, with `/api` included in the configured base rather than in those path suffixes.
 
 Decrypted payload structure:
 

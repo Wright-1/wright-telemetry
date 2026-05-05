@@ -7,7 +7,24 @@ exactly what is collected and why.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
+
+import questionary
+from rich.console import Console
+from rich.panel import Panel
+
+console = Console()
+
+_WIZARD_STYLE = questionary.Style([
+    ("qmark",       "fg:#22d3ee bold"),
+    ("question",    "bold"),
+    ("answer",      "fg:#22d3ee"),
+    ("pointer",     "fg:#22d3ee bold"),
+    ("highlighted", "fg:#22d3ee bold"),
+    ("selected",    "fg:#4ade80"),
+    ("instruction", "fg:#6b7280 italic"),
+])
 
 METRICS: dict[str, dict[str, str]] = {
     "cooling": {
@@ -55,6 +72,20 @@ METRICS: dict[str, dict[str, str]] = {
             "failures and automatically file support reports on your behalf."
         ),
     },
+    "auto_update": {
+        "label": "Automatic Updates",
+        "endpoint": "GitHub Releases API",
+        "description": (
+            "Allows Wright One to automatically download and apply new versions\n"
+            "of this agent in the background. Checks run hourly and require no\n"
+            "action on your part.\n"
+            "\n"
+            "By enabling this, you authorize Wright One to push code changes to\n"
+            "your machine at any time. Wright One commits to ensuring that every\n"
+            "update respects your data-sharing preferences and consent settings,\n"
+            "and will never alter the metrics you have enabled or disabled here."
+        ),
+    },
     "remote_config": {
         "label": "Remote Configuration",
         "endpoint": "WebSocket command channel",
@@ -86,36 +117,54 @@ def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, boo
     """
     consent = dict(existing) if existing else dict(DEFAULT_CONSENT)
 
-    print("\n" + "=" * 60)
-    print("  DATA SHARING PREFERENCES")
-    print("=" * 60)
-    print(
+
+    console.print()
+    console.print(Panel(
+        "[bold]DATA SHARING PREFERENCES[/]",
+        style="cyan",
+        expand=False,
+    ))
+    console.print(
         "\nWright Telemetry collects data from your miner to power your\n"
-        "dashboard.  Every category below is OFF by default.  We'll\n"
+        "dashboard.  Every category below is [bold]OFF[/] by default.  We'll\n"
         "explain exactly what each one does so you can decide.\n"
     )
 
-    for key, info in METRICS.items():
+    keys = list(METRICS.keys())
+    i = 0
+    while i < len(keys):
+        key = keys[i]
+        info = METRICS[key]
         current = consent.get(key, False)
-        status = "ON" if current else "OFF"
-        print("-" * 60)
-        print(f"  {info['label']}  (currently {status})")
-        print(f"  API call: {info['endpoint']}")
-        print()
-        print(f"  {info['description']}")
-        print()
+        status_str = "[bold green]ON[/]" if current else "[dim]OFF[/]"
+        console.print()
+        console.rule(f"[bold]{info['label']}[/]  {status_str}")
+        console.print(f"\n  [dim]API call:[/] [cyan]{info['endpoint']}[/]\n")
+        for line in info["description"].split("\n"):
+            console.print(f"  {line}")
+        console.print()
 
-        while True:
-            answer = input(f"  Enable {info['label']}? (y/n) [{('Y/n' if current else 'y/N')}]: ").strip().lower()
-            if answer == "":
-                break  # keep current value
-            if answer in ("y", "yes"):
-                consent[key] = True
-                break
-            if answer in ("n", "no"):
-                consent[key] = False
-                break
-            print("  Please enter 'y' or 'n'.")
+        choices = ["Yes", "No"]
+        if i > 0:
+            choices.append("← Go back")
+
+        result = questionary.select(
+            f"Enable {info['label']}?",
+            choices=choices,
+            default="Yes" if current else "No",
+            style=_WIZARD_STYLE,
+        ).ask()
+
+        if result is None:
+            sys.exit(0)
+        elif result == "← Go back":
+            i -= 1
+        elif result == "Yes":
+            consent[key] = True
+            i += 1
+        else:
+            consent[key] = False
+            i += 1
 
     return consent
 

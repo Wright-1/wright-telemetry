@@ -18,26 +18,125 @@ import logging
 import os
 import sys
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
 from wright_telemetry import __version__
+
+console = Console()
 from wright_telemetry.api_client import WrightAPIClient
-from wright_telemetry.config import CONFIG_DIR, load_config, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
+from wright_telemetry.config import CONFIG_DIR, is_config_complete, load_config, print_config_summary, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
 from wright_telemetry.updater import check_for_update
 
 
+def _print_welcome_banner(cfg: dict, version: str) -> None:
+    """Clear the terminal and render a full-screen welcome banner."""
+    import shutil
+    import pyfiglet
+    from rich.align import Align
+    from rich.text import Text
+    from rich import box as rich_box
+
+    term_w, term_h = shutil.get_terminal_size((120, 40))
+    facility = cfg.get("facility_id") or "—"
+    api_url  = cfg.get("wright_api_url") or "—"
+
+    # ── ASCII art ────────────────────────────────────────────────────────────────
+    art = (
+        pyfiglet.figlet_format("WRIGHT", font="ansi_shadow").rstrip()
+        + "\n"
+        + pyfiglet.figlet_format("DATA",   font="ansi_shadow").rstrip()
+    )
+    art_renderable = Align.center(Text(art, style="bold cyan"))
+    tagline         = Align.center(Text(
+        f"v{version}  ·  Miner telemetry collector by Wright One",
+        style="dim",
+    ))
+
+    # ── three info columns ──────────────────────────────────────────────────────
+    # No explicit \n in body text — Rich wraps naturally at panel width.
+    what_txt = (
+        "[bold cyan]What this does[/]\n\n"
+        "Runs on any machine on the same local network as your miners. "
+        "Connects to each rig\u2019s built-in API (Braiins OS, LuxOS, Vnish), "
+        "reads the metrics [bold]you choose[/] to share, and streams them "
+        "securely to your [cyan]Wright Fan dashboard[/] \u2014 real-time visibility, "
+        "predictive fan-failure alerts, and efficiency analytics."
+    )
+    consent_txt = (
+        "[bold cyan]Your data, your choice[/]\n\n"
+        "Every metric is [bold]OFF by default[/]. "
+        "The setup wizard explains each one before you enable it. "
+        "Change your choices any time with [cyan]wright-telemetry --setup[/].\n\n"
+        "[dim]\u2022 Passwords never leave this machine\n"
+        "\u2022 AES-256-GCM encrypted before transit\n"
+        "\u2022 Read-only \u2014 never controls your miners[/]"
+    )
+    oss_txt = (
+        "[bold cyan]Open source[/]\n\n"
+        "Software running on your hardware should be [bold]auditable[/]. "
+        "No black boxes, no hidden calls home. "
+        "Read every line, fork it, or contribute:\n\n"
+        "[cyan]github.com/Wright-1/wright-telemetry[/]"
+    )
+
+    # Single outer panel keeps all three columns the same height.
+    inner = Table(box=rich_box.SIMPLE, expand=True, show_header=False,
+                  padding=(0, 2), pad_edge=False, border_style="dim cyan")
+    inner.add_column(ratio=1, vertical="top")
+    inner.add_column(ratio=1, vertical="top")
+    inner.add_column(ratio=1, vertical="top")
+    inner.add_row(what_txt, consent_txt, oss_txt)
+    cols = Panel(inner, border_style="cyan", padding=(1, 1))
+
+    # ── session footer ───────────────────────────────────────────────────────────
+    session_line = Align.center(
+        f"[dim]Facility[/] [cyan]{facility}[/]  [dim]·[/]  [dim]API[/] [cyan]{api_url}[/]  "
+        f"[dim]·  Run [/][cyan bold]wright-telemetry --setup[/][dim] to change settings[/]"
+    )
+
+    # ── vertical centering ──────────────────────────────────────────────────────
+    # art=14, tagline=1, gap=1, rule=1, gap=1, cols=13, gap=1, rule=1, gap=1, footer=1 => ~35
+    content_lines = 35
+    top_pad = max(1, (term_h - content_lines) // 3)
+
+    # ── render ───────────────────────────────────────────────────────────────────
+    console.clear()
+    console.print("\n" * top_pad, end="")
+    console.print(art_renderable)
+    console.print()
+    console.print(tagline)
+    console.print()
+    console.rule(style="dim cyan")
+    console.print()
+    console.print(cols)
+    console.print()
+    console.rule(style="dim cyan")
+    console.print()
+    console.print(session_line)
+    console.print()
+
+
 def _print_help_menu() -> None:
     """Print a formatted list of available commands."""
-    print("\n  ┌─ Wright Telemetry — Available Commands ───────────────────────────────────┐")
-    print("  │  wright-telemetry                         Start the collector              │")
-    print("  │  wright-telemetry --setup                 Re-run the setup wizard          │")
-    print("  │  wright-telemetry --detect-wright-fans    Start Wright Fan detection mode  │")
-    print("  │  wright-telemetry --discover              Scan all local subnets for miners│")
-    print("  │  wright-telemetry --subnets-file FILE     Import VLANs from file and scan  │")
-    print("  │  wright-telemetry --install               Install as a background service  │")
-    print("  │  wright-telemetry --uninstall             Remove the background service    │")
-    print("  │  wright-telemetry --version               Print version and exit           │")
-    print("  └────────────────────────────────────────────────────────────────────────────┘\n")
+    table = Table(box=None, show_header=False, padding=(0, 2), expand=False)
+    table.add_column("Command", style="cyan bold", no_wrap=True)
+    table.add_column("Description")
+    table.add_row("wright-telemetry", "Start the collector")
+    table.add_row("wright-telemetry --setup", "Re-run the setup wizard")
+    table.add_row("wright-telemetry --set-config", "Point to a config file")
+    table.add_row("wright-telemetry --detect-wright-fans", "Start Wright Fan detection mode")
+    table.add_row("wright-telemetry --discover", "Scan all local subnets for miners")
+    table.add_row("wright-telemetry --subnets-file FILE", "Import VLANs from file and scan")
+    table.add_row("wright-telemetry --install", "Install as a background service")
+    table.add_row("wright-telemetry --uninstall", "Remove the background service")
+    table.add_row("wright-telemetry --version", "Print version and exit")
+    console.print()
+    console.print(Panel(table, title="[bold]Wright Telemetry — Available Commands[/]", style="cyan"))
+    console.print()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -46,6 +145,7 @@ def _parse_args() -> argparse.Namespace:
         description="Collects miner telemetry and sends it to the Wright Fan dashboard.",
     )
     parser.add_argument("--setup", action="store_true", help="Re-run the setup wizard")
+    parser.add_argument("--set-config", action="store_true", help="Choose or create the config file interactively")
     parser.add_argument("--discover", action="store_true", help="Scan all local subnets for miners and exit")
     parser.add_argument("--subnets-file", metavar="FILE", help="Import VLANs from a text file (one CIDR per line), save to config, and scan")
     parser.add_argument("--install", action="store_true", help="Install as a background service")
@@ -145,20 +245,61 @@ def main() -> None:
     # Ask where the config file lives before we try to load it.
     # Skipped when WRIGHT_CONFIG env var is already set (service installs,
     # CI) or when stdin is not a TTY (running non-interactively).
-    if "WRIGHT_CONFIG" not in os.environ and sys.stdin.isatty():
-        prompt_config_location()
+    if sys.stdin.isatty() and (args.set_config or ("WRIGHT_CONFIG" not in os.environ)):
+        prompt_config_location(force=args.set_config)
 
     # Load or create config
     cfg = load_config()
 
-    # Backfill remote_config consent for users who set up before it existed.
-    # They were never asked, so default to True so support can help them.
-    if cfg and "consent" in cfg and "remote_config" not in cfg["consent"]:
-        from wright_telemetry.config import save_config as _save
-        cfg["consent"]["remote_config"] = True
-        _save(cfg)
+    # Backfill consent fields that were added after the initial release so
+    # existing configs are not forced through setup again.
+    if cfg and "consent" in cfg:
+        _needs_save = False
+        if "remote_config" not in cfg["consent"]:
+            # Pre-existing users were implicitly opted in, so keep them opted in.
+            cfg["consent"]["remote_config"] = True
+            _needs_save = True
+        if "auto_update" not in cfg["consent"]:
+            # Derive from the old top-level flag; default ON if flag was absent.
+            cfg["consent"]["auto_update"] = not cfg.get("disable_auto_update", True)
+            _needs_save = True
+        if _needs_save:
+            from wright_telemetry.config import save_config as _save
+            _save(cfg)
+
+    # If an existing config is missing required fields, notify and re-run setup.
+    if cfg is not None and not args.setup:
+        complete, missing = is_config_complete(cfg)
+        if not complete:
+            console.print()
+            console.print(Panel(
+                "[bold]Incomplete configuration[/] — the following required fields are missing or empty:\n\n"
+                + "\n".join(f"  • [cyan]{f}[/]" for f in missing)
+                + "\n\n[dim]The setup wizard will run to fill them in.[/]",
+                style="yellow",
+                expand=False,
+            ))
+            args.setup = True
 
     ran_setup = cfg is None or args.setup
+
+    # For existing configs: show welcome banner + config summary now, before
+    # configure_logging() starts emitting log lines to the terminal.
+    if not ran_setup and cfg is not None:
+        _print_welcome_banner(cfg, __version__)
+
+        _sent_early: bool | None = None
+        if cfg.get("consent", {}).get("remote_config"):
+            _client = WrightAPIClient(
+                api_url=cfg.get("wright_api_url", ""),
+                api_key=cfg.get("wright_api_key", ""),
+                facility_id=cfg.get("facility_id", ""),
+            )
+            safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
+            _sent_early = _client.send_agent_config(safe_cfg, __version__)
+            _client.close()
+
+        print_config_summary(cfg, config_sent=_sent_early)
 
     from wright_telemetry.ws_client import AgentController, WebSocketClient
     controller = AgentController()
@@ -192,6 +333,7 @@ def main() -> None:
 
         cfg = run_setup_wizard_miners(cfg)
 
+        _sent: bool | None = None
         if cfg.get("consent", {}).get("remote_config"):
             _client = WrightAPIClient(
                 api_url=cfg.get("wright_api_url", ""),
@@ -199,8 +341,10 @@ def main() -> None:
                 facility_id=cfg.get("facility_id", ""),
             )
             safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
-            _client.send_agent_config(safe_cfg, __version__)
+            _sent = _client.send_agent_config(safe_cfg, __version__)
             _client.close()
+
+        print_config_summary(cfg, config_sent=_sent)
 
     if cfg is None:
         print("No configuration found. Please run: wright-telemetry --setup")
@@ -239,9 +383,9 @@ def main() -> None:
 
         run_baseline_collection(cfg)
         _print_help_menu()
-        print("  Wright Fan detection mode monitors fan RPM for dips that indicate Wright")
-        print("  fans are installed. You can start it anytime with:")
-        print("    wright-telemetry --detect-wright-fans\n")
+        console.print("  Wright Fan detection mode monitors fan RPM for dips that indicate Wright")
+        console.print("  fans are installed. You can start it anytime with:")
+        console.print("  [cyan bold]wright-telemetry --detect-wright-fans[/]\n")
 
     if args.detect_wright_fans:
         from wright_telemetry.scheduler import run_fan_detection
@@ -253,16 +397,6 @@ def main() -> None:
         from wright_telemetry.config import save_config
 
         save_config(cfg)
-
-    if cfg.get("consent", {}).get("remote_config"):
-        _client = WrightAPIClient(
-            api_url=cfg.get("wright_api_url", ""),
-            api_key=cfg.get("wright_api_key", ""),
-            facility_id=cfg.get("facility_id", ""),
-        )
-        safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
-        _client.send_agent_config(safe_cfg, __version__)
-        _client.close()
 
     from wright_telemetry.scheduler import run
     run(cfg, controller=controller)

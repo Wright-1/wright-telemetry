@@ -9,37 +9,72 @@
 #        sudo chmod +x /usr/local/bin/docker-mac-net-connect
 #        sudo docker-mac-net-connect   # run once; re-run after reboot
 #
-#      This tunnels Docker bridge networks to the macOS host so that
-#      172.28.0.x is reachable directly — allowing wright-telemetry to
-#      run natively on the host and reach both the fake miners AND
+#      This tunnels all Docker bridge networks to the macOS host so that
+#      every miners-net-* subnet is reachable directly — allowing
+#      wright-telemetry to run natively and reach both the fake miners AND
 #      your local API on localhost:3001.
 #
 #   2. Start the fake fleet:
 #        docker compose -f fake_miners/docker-compose.yml up -d --build
 #
-#   3. Point wright-telemetry at the fake subnet:
-#        wright-telemetry --setup
-#        # when prompted for subnet enter: 172.28.0.0/24
+#   3. Point wright-telemetry at all three subnets.
+#      When prompted during --setup, enter (comma-separated):
+#        172.28.0.0/24, 172.28.1.0/24, 172.28.2.0/24
+#
+#      Or edit ~/.wright-telemetry/config.json directly:
+#        "discovery": {
+#          "enabled": true,
+#          "subnets": ["172.28.0.0/24", "172.28.1.0/24", "172.28.2.0/24"],
+#          ...
+#        }
 #
 #   4. Tear down:
 #        docker compose -f fake_miners/docker-compose.yml down
 #
+# NETWORK LAYOUT
+# --------------
+#   Three isolated Docker bridge networks simulate separate facility VLANs.
+#   Each subnet contains one Braiins, one Vnish, and one LuxOS fake miner
+#   so that discovery must scan all three subnets to find the full fleet.
+#
+#   miners-net-a  172.28.0.0/24  — Subnet A
+#   miners-net-b  172.28.1.0/24  — Subnet B
+#   miners-net-c  172.28.2.0/24  — Subnet C
+#
 # IP LAYOUT
 # ---------
-#   172.28.0.10 – .19   Braiins fakes  (HTTP port 80)
-#   172.28.0.20 – .29   Vnish fakes    (HTTP port 80)
-#   172.28.0.30 – .39   LuxOS fakes    (TCP  port 4028)
+#   Within each /24 the last octet follows the same scheme:
+#     .10        Braiins  (HTTP port 80)
+#     .20        Vnish    (HTTP port 80)
+#     .30        LuxOS    (TCP  port 4028)
 #
-# ADDING MORE MINERS
-# ------------------
-#   Duplicate any service block, bump the IP's last octet and MINER_INDEX,
-#   then re-run `docker compose up -d --build`.
+#   Subnet A:   172.28.0.10  172.28.0.20  172.28.0.30
+#   Subnet B:   172.28.1.10  172.28.1.20  172.28.1.30
+#   Subnet C:   172.28.2.10  172.28.2.20  172.28.2.30
+#
+# MINER_INDEX
+# -----------
+#   MINER_INDEX is unique across all containers of the same firmware type
+#   so each fake miner gets a distinct hostname, MAC, serial number, and
+#   jittered hashrate — exactly as if they were separate physical machines.
+#
+#   braiins-{a,b,c} → MINER_INDEX 0, 1, 2
+#   vnish-{a,b,c}   → MINER_INDEX 0, 1, 2
+#   luxos-{a,b,c}   → MINER_INDEX 0, 1, 2
+#
+# ADDING MORE MINERS / SUBNETS
+# ----------------------------
+#   1. Add a new network block under `networks:` with a fresh CIDR.
+#   2. Add service blocks pointing at that network with unique IPs and
+#      incremented MINER_INDEX values.
+#   3. Re-run `docker compose up -d --build`.
+#   4. Add the new CIDR to discovery.subnets in your config.
 #
 # EDITING FIXTURES
 # ----------------
 #   The tests/fixtures/ directory is mounted read-only into every container.
 #   Edit a JSON file → restart the relevant container:
-#       docker compose -f fake_miners/docker-compose.yml restart braiins-0
+#       docker compose -f fake_miners/docker-compose.yml restart braiins-a
 
 # ── Shared service template (YAML anchor) ────────────────────────────────────
 x-miner-base: &miner-base
@@ -50,73 +85,115 @@ x-miner-base: &miner-base
     - ../tests/fixtures:/fixtures:ro     # live fixture mount — no rebuild needed
   restart: unless-stopped
 
-# ── Isolated bridge network ───────────────────────────────────────────────────
+# ── Three isolated bridge networks (one per simulated VLAN) ──────────────────
 networks:
-  miners-test:
+  miners-net-a:
     driver: bridge
     ipam:
       driver: default
       config:
         - subnet: 172.28.0.0/24
 
+  miners-net-b:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.1.0/24
+
+  miners-net-c:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.2.0/24
+
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
 
-  # ── Braiins ─────────────────────────────────────────────────────────────────
-  braiins-0:
+  # ── Subnet A  (172.28.0.0/24) ───────────────────────────────────────────────
+
+  braiins-a:
     <<: *miner-base
     environment:
       FIRMWARE: braiins
       MINER_INDEX: "0"
     networks:
-      miners-test:
+      miners-net-a:
         ipv4_address: 172.28.0.10
 
-  braiins-1:
+  vnish-a:
+    <<: *miner-base
+    environment:
+      FIRMWARE: vnish
+      MINER_INDEX: "0"
+    networks:
+      miners-net-a:
+        ipv4_address: 172.28.0.20
+
+  luxos-a:
+    <<: *miner-base
+    environment:
+      FIRMWARE: luxos
+      MINER_INDEX: "0"
+    networks:
+      miners-net-a:
+        ipv4_address: 172.28.0.30
+
+  # ── Subnet B  (172.28.1.0/24) ───────────────────────────────────────────────
+
+  braiins-b:
     <<: *miner-base
     environment:
       FIRMWARE: braiins
       MINER_INDEX: "1"
     networks:
-      miners-test:
-        ipv4_address: 172.28.0.11
+      miners-net-b:
+        ipv4_address: 172.28.1.10
 
-  # ── Vnish ───────────────────────────────────────────────────────────────────
-  vnish-0:
-    <<: *miner-base
-    environment:
-      FIRMWARE: vnish
-      MINER_INDEX: "0"
-    networks:
-      miners-test:
-        ipv4_address: 172.28.0.20
-
-  vnish-1:
+  vnish-b:
     <<: *miner-base
     environment:
       FIRMWARE: vnish
       MINER_INDEX: "1"
     networks:
-      miners-test:
-        ipv4_address: 172.28.0.21
+      miners-net-b:
+        ipv4_address: 172.28.1.20
 
-  # ── LuxOS ───────────────────────────────────────────────────────────────────
-  luxos-0:
-    <<: *miner-base
-    environment:
-      FIRMWARE: luxos
-      MINER_INDEX: "0"
-    networks:
-      miners-test:
-        ipv4_address: 172.28.0.30
-
-  luxos-1:
+  luxos-b:
     <<: *miner-base
     environment:
       FIRMWARE: luxos
       MINER_INDEX: "1"
     networks:
-      miners-test:
-        ipv4_address: 172.28.0.31
+      miners-net-b:
+        ipv4_address: 172.28.1.30
 
+  # ── Subnet C  (172.28.2.0/24) ───────────────────────────────────────────────
 
+  braiins-c:
+    <<: *miner-base
+    environment:
+      FIRMWARE: braiins
+      MINER_INDEX: "2"
+    networks:
+      miners-net-c:
+        ipv4_address: 172.28.2.10
+
+  vnish-c:
+    <<: *miner-base
+    environment:
+      FIRMWARE: vnish
+      MINER_INDEX: "2"
+    networks:
+      miners-net-c:
+        ipv4_address: 172.28.2.20
+
+  luxos-c:
+    <<: *miner-base
+    environment:
+      FIRMWARE: luxos
+      MINER_INDEX: "2"
+    networks:
+      miners-net-c:
+        ipv4_address: 172.28.2.30
