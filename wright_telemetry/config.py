@@ -206,6 +206,94 @@ def mask_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return masked
 
 
+def print_config_summary(cfg: dict[str, Any], config_sent: Optional[bool] = None) -> None:
+    """Print a human-readable summary of *cfg* to the console.
+
+    *config_sent* is the return value from
+    :py:meth:`~wright_telemetry.api_client.WrightAPIClient.send_agent_config`:
+    ``True`` = success, ``False`` = failure, ``None`` = not attempted.
+    """
+    from wright_telemetry.consent import METRICS
+
+    console.print()
+    console.rule("[bold cyan]Configuration Summary[/]")
+
+    # ── Cloud connection ──────────────────────────────────────────────────────
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="dim", no_wrap=True)
+    grid.add_column()
+
+    api_key_raw = cfg.get("wright_api_key", "")
+    masked_key = (api_key_raw[:6] + "…" + SENSITIVE_MASK) if len(api_key_raw) > 6 else SENSITIVE_MASK
+
+    grid.add_row("Config file:",   f"[cyan]{CONFIG_FILE}[/]")
+    grid.add_row("API URL:",       cfg.get("wright_api_url", "[red]not set[/]"))
+    grid.add_row("Facility ID:",   cfg.get("facility_id",   "[red]not set[/]") or "[red]not set[/]")
+    grid.add_row("API Key:",       masked_key)
+    grid.add_row(
+        "Poll interval:",
+        f"{cfg.get('poll_interval_seconds', '?')}s",
+    )
+
+    collector_types = cfg.get("collector_types") or [cfg.get("collector_type", "?")]
+    grid.add_row("Collector types:", ", ".join(collector_types))
+
+    # ── Discovery ─────────────────────────────────────────────────────────────
+    disc = cfg.get("discovery", {})
+    subnets = disc.get("subnets") or []
+    if disc.get("enabled"):
+        grid.add_row("Auto-discovery:", "[green]enabled[/]")
+        for subnet in subnets:
+            grid.add_row("", f"[cyan]{subnet}[/]")
+        if not subnets:
+            grid.add_row("", "[dim]no subnets configured[/]")
+    else:
+        grid.add_row("Auto-discovery:", "[dim]disabled[/]")
+
+    # ── Consent / metrics ─────────────────────────────────────────────────────
+    consent = cfg.get("consent", {})
+    enabled_labels: list[str] = []
+    disabled_labels: list[str] = []
+    for key, info in METRICS.items():
+        if consent.get(key):
+            enabled_labels.append(info["label"])
+        else:
+            disabled_labels.append(info["label"])
+
+    if enabled_labels:
+        grid.add_row(
+            "Metrics enabled:",
+            "[green]" + "[/], [green]".join(enabled_labels) + "[/]",
+        )
+    else:
+        grid.add_row("Metrics enabled:", "[yellow]none[/]")
+
+    if disabled_labels:
+        grid.add_row(
+            "Metrics disabled:",
+            "[dim]" + ", ".join(disabled_labels) + "[/]",
+        )
+
+    console.print(grid)
+    console.print()
+
+    # ── Cloud sync result ─────────────────────────────────────────────────────
+    if config_sent is True:
+        console.print(
+            "  [green]✓[/] Config snapshot sent to Wright One  "
+            "[dim](agent-config endpoint)[/]"
+        )
+    elif config_sent is False:
+        console.print(
+            "  [yellow]⚠[/]  Could not reach the agent-config endpoint — "
+            "config will sync on the next successful connection."
+        )
+    # None → don't print anything (remote config not enabled)
+
+    console.print()
+    console.rule()
+
+
 # ------------------------------------------------------------------
 # Setup wizard
 # ------------------------------------------------------------------
