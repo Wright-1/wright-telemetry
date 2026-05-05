@@ -127,6 +127,7 @@ def _print_help_menu() -> None:
     table.add_column("Description")
     table.add_row("wright-telemetry", "Start the collector")
     table.add_row("wright-telemetry --setup", "Re-run the setup wizard")
+    table.add_row("wright-telemetry --set-config", "Point to a config file")
     table.add_row("wright-telemetry --detect-wright-fans", "Start Wright Fan detection mode")
     table.add_row("wright-telemetry --discover", "Scan all local subnets for miners")
     table.add_row("wright-telemetry --subnets-file FILE", "Import VLANs from file and scan")
