@@ -23,14 +23,14 @@ from rich import box
 
 from wright_telemetry.consent import DEFAULT_CONSENT, _WIZARD_STYLE, run_consent_wizard
 from wright_telemetry.discovery import (
+    DiscoveredMiner,
     default_subnet,
     default_subnets,
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
     load_subnets_file,
     parse_ip_target,
-    run_interactive_discovery,
-    run_interactive_range_scan,
+    scan_hosts,
 )
 
 _DEFAULT_CONFIG_DIR = Path.home() / ".wright-telemetry"
@@ -342,120 +342,269 @@ def _print_miners_table(found: list) -> None:
     console.print(table)
 
 
-def _wizard_range_scan(collector_types: list[str] = _DEFAULT_COLLECTOR_TYPES) -> list[dict[str, Any]]:
-    """Prompt for a CIDR block or IP range, scan it, return miner configs."""
-    console.print()
-    console.rule("[bold]Range Scan[/]")
-    console.print()
-    console.print("  Enter a CIDR block or IP range to scan for miners.")
-    console.print("  [dim]Examples:  192.168.1.0/24  or  192.168.1.100-192.168.1.200[/]")
-    target = _ask("CIDR or range (Enter to skip)")
-
-    if not target:
-        return []
-
-    console.print()
-    console.print("  [bold]Credentials for miners found in this range:[/]")
-    username = _ask("Username", default="root")
-    password = _ask_password("Password (hidden)")
-    pw_b64 = _encode_password(password) if password else ""
-
-    try:
-        num_hosts = len(parse_ip_target(target))
-    except ValueError:
-        num_hosts = 0
-
-    console.print()
-    console.print(f"  Scanning [cyan]{target}[/] for miners [dim]({num_hosts} host(s))[/]…")
-    console.print("  [dim]Hang tight — probing each host for your selected firmware API.[/]")
-    fw = firmware_types_for_collector(collector_types)
-    found = run_interactive_range_scan(target, firmware_types=fw)
-
-    if not found:
-        console.print("  [yellow]No miners found in that range.  Double-check the range or try a broader CIDR.[/]")
-        return []
-
-    console.print(f"\n  [bold green]Found {len(found)} miner(s):[/]\n")
-    _print_miners_table(found)
-
-    return discovered_to_miner_cfgs(found, username, pw_b64)
-
-
 def _wizard_discovery(
     existing_discovery: Optional[dict[str, Any]] = None,
     collector_types: list[str] = _DEFAULT_COLLECTOR_TYPES,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Run the discovery portion of the setup wizard.
+    """Unified miner discovery wizard.
 
-    Returns ``(miners, discovery_cfg)`` where *miners* is a list of miner
-    config dicts and *discovery_cfg* is the ``discovery`` section to persist.
+    Shows an overview, lets the user choose how to supply subnet targets,
+    collects credentials, runs a Rich progress-bar scan, shows results, and
+    loops until the user accepts or skips.
+
+    Returns ``(miners, discovery_cfg)``.
     """
-    disc = dict(existing_discovery) if existing_discovery else {}
-
-    detected_list = default_subnets()
-    if detected_list:
-        console.print(f"  Detected local networks: [cyan]{', '.join(detected_list)}[/]")
-    else:
-        console.print("  [yellow]Could not auto-detect your local network.[/]")
-
-    raw_subnets = _ask(
-        "Subnet(s) to scan (comma-separated CIDRs)",
-        default=", ".join(disc["subnets"])
-        if disc.get("subnets")
-        else ", ".join(detected_list),
+    from rich.progress import (
+        BarColumn, Progress, SpinnerColumn,
+        TaskProgressColumn, TextColumn, TimeRemainingColumn,
     )
-    subnets = [s.strip() for s in raw_subnets.split(",") if s.strip()]
 
-    if not subnets:
-        console.print("  [yellow]No subnets specified — skipping discovery.[/]")
-        return [], disc
-
-    scan_interval = _DEFAULT_SCAN_INTERVAL
-
-    console.print()
-    console.print("  [bold]Default credentials[/] applied to every discovered miner.")
-    console.print("  [dim]Press Enter to skip if your miners have no password set.[/]")
-    default_user = _ask("Default username", default=disc.get("default_username", "root"))
-    default_pw = _ask_password("Default password (hidden)")
-    default_pw_b64 = _encode_password(default_pw) if default_pw else disc.get("default_password_b64", "")
-
+    disc = dict(existing_discovery) if existing_discovery else {}
     fw = firmware_types_for_collector(collector_types)
+    fw_labels: list[str] = fw if fw else list(_KNOWN_FIRMWARE_TYPES)
 
-    def _run_scan(scan_subnets: list[str]) -> list[Any]:
-        console.print()
-        for subnet in scan_subnets:
-            console.print(f"  Scanning [cyan]{subnet}[/]…")
-        miners_found = run_interactive_discovery(scan_subnets, firmware_types=fw)
-        if not miners_found:
-            console.print("  [yellow]No miners found.[/]")
-        else:
-            console.print(f"\n  [bold green]Found {len(miners_found)} miner(s):[/]\n")
-            _print_miners_table(miners_found)
-        return miners_found
+    # ── Overview ──────────────────────────────────────────────────────────────
+    console.print()
+    fw_badge_str = "  ".join(f"[bold cyan][{f}][/]" for f in fw_labels)
+    console.print(Panel(
+        "[bold]How miner discovery works[/]\n\n"
+        "Wright Data connects to each IP in your network and checks whether it "
+        "responds to a known miner firmware API.  It probes for:\n\n"
+        f"  {fw_badge_str}\n\n"
+        "Probes run in parallel so even large subnets scan quickly.\n\n"
+        "  [dim]· Nothing is written to your miners — read-only\n"
+        "  · Discovered miners are saved and re-checked on every poll cycle\n"
+        "  · Re-run any time with [cyan bold]wright-telemetry --setup[/dim][/]",
+        title="[bold]Miner Discovery[/]",
+        style="cyan",
+        expand=False,
+        padding=(1, 2),
+    ))
 
-    found = _run_scan(subnets)
+    # ── State that survives across loop iterations ─────────────────────────────
+    found:          list[DiscoveredMiner] = []
+    subnets:        list[str]             = []
+    default_user:   str                   = disc.get("default_username", "root")
+    default_pw_b64: str                   = disc.get("default_password_b64", "")
 
-    # Confirmation loop — let the user load more subnets if the count looks wrong
+    # ── Main retry loop ───────────────────────────────────────────────────────
     while True:
-        if _confirm(f"Found {len(found)} miner(s). Does this look right?", default=True):
-            break
-        file_path = _ask(
-            "Path to subnets file to load additional VLANs (Enter to skip)"
-        )
-        if not file_path:
-            break
-        try:
-            extra = load_subnets_file(file_path)
-            merged = list(dict.fromkeys(subnets + extra))  # dedupe, preserve order
-            subnets = merged
-            found = _run_scan(subnets)
-        except OSError as exc:
-            console.print(f"  [red]Could not read file: {exc}[/]")
+        console.print()
+        console.rule("[bold]Step 1 — Choose how to find your miners[/]")
+        console.print()
 
+        method = questionary.select(
+            "Discovery method:",
+            choices=[
+                Choice(
+                    "Auto-detect my network    scan all detected local subnets",
+                    value="auto",
+                ),
+                Choice(
+                    "Enter subnet(s) manually  type one or more CIDRs",
+                    value="manual",
+                ),
+                Choice(
+                    "Import from file          load subnets from .xlsx or .txt",
+                    value="file",
+                ),
+                Choice(
+                    "Scan an IP range          e.g. 10.0.1.100-10.0.1.200 or CIDR",
+                    value="range",
+                ),
+                Choice("Skip — I'll add miners later", value="skip"),
+            ],
+            style=_WIZARD_STYLE,
+        ).ask()
+        if method is None:
+            sys.exit(0)
+        if method == "skip":
+            return [], disc
+
+        # ── Collect targets ───────────────────────────────────────────────────
+        subnets = []
+
+        if method == "auto":
+            detected = default_subnets()
+            console.print()
+            if detected:
+                console.print(f"  Detected local networks: [cyan]{', '.join(detected)}[/]")
+                subnets = detected
+            else:
+                console.print("  [yellow]Could not auto-detect your local network.[/]")
+                console.print("  [dim]Try 'Enter subnet(s) manually' or 'Import from file'.[/]")
+                continue
+
+        elif method == "manual":
+            console.print()
+            raw = _ask(
+                "Subnet(s) to scan  (comma-separated CIDRs)",
+                default=", ".join(disc["subnets"]) if disc.get("subnets") else "",
+                validate=_require_nonempty,
+            )
+            subnets = [s.strip() for s in raw.split(",") if s.strip()]
+            if not subnets:
+                console.print("  [yellow]No subnets entered.[/]")
+                continue
+
+        elif method == "file":
+            console.print()
+            console.print(Panel(
+                "[bold]Supported file formats[/]\n\n"
+                "[bold cyan]Excel  (.xlsx)[/]\n"
+                "  Put one CIDR or IP range per cell — any sheet, any column.\n"
+                "  Wright Data scans the entire workbook automatically.\n"
+                "  [dim]Example:  A1: Subnet   A2: 10.98.1.0/24   A3: 10.98.2.0/27[/]\n\n"
+                "[bold cyan]Text  (.txt)[/]\n"
+                "  One CIDR or IP range per line.\n"
+                "  Lines starting with [cyan]#[/] and blank lines are ignored.\n"
+                "  [dim]Example:\n"
+                "    # Rack row A\n"
+                "    10.98.1.0/24\n"
+                "    10.98.2.0/27[/]",
+                style="dim",
+                expand=False,
+                padding=(1, 2),
+            ))
+            file_path = _ask("Path to .xlsx or .txt file", validate=_require_nonempty)
+            # Strip whitespace and any newlines/extra spaces that terminal
+            # word-wrap injects into long paths (e.g. "Wright\n One" → "Wright One")
+            import re as _re
+            file_path = _re.sub(r"\s+", " ", file_path).strip().replace("\\ ", " ")
+            try:
+                subnets = load_subnets_file(file_path)
+            except ImportError:
+                console.print(
+                    "  [red]openpyxl is required for .xlsx files.  "
+                    "Install it: pip install openpyxl[/]"
+                )
+                continue
+            except OSError as exc:
+                console.print(f"  [red]Could not read file: {exc}[/]")
+                continue
+            if not subnets:
+                console.print("  [yellow]No valid subnets found in that file.[/]")
+                continue
+            console.print(f"  Loaded [cyan]{len(subnets)}[/] subnet(s) from file.")
+
+        elif method == "range":
+            console.print()
+            console.print(
+                "  [dim]Examples:  192.168.1.0/24  "
+                " ·   192.168.1.100-192.168.1.200   ·   192.168.1.50[/]"
+            )
+            raw = _ask("CIDR or IP range", validate=_require_nonempty)
+            subnets = [raw.strip()]
+
+        # ── Step 2: Credentials ───────────────────────────────────────────────
+        console.print()
+        console.rule("[bold]Step 2 — Miner credentials[/]")
+        console.print()
+        console.print(
+            "  These credentials are applied to [bold]every[/] discovered miner.\n"
+            "  [dim]Leave blank if your miners have no password set.[/]"
+        )
+        console.print()
+        default_user   = _ask("Username", default=disc.get("default_username", "root"))
+        default_pw     = _ask_password("Password (hidden)")
+        default_pw_b64 = (
+            _encode_password(default_pw) if default_pw
+            else disc.get("default_password_b64", "")
+        )
+
+        # ── Step 3: Expand subnets → host list ────────────────────────────────
+        all_hosts: list[str] = []
+        for s in subnets:
+            try:
+                all_hosts.extend(parse_ip_target(s))
+            except ValueError as exc:
+                console.print(f"  [red]Invalid target {s!r}: {exc}[/]")
+        if not all_hosts:
+            console.print("  [yellow]No valid hosts to scan — check your input.[/]")
+            continue
+
+        # ── Step 4: Scan with Rich progress bar ───────────────────────────────
+        console.print()
+        console.rule("[bold]Step 3 — Scanning[/]")
+        console.print()
+        fw_badge_inline = "  ".join(f"[bold cyan]{f}[/]" for f in fw_labels)
+        console.print(f"  Firmware: {fw_badge_inline}")
+        console.print(
+            f"  [dim]{len(all_hosts):,} host(s) across "
+            f"{len(subnets)} subnet(s)[/]"
+        )
+        console.print()
+
+        scan_desc = "Scanning for " + ", ".join(fw_labels) + "…"
+        found = []
+        with Progress(
+            SpinnerColumn(style="cyan"),
+            TextColumn(f"[cyan]{{task.description}}"),
+            BarColumn(bar_width=None, style="dim cyan", complete_style="bold cyan"),
+            TaskProgressColumn(),
+            TextColumn("[dim]{task.completed:,}/{task.total:,} hosts[/]"),
+            TimeRemainingColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task_id = progress.add_task(scan_desc, total=len(all_hosts))
+
+            def _progress_cb(scanned: int, _total: int) -> None:
+                progress.update(task_id, completed=scanned)
+
+            found = scan_hosts(all_hosts, firmware_types=fw, progress_cb=_progress_cb)
+            progress.update(task_id, completed=len(all_hosts))
+
+        # ── Step 5: Results ───────────────────────────────────────────────────
+        console.print()
+        console.rule("[bold]Step 4 — Results[/]")
+        console.print()
+
+        if not found:
+            console.print(Panel(
+                "[bold yellow]No miners found.[/]\n\n"
+                "Things to check:\n"
+                "  · Is this machine on the same network as your miners?\n"
+                "  · Run [cyan]ping <miner-ip>[/] to confirm reachability\n"
+                "  · Double-check the subnet CIDR or IP range",
+                style="yellow",
+                expand=False,
+                padding=(1, 2),
+            ))
+        else:
+            console.print(f"  [bold green]Found {len(found)} miner(s):[/]\n")
+            _print_miners_table(found)
+
+        console.print()
+        if found:
+            action_choices = [
+                Choice(f"Accept — continue with {len(found)} miner(s)", value="accept"),
+                Choice("Scan again with different settings", value="retry"),
+            ]
+        else:
+            action_choices = [
+                Choice("Try again with different settings", value="retry"),
+                Choice("Skip — I'll add miners later", value="skip"),
+            ]
+
+        action = questionary.select(
+            "What would you like to do?",
+            choices=action_choices,
+            style=_WIZARD_STYLE,
+        ).ask()
+        if action is None:
+            sys.exit(0)
+        if action == "accept":
+            break
+        if action == "skip":
+            return [], disc
+        # action == "retry" → loop back to Step 1
+
+    # ── Build config ──────────────────────────────────────────────────────────
     discovery_cfg: dict[str, Any] = {
-        "enabled": scan_interval > 0,
+        "enabled": True,
         "subnets": subnets,
-        "scan_interval_seconds": scan_interval,
+        "scan_interval_seconds": _DEFAULT_SCAN_INTERVAL,
         "default_username": default_user,
     }
     if default_pw_b64:
@@ -552,32 +701,21 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
 
 
 def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Phase 2 of setup: miner discovery, auto-update, and final save."""
+    """Phase 2 of setup: miner discovery and final save."""
+    from wright_telemetry.discovery import merge_miners
 
-    console.print()
-    console.rule("[bold]Miners[/]")
-    console.print()
-
-    miners: list[dict[str, Any]] = []
-
-    if _confirm("Scan your local network to discover miners automatically?", default=True):
-        console.print()
-        discovered_miners, discovery_cfg = _wizard_discovery(
-            cfg.get("discovery"),
-            collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
+    discovered_miners, discovery_cfg = _wizard_discovery(
+        cfg.get("discovery"),
+        collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
+    )
+    cfg["discovery"] = discovery_cfg
+    if discovered_miners:
+        existing = cfg.get("miners", [])
+        cfg["miners"] = merge_miners(
+            [m for m in existing if not m.get("discovered")],
+            discovered_miners,
         )
-        cfg["discovery"] = discovery_cfg
-        miners.extend(discovered_miners)
-    else:
-        cfg.setdefault("discovery", {})["enabled"] = False
-
-    if _confirm("Would you like to scan a specific subnet or IP range?", default=False):
-        range_miners = _wizard_range_scan(
-            collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
-        )
-        miners.extend(range_miners)
 
     save_config(cfg)
-    console.print(f"\n  [green]✓[/] Configuration saved to [cyan]{CONFIG_FILE}[/]")
-
+    console.print(f"\n  [green]\u2713[/] Configuration saved to [cyan]{CONFIG_FILE}[/]")
     return cfg
