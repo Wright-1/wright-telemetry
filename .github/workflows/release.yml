@@ -1,0 +1,326 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  SPACES_BUCKET: wright-one
+  SPACES_REGION: nyc3
+  SPACES_ENDPOINT: https://nyc3.digitaloceanspaces.com
+  SPACES_PUBLIC_BASE: https://wright-one.nyc3.digitaloceanspaces.com
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # Build jobs — one per platform
+  # ──────────────────────────────────────────────────────────────────
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sync __version__ from release tag
+        shell: bash
+        run: |
+          python <<'PY'
+          import os, re, pathlib
+          ref = os.environ["GITHUB_REF"]
+          if not ref.startswith("refs/tags/v"):
+              raise SystemExit(f"unexpected GITHUB_REF: {ref!r}")
+          ver = ref.removeprefix("refs/tags/").removeprefix("v")
+          p = pathlib.Path("wright_telemetry/__init__.py")
+          t = p.read_text(encoding="utf-8")
+          nt, n = re.subn(
+              r'^(__version__\s*=\s*")[^"]*(")',
+              lambda m, ver=ver: m.group(1) + ver + m.group(2),
+              t,
+              count=1,
+              flags=re.M,
+          )
+          if n != 1:
+              raise SystemExit(f"could not patch __version__ in {p}")
+          p.write_text(nt, encoding="utf-8")
+          print(f"Set __version__ to {ver!r}")
+          PY
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pytest responses
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+      - name: Build binary
+        env:
+          WRIGHT_LOKI_AUTH: ${{ secrets.LOKI_BASIC_AUTH }}
+        run: pyinstaller wright-telemetry.spec
+
+      - name: Verify binary runs
+        run: ./dist/wright-telemetry --version
+
+      - name: Name Linux release binary
+        run: |
+          cp dist/wright-telemetry dist/wright-telemetry-linux
+          cd dist && sha256sum wright-telemetry-linux > wright-telemetry-linux.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wright-telemetry-linux
+          path: |
+            dist/wright-telemetry-linux
+            dist/wright-telemetry-linux.sha256
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sync __version__ from release tag
+        shell: bash
+        run: |
+          python <<'PY'
+          import os, re, pathlib
+          ref = os.environ["GITHUB_REF"]
+          if not ref.startswith("refs/tags/v"):
+              raise SystemExit(f"unexpected GITHUB_REF: {ref!r}")
+          ver = ref.removeprefix("refs/tags/").removeprefix("v")
+          p = pathlib.Path("wright_telemetry/__init__.py")
+          t = p.read_text(encoding="utf-8")
+          nt, n = re.subn(
+              r'^(__version__\s*=\s*")[^"]*(")',
+              lambda m, ver=ver: m.group(1) + ver + m.group(2),
+              t,
+              count=1,
+              flags=re.M,
+          )
+          if n != 1:
+              raise SystemExit(f"could not patch __version__ in {p}")
+          p.write_text(nt, encoding="utf-8")
+          print(f"Set __version__ to {ver!r}")
+          PY
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pytest responses
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+      - name: Build binary
+        env:
+          WRIGHT_LOKI_AUTH: ${{ secrets.LOKI_BASIC_AUTH }}
+        run: pyinstaller wright-telemetry.spec
+
+      - name: Verify binary runs
+        run: ./dist/wright-telemetry --version
+
+      - name: Create zip and checksum
+        run: |
+          cd dist
+          zip wright-telemetry-macos.zip wright-telemetry
+          shasum -a 256 wright-telemetry-macos.zip > wright-telemetry-macos.zip.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wright-telemetry-macos
+          path: |
+            dist/wright-telemetry-macos.zip
+            dist/wright-telemetry-macos.zip.sha256
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sync __version__ from release tag
+        shell: bash
+        run: |
+          python <<'PY'
+          import os, re, pathlib
+          ref = os.environ["GITHUB_REF"]
+          if not ref.startswith("refs/tags/v"):
+              raise SystemExit(f"unexpected GITHUB_REF: {ref!r}")
+          ver = ref.removeprefix("refs/tags/").removeprefix("v")
+          p = pathlib.Path("wright_telemetry/__init__.py")
+          t = p.read_text(encoding="utf-8")
+          nt, n = re.subn(
+              r'^(__version__\s*=\s*")[^"]*(")',
+              lambda m, ver=ver: m.group(1) + ver + m.group(2),
+              t,
+              count=1,
+              flags=re.M,
+          )
+          if n != 1:
+              raise SystemExit(f"could not patch __version__ in {p}")
+          p.write_text(nt, encoding="utf-8")
+          print(f"Set __version__ to {ver!r}")
+          PY
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pytest responses
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+      - name: Build executable
+        env:
+          WRIGHT_LOKI_AUTH: ${{ secrets.LOKI_BASIC_AUTH }}
+        run: pyinstaller wright-telemetry.spec
+
+      - name: Verify executable runs
+        run: dist\wright-telemetry.exe --version
+
+      - name: Generate SHA256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\wright-telemetry.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  wright-telemetry.exe" | Out-File -Encoding ascii dist\wright-telemetry.exe.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wright-telemetry-windows
+          path: |
+            dist/wright-telemetry.exe
+            dist/wright-telemetry.exe.sha256
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────────────────────
+  # Publish — runs after all 3 builds succeed
+  # ──────────────────────────────────────────────────────────────────
+
+  publish:
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Install AWS CLI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq awscli
+
+      - name: Upload binaries to Spaces
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          DEST="s3://${SPACES_BUCKET}/releases/v${VERSION}"
+
+          # Linux
+          aws s3 cp artifacts/wright-telemetry-linux/wright-telemetry-linux \
+            "${DEST}/wright-telemetry-linux" \
+            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
+          aws s3 cp artifacts/wright-telemetry-linux/wright-telemetry-linux.sha256 \
+            "${DEST}/wright-telemetry-linux.sha256" \
+            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
+
+          # macOS
+          aws s3 cp artifacts/wright-telemetry-macos/wright-telemetry-macos.zip \
+            "${DEST}/wright-telemetry-macos.zip" \
+            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
+          aws s3 cp artifacts/wright-telemetry-macos/wright-telemetry-macos.zip.sha256 \
+            "${DEST}/wright-telemetry-macos.zip.sha256" \
+            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
+
+          # Windows
+          aws s3 cp artifacts/wright-telemetry-windows/wright-telemetry.exe \
+            "${DEST}/wright-telemetry.exe" \
+            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
+          aws s3 cp artifacts/wright-telemetry-windows/wright-telemetry.exe.sha256 \
+            "${DEST}/wright-telemetry.exe.sha256" \
+            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
+
+      - name: Generate and upload latest.json
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          BASE="${SPACES_PUBLIC_BASE}/releases/v${VERSION}"
+          cat > latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "assets": {
+              "linux": {
+                "url": "${BASE}/wright-telemetry-linux",
+                "checksum_url": "${BASE}/wright-telemetry-linux.sha256"
+              },
+              "darwin": {
+                "url": "${BASE}/wright-telemetry-macos.zip",
+                "checksum_url": "${BASE}/wright-telemetry-macos.zip.sha256"
+              },
+              "win32": {
+                "url": "${BASE}/wright-telemetry.exe",
+                "checksum_url": "${BASE}/wright-telemetry.exe.sha256"
+              }
+            }
+          }
+          EOF
+
+          aws s3 cp latest.json \
+            "s3://${SPACES_BUCKET}/releases/latest.json" \
+            --endpoint-url "${SPACES_ENDPOINT}" \
+            --acl public-read \
+            --cache-control "no-cache, no-store" \
+            --content-type "application/json"
+
+      - name: Create GitHub Release (changelog only)
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Downloads
+
+            Binaries are distributed via the Wright One update service.
+            Agents will auto-update automatically.
+
+            | Platform | Direct link |
+            |----------|-------------|
+            | Linux | [wright-telemetry-linux](${{ env.SPACES_PUBLIC_BASE }}/releases/v${{ steps.version.outputs.version }}/wright-telemetry-linux) |
+            | macOS | [wright-telemetry-macos.zip](${{ env.SPACES_PUBLIC_BASE }}/releases/v${{ steps.version.outputs.version }}/wright-telemetry-macos.zip) |
+            | Windows | [wright-telemetry.exe](${{ env.SPACES_PUBLIC_BASE }}/releases/v${{ steps.version.outputs.version }}/wright-telemetry.exe) |
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -3,7 +3,6 @@ name: Build Windows
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -78,12 +77,4 @@ jobs:
             dist/wright-telemetry.exe.sha256
           if-no-files-found: error
 
-      - name: Upload release asset
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/wright-telemetry.exe
-            dist/wright-telemetry.exe.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
