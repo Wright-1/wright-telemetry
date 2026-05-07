@@ -209,9 +209,7 @@ def mask_config(cfg: dict[str, Any]) -> dict[str, Any]:
 def print_config_summary(cfg: dict[str, Any], config_sent: Optional[bool] = None) -> None:
     """Print a human-readable summary of *cfg* to the console.
 
-    *config_sent* is the return value from
-    :py:meth:`~wright_telemetry.api_client.WrightAPIClient.send_agent_config`:
-    ``True`` = success, ``False`` = failure, ``None`` = not attempted.
+    *config_sent* is deprecated and ignored (v1 agent-config endpoint removed).
     """
     from wright_telemetry.consent import METRICS
 
@@ -641,7 +639,7 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     console.print()
     console.print("  Wright Fan API URL: use the API base from the portal")
     console.print("  e.g. [cyan]https://api.wrightfan.com/api[/] or [cyan]https://api.dev.wrightfan.com/api[/]")
-    console.print("  [dim]/v1/... paths are added automatically.[/]")
+    console.print("  [dim]Telemetry/WebSocket use /v2/... by default (data pipeline).[/]")
     cfg["wright_api_url"] = _ask(
         "Wright Fan API URL",
         default=cfg.get("wright_api_url", _DEFAULT_WRIGHT_API_URL),

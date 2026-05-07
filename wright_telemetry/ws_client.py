@@ -15,7 +15,7 @@ import ssl
 import threading
 from typing import Any, Optional
 
-from wright_telemetry.api_client import wright_api_v1_url
+from wright_telemetry.api_client import wright_api_url
 from wright_telemetry.config import load_config, save_config, mask_config
 
 logger = logging.getLogger(__name__)
@@ -102,8 +102,8 @@ class WebSocketClient:
 
     @staticmethod
     def _build_ws_url(api_url: str) -> str:
-        """Map HTTP API base to ``ws(s)://`` ``/api/v1/ws/agent``."""
-        http_url = wright_api_v1_url(api_url, "ws", "agent")
+        """Map HTTP API base to ``ws(s)://`` ``/api/v2/ws/agent``."""
+        http_url = wright_api_url(api_url, "ws", "agent")
         if http_url.startswith("https://"):
             return "wss://" + http_url[len("https://"):]
         if http_url.startswith("http://"):
