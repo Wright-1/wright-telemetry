@@ -1,38 +1,38 @@
-"""Tests for WrightAPIClient.send() and register_miner()."""
+"""Tests for WrightAPIClient.send()."""
 
 from __future__ import annotations
 
 import responses
 import pytest
 
-from wright_telemetry.api_client import WrightAPIClient, wright_api_v1_url
+from wright_telemetry.api_client import WrightAPIClient, wright_api_url
 from wright_telemetry.models import MinerIdentity, TelemetryPayload
 
 
 API_URL = "https://api.wrightfan.com"
-TELEMETRY_URL = wright_api_v1_url(API_URL, "telemetry")
 API_URL_WITH_API_SUFFIX = "https://api.wrightfan.com/api"
+TELEMETRY_URL = wright_api_url(API_URL, "telemetry")
 API_KEY = "test-api-key-12345"
 FACILITY_ID = "fac-001"
 
 
-class TestWrightApiV1Url:
+class TestWrightApiUrl:
 
-    def test_host_root_appends_api_v1(self) -> None:
-        assert wright_api_v1_url(
+    def test_host_root_appends_api_v2(self) -> None:
+        assert wright_api_url(
             "https://api.wrightfan.com", "telemetry",
-        ) == "https://api.wrightfan.com/api/v1/telemetry"
-        assert wright_api_v1_url(
+        ) == "https://api.wrightfan.com/api/v2/telemetry"
+        assert wright_api_url(
             "https://api.wrightfan.com", "ws", "agent",
-        ) == "https://api.wrightfan.com/api/v1/ws/agent"
+        ) == "https://api.wrightfan.com/api/v2/ws/agent"
 
     def test_explicit_api_mount(self) -> None:
-        assert wright_api_v1_url(
+        assert wright_api_url(
             API_URL_WITH_API_SUFFIX, "telemetry",
-        ) == "https://api.wrightfan.com/api/v1/telemetry"
-        assert wright_api_v1_url(
+        ) == "https://api.wrightfan.com/api/v2/telemetry"
+        assert wright_api_url(
             "https://dev.wrightfan.com/api/", "ws", "agent",
-        ) == "https://dev.wrightfan.com/api/v1/ws/agent"
+        ) == "https://dev.wrightfan.com/api/v2/ws/agent"
 
 
 @pytest.fixture()

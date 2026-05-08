@@ -287,19 +287,7 @@ def main() -> None:
     # configure_logging() starts emitting log lines to the terminal.
     if not ran_setup and cfg is not None:
         _print_welcome_banner(cfg, __version__)
-
-        _sent_early: bool | None = None
-        if cfg.get("consent", {}).get("remote_config"):
-            _client = WrightAPIClient(
-                api_url=cfg.get("wright_api_url", ""),
-                api_key=cfg.get("wright_api_key", ""),
-                facility_id=cfg.get("facility_id", ""),
-            )
-            safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
-            _sent_early = _client.send_agent_config(safe_cfg, __version__)
-            _client.close()
-
-        print_config_summary(cfg, config_sent=_sent_early)
+        print_config_summary(cfg)
 
     from wright_telemetry.ws_client import AgentController, WebSocketClient
     controller = AgentController()
@@ -312,17 +300,6 @@ def main() -> None:
             print("No configuration found. Please run: wright-telemetry --setup")
             sys.exit(1)
 
-        if cfg.get("consent", {}).get("remote_config"):
-            _client = WrightAPIClient(
-                api_url=cfg.get("wright_api_url", ""),
-                api_key=cfg.get("wright_api_key", ""),
-                facility_id=cfg.get("facility_id", ""),
-            )
-            safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
-            _client.send_agent_config(safe_cfg, __version__)
-            _client.close()
-
-        # Start websocket before discovery so the portal sees the agent online.
         ws_client = WebSocketClient(
             controller,
             api_url=cfg.get("wright_api_url", ""),
@@ -332,19 +309,7 @@ def main() -> None:
         ws_client.start()
 
         cfg = run_setup_wizard_miners(cfg)
-
-        _sent: bool | None = None
-        if cfg.get("consent", {}).get("remote_config"):
-            _client = WrightAPIClient(
-                api_url=cfg.get("wright_api_url", ""),
-                api_key=cfg.get("wright_api_key", ""),
-                facility_id=cfg.get("facility_id", ""),
-            )
-            safe_cfg = {k: v for k, v in cfg.items() if k not in ("wright_api_key",)}
-            _sent = _client.send_agent_config(safe_cfg, __version__)
-            _client.close()
-
-        print_config_summary(cfg, config_sent=_sent)
+        print_config_summary(cfg)
 
     if cfg is None:
         print("No configuration found. Please run: wright-telemetry --setup")
