@@ -315,6 +315,13 @@ def _replace_and_restart_unix(new_binary: Path, current: Path) -> None:
     staged.chmod(0o755)
     os.rename(staged, current)
     logger.info("Update applied. Restarting...")
+    # Tell the restarted process which config to use so it skips the
+    # interactive config-location prompt entirely.
+    try:
+        from wright_telemetry.config import CONFIG_FILE
+        os.environ["WRIGHT_CONFIG"] = str(CONFIG_FILE)
+    except Exception:
+        pass
     os.execv(str(current), sys.argv)
 
 
@@ -324,6 +331,15 @@ def _replace_and_restart_windows(new_binary: Path, current: Path) -> None:
     # one-liner that waits for this process to exit, swaps the files, and restarts.
     staged = current.with_name(current.stem + "-update" + current.suffix)
     shutil.copy2(new_binary, staged)
+
+    # Propagate the active config path so the restarted process skips the
+    # interactive config-location prompt.  os.environ is inherited by the
+    # PowerShell child which in turn passes it to Start-Process.
+    try:
+        from wright_telemetry.config import CONFIG_FILE
+        os.environ["WRIGHT_CONFIG"] = str(CONFIG_FILE)
+    except Exception:
+        pass
 
     pid = os.getpid()
     script = (

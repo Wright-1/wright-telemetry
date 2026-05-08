@@ -3,6 +3,7 @@
 
 import sys
 from pathlib import Path
+import pyfiglet
 
 block_cipher = None
 
@@ -10,11 +11,15 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        (str(Path(pyfiglet.__file__).parent / "fonts"), "pyfiglet/fonts"),
+    ],
     hiddenimports=[
         "wright_telemetry",
         "wright_telemetry.collectors",
         "wright_telemetry.collectors.braiins",
+        "pyfiglet",
+        "pyfiglet.fonts",
         "websockets",
         "websockets.legacy",
         "websockets.legacy.client",
