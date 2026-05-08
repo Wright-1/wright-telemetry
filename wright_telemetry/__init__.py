@@ -1,3 +1,3 @@
 """Wright Telemetry Collector -- monitors miners and sends data to the Wright Fan dashboard."""
 
-__version__ = "0.6.1"
+__version__ = "0.7.1"
