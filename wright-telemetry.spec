@@ -5,6 +5,7 @@ import os
 import sys
 import importlib
 from pathlib import Path
+import pyfiglet
 
 block_cipher = None
 
@@ -18,12 +19,14 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        (_pyfiglet_fonts, "pyfiglet/fonts"),
+        (str(Path(pyfiglet.__file__).parent / "fonts"), "pyfiglet/fonts"),
     ],
     hiddenimports=[
         "wright_telemetry",
         "wright_telemetry.collectors",
         "wright_telemetry.collectors.braiins",
+        "pyfiglet",
+        "pyfiglet.fonts",
         "websockets",
         "websockets.legacy",
         "websockets.legacy.client",
