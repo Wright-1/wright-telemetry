@@ -11,14 +11,26 @@ just as it would in production.
 1. Docker Desktop (or Docker Engine on Linux)
 2. **macOS only:** install and run
    [docker-mac-net-connect](https://github.com/chipmk/docker-mac-net-connect)
-   so that the `172.28.0.x` addresses are reachable from the host:
+   so that the `172.28.0.x` addresses are reachable from the host.
+
+   **First time — install and start:**
    ```bash
    curl -fsSL https://github.com/chipmk/docker-mac-net-connect/releases/download/v0.1.7/docker-mac-net-connect_darwin_arm64.tar.gz \
      | tar -xz -C /tmp
    sudo mv /tmp/docker-mac-net-connect /usr/local/bin/
    sudo chmod +x /usr/local/bin/docker-mac-net-connect
-   sudo docker-mac-net-connect   # run once; re-run after reboot
+   sudo docker-mac-net-connect
    ```
+
+   **After every reboot — just start it:**
+   ```bash
+   sudo docker-mac-net-connect
+   ```
+
+   This is the required step before scanning the `172.28.0.0/24` subnet from
+   the host. Without it macOS silently drops packets to Docker bridge IPs and
+   no miners will be discovered.
+
    On Linux the bridge network is reachable from the host without any extra tools.
 
 ### IP layout
