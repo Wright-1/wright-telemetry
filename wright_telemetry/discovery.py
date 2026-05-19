@@ -157,24 +157,32 @@ def load_subnets_file(path: str) -> list[str]:
 # ------------------------------------------------------------------
 
 def _probe_braiins(ip: str) -> Optional[DiscoveredMiner]:
-    """Hit the Braiins OS REST API; 200 or 401 means it's a Braiins miner."""
+    """Hit the Braiins OS REST API; require HTTP 200 with a Braiins JSON body.
+
+    A bare 401 is NOT treated as confirmation — many non-Braiins devices
+    (LuxOS, Bitmain stock firmware) return 401 on this path, which caused
+    large numbers of false-positive Braiins detections in mixed environments.
+    Only a 200 response whose JSON contains at least one expected Braiins
+    identity field (``hostname`` or ``mac_address``) is accepted.
+    """
     url = f"http://{ip}/api/v1/miner/details"
     try:
         resp = requests.get(url, timeout=_PROBE_TIMEOUT)
-        if resp.status_code in (200, 401):
-            hostname = ""
-            mac = ""
-            if resp.status_code == 200:
-                try:
-                    data = resp.json()
-                    hostname = data.get("hostname", "")
-                    mac = data.get("mac_address", "")
-                except Exception:
-                    pass
-            return DiscoveredMiner(
-                ip=ip, firmware="braiins",
-                hostname=hostname, mac_address=mac,
-            )
+        if resp.status_code != 200:
+            return None
+        try:
+            data = resp.json()
+        except Exception:
+            return None
+        # Require at least one Braiins-specific identity field to avoid
+        # treating arbitrary HTTP-200 responses as Braiins miners.
+        if not (data.get("hostname") or data.get("mac_address") or data.get("uid")):
+            return None
+        return DiscoveredMiner(
+            ip=ip, firmware="braiins",
+            hostname=data.get("hostname", ""),
+            mac_address=data.get("mac_address", ""),
+        )
     except (requests.ConnectionError, requests.Timeout, OSError):
         pass
     return None
