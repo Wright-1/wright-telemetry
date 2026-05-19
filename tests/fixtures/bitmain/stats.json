@@ -1,0 +1,70 @@
+{
+  "STATUS": {
+    "STATUS": "S",
+    "when": 1751944531,
+    "Msg": "stats",
+    "api_version": "1.0.0"
+  },
+  "INFO": {
+    "miner_version": "platform[AML]",
+    "CompileTime": "Fri Apr 18 16:15:41 CST 2025"
+  },
+  "STATS": [
+    {
+      "elapsed": 3600,
+      "rate_5s": 232436.76,
+      "rate_30m": 231431.07,
+      "rate_avg": 231429.72,
+      "rate_ideal": 232866.0,
+      "rate_unit": "GH/s",
+      "chain_num": 3,
+      "fan_num": 4,
+      "fan": [4560, 4560, 4530, 4530],
+      "miner-mode": 0,
+      "freq-level-mode": false,
+      "freq-level-min": 50,
+      "freq-level": 100,
+      "watt": 3250,
+      "jt": 14.03,
+      "ambient_temp": 34.50,
+      "chain": [
+        {
+          "index": 0,
+          "freq_avg": 708,
+          "rate_ideal": 77622.0,
+          "rate_real": 77100.0,
+          "asic_num": 55,
+          "temp_pic": [40, 40, 50, 50],
+          "temp_pcb": [50, 50, 60, 60],
+          "temp_chip": [55, 55, 65, 65],
+          "eeprom_loaded": true,
+          "sn": "JYZZYT0BEJCAH002M"
+        },
+        {
+          "index": 1,
+          "freq_avg": 710,
+          "rate_ideal": 77622.0,
+          "rate_real": 77200.0,
+          "asic_num": 55,
+          "temp_pic": [40, 40, 49, 49],
+          "temp_pcb": [50, 50, 59, 59],
+          "temp_chip": [55, 55, 64, 64],
+          "eeprom_loaded": true,
+          "sn": "JYZZYT0BEJCAH002J"
+        },
+        {
+          "index": 2,
+          "freq_avg": 710,
+          "rate_ideal": 77622.0,
+          "rate_real": 77129.72,
+          "asic_num": 55,
+          "temp_pic": [39, 39, 48, 48],
+          "temp_pcb": [49, 49, 58, 58],
+          "temp_chip": [54, 54, 63, 63],
+          "eeprom_loaded": true,
+          "sn": "JYZZYT0BEJCAH002P"
+        }
+      ]
+    }
+  ]
+}

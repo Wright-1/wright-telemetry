@@ -329,6 +329,7 @@ def main() -> None:
     check_for_update(cfg)
 
     # Import here to avoid circular imports and to ensure collector adapters register
+    import wright_telemetry.collectors.bitmain  # noqa: F401  -- triggers @register
     import wright_telemetry.collectors.braiins  # noqa: F401  -- triggers @register
     import wright_telemetry.collectors.luxos    # noqa: F401  -- triggers @register
     import wright_telemetry.collectors.vnish    # noqa: F401  -- triggers @register

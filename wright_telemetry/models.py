@@ -116,6 +116,25 @@ class CoolingData:
                 highest_temp = {"value": max(all_temps), "unit": "C"}
         return cls(fans=fans, highest_temperature=highest_temp)
 
+    @classmethod
+    def from_bitmain(cls, raw: dict[str, Any]) -> CoolingData:
+        stats = (raw.get("STATS") or [{}])[0]
+        # Fan RPMs are a flat integer array — synthesize FanReading objects.
+        fans = [
+            FanReading(position=i, rpm=rpm, target_speed_ratio=0.0)
+            for i, rpm in enumerate(stats.get("fan", []))
+        ]
+        # Highest chip temp across all chains.
+        all_temps: list[float] = []
+        for chain in stats.get("chain", []):
+            for t in chain.get("temp_chip", []):
+                if isinstance(t, (int, float)) and t > 0:
+                    all_temps.append(float(t))
+        highest_temp: Optional[dict[str, Any]] = (
+            {"value": max(all_temps), "unit": "C"} if all_temps else None
+        )
+        return cls(fans=fans, highest_temperature=highest_temp)
+
 
 @dataclass
 class HashrateData:
@@ -204,6 +223,43 @@ class HashrateData:
         }
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
+    @classmethod
+    def from_bitmain(
+        cls,
+        stats_raw: dict[str, Any],
+        pools_raw: dict[str, Any],
+    ) -> HashrateData:
+        stats = (stats_raw.get("STATS") or [{}])[0]
+        miner_stats = {
+            "ghs_5s": stats.get("rate_5s", 0),
+            "ghs_30m": stats.get("rate_30m", 0),
+            "ghs_av": stats.get("rate_avg", 0),
+            "rate_ideal": stats.get("rate_ideal", 0),
+            "rate_unit": stats.get("rate_unit", "GH/s"),
+        }
+        pools = pools_raw.get("POOLS", [])
+        pool_stats = {
+            "pools": [
+                {
+                    "url": p.get("url", ""),
+                    "user": p.get("user", ""),
+                    "status": p.get("status", ""),
+                    "accepted": p.get("accepted", 0),
+                    "rejected": p.get("rejected", 0),
+                    "stale": p.get("stale", 0),
+                    "difficulty_accepted": p.get("diffa", 0),
+                    "pool_rejected_pct": 0,
+                    "pool_stale_pct": 0,
+                }
+                for p in pools
+            ],
+        }
+        power_stats = {
+            "watts": stats.get("watt", 0),
+            "efficiency": stats.get("jt", 0),
+        }
+        return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
+
 
 @dataclass
 class UptimeData:
@@ -260,6 +316,26 @@ class UptimeData:
             bos_version={
                 "vnish": info_raw.get("firmware_version", ""),
                 "model": info_raw.get("model", ""),
+            },
+            platform=0,
+            status=0,
+        )
+
+    @classmethod
+    def from_bitmain(
+        cls,
+        stats_raw: dict[str, Any],
+        sysinfo_raw: dict[str, Any],
+    ) -> UptimeData:
+        stats = (stats_raw.get("STATS") or [{}])[0]
+        elapsed = stats.get("elapsed", 0)
+        return cls(
+            bosminer_uptime_s=elapsed,
+            system_uptime_s=elapsed,
+            hostname=sysinfo_raw.get("hostname", ""),
+            bos_version={
+                "firmware": sysinfo_raw.get("system_filesystem_version", ""),
+                "firmware_type": sysinfo_raw.get("firmware_type", ""),
             },
             platform=0,
             status=0,
@@ -377,6 +453,46 @@ class HashboardData:
             ))
         return cls(hashboards=boards)
 
+    @classmethod
+    def from_bitmain(cls, raw: dict[str, Any]) -> HashboardData:
+        stats = (raw.get("STATS") or [{}])[0]
+        boards: list[HashboardReading] = []
+        for chain in stats.get("chain", []):
+            board_id = chain.get("index", 0)
+            # temp_pcb is a list of 4 PCB sensor readings — take max for board_temp.
+            pcb_temps = [
+                float(t) for t in chain.get("temp_pcb", [])
+                if isinstance(t, (int, float)) and t > 0
+            ]
+            board_temp: Optional[dict[str, Any]] = (
+                {"value": max(pcb_temps), "unit": "C"} if pcb_temps else None
+            )
+            # temp_chip is a list of 4 ASIC die readings — take max.
+            chip_temps = [
+                float(t) for t in chain.get("temp_chip", [])
+                if isinstance(t, (int, float)) and t > 0
+            ]
+            highest_chip: Optional[dict[str, Any]] = (
+                {"value": max(chip_temps), "unit": "C"} if chip_temps else None
+            )
+            boards.append(HashboardReading(
+                board_name=f"Chain {board_id}",
+                board_temp=board_temp,
+                highest_chip_temp=highest_chip,
+                lowest_inlet_temp=None,
+                highest_outlet_temp=None,
+                chips_count=chain.get("asic_num", 0),
+                id=str(board_id),
+                enabled=chain.get("eeprom_loaded", False),
+                stats={
+                    "ghs_real": chain.get("rate_real", 0),
+                    "ghs_ideal": chain.get("rate_ideal", 0),
+                    "freq_avg": chain.get("freq_avg", 0),
+                    "serial_number": chain.get("sn", ""),
+                },
+            ))
+        return cls(hashboards=boards)
+
 
 @dataclass
 class ErrorEntry:
@@ -426,5 +542,18 @@ class ErrorData:
                 components=[{"type": e.get("component_type", ""), "id": e.get("component_id", "")}],
             )
             for e in raw.get("errors", [])
+        ]
+        return cls(errors=entries)
+
+    @classmethod
+    def from_bitmain(cls, raw: dict[str, Any]) -> ErrorData:
+        entries = [
+            ErrorEntry(
+                message=w.get("msg", ""),
+                timestamp=w.get("timestamp", ""),
+                error_codes=[{"code": w.get("code", ""), "level": w.get("level", "")}],
+                components=[],
+            )
+            for w in raw.get("WARNINGS", [])
         ]
         return cls(errors=entries)

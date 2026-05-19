@@ -228,6 +228,48 @@ def _probe_luxos(ip: str) -> Optional[DiscoveredMiner]:
     return None
 
 
+def _probe_bitmain(ip: str) -> Optional[DiscoveredMiner]:
+    """Hit the Antminer CGI system-info endpoint with HTTP Digest Auth.
+
+    Positive signal: HTTP 200 JSON response containing a ``serinum`` field.
+    The probe uses the default credentials (``root``/``root``); miners with
+    non-default passwords will still be detected by the 401 signal but will
+    need credentials supplied manually.
+    """
+    from requests.auth import HTTPDigestAuth
+
+    url = f"http://{ip}/cgi-bin/get_system_info.cgi"
+    try:
+        resp = requests.get(
+            url,
+            auth=HTTPDigestAuth("root", "root"),
+            timeout=_PROBE_TIMEOUT,
+        )
+        # Accept 401 as a Bitmain signal only if we also see the Digest challenge
+        # (WWW-Authenticate header contains "Digest") — avoids false positives.
+        if resp.status_code == 401:
+            www_auth = resp.headers.get("WWW-Authenticate", "")
+            if "Digest" in www_auth:
+                return DiscoveredMiner(
+                    ip=ip, firmware="bitmain",
+                    hostname="", mac_address="",
+                )
+            return None
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not data.get("serinum"):
+            return None
+        return DiscoveredMiner(
+            ip=ip,
+            firmware="bitmain",
+            hostname=data.get("hostname", ""),
+            mac_address=data.get("macaddr", ""),
+        )
+    except Exception:
+        return None
+
+
 def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
     """Hit the Vnish REST API; require 200 JSON with ``firmware_version``.
 
@@ -261,6 +303,7 @@ _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
     "braiins": _probe_braiins,
     "luxos": _probe_luxos,
     "vnish": _probe_vnish,
+    "bitmain": _probe_bitmain,
 }
 
 

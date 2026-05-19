@@ -29,7 +29,7 @@ flowchart LR
     API --> Portal
 ```
 
-The collector runs on any machine on the same LAN as the mining rigs. It polls each miner's local API (Braiins REST, LuxOS TCP, or Vnish REST), encrypts the payload, and POSTs it to the Wright Fan cloud API. Operational logs are shipped to Loki for centralized monitoring.
+The collector runs on any machine on the same LAN as the mining rigs. It polls each miner's local API (Bitmain CGI, Braiins REST, LuxOS TCP, or Vnish REST), encrypts the payload, and POSTs it to the Wright Fan cloud API. Operational logs are shipped to Loki for centralized monitoring.
 
 ---
 
@@ -52,6 +52,7 @@ wright_telemetry/
         __init__.py
         base.py          # abstract MinerCollector interface
         factory.py       # registry-based factory
+        bitmain.py       # Bitmain Antminer CGI REST adapter
         braiins.py       # Braiins OS REST adapter
         luxos.py         # LuxOS CGMiner TCP adapter
         vnish.py         # Vnish firmware REST adapter
@@ -97,6 +98,14 @@ classDiagram
         +fetch_identity()
         ...
     }
+    class BitmainCollector {
+        -_session: requests.Session
+        -_session.auth: HTTPDigestAuth
+        +authenticate()
+        +fetch_identity()
+        ...
+    }
+    MinerCollector <|-- BitmainCollector
     MinerCollector <|-- BraiinsCollector
     MinerCollector <|-- LuxOSCollector
     MinerCollector <|-- VnishCollector
@@ -123,6 +132,34 @@ class VnishCollector(MinerCollector):
     def fetch_hashboards(self) -> HashboardData: ...
     def fetch_errors(self) -> ErrorData: ...
 ```
+
+---
+
+## Bitmain Antminer API Endpoints
+
+Antminer stock firmware exposes a **CGI-based REST API** over HTTP, authenticated
+with **HTTP Digest Auth** (RFC 2617). Default credentials are `root` / `root`.
+No token exchange is required — `requests.auth.HTTPDigestAuth` handles the
+challenge-response automatically.
+
+| Metric     | Endpoint                           | Response (key fields)                                                  |
+|------------|-----------------------------------|------------------------------------------------------------------------|
+| identity   | `GET /cgi-bin/get_system_info.cgi` | `serinum` (uid/serial), `macaddr`, `hostname`, `ipaddress`             |
+| identity   | `GET /cgi-bin/miner_type.cgi`      | `miner_type` (model name), `fw_version`                                |
+| cooling    | `GET /cgi-bin/stats.cgi`           | `STATS[0].fan[]` (RPM array), `chain[].temp_chip[]` (4 sensors/chain) |
+| hashrate   | `GET /cgi-bin/stats.cgi`           | `rate_5s`, `rate_30m`, `rate_avg`, `rate_unit`, `watt`, `jt`          |
+| hashrate   | `GET /cgi-bin/pools.cgi`           | `POOLS[].url`, `user`, `status`, `accepted`, `rejected`, `stale`       |
+| uptime     | `GET /cgi-bin/stats.cgi`           | `STATS[0].elapsed`                                                     |
+| uptime     | `GET /cgi-bin/get_system_info.cgi` | `system_filesystem_version`, `firmware_type`                           |
+| hashboards | `GET /cgi-bin/stats.cgi`           | `chain[].sn`, `temp_pcb[]`, `temp_chip[]`, `rate_real`, `asic_num`    |
+| errors     | `GET /cgi-bin/warning.cgi`         | `WARNINGS[].code`, `msg`, `timestamp`, `level`                         |
+
+**Notable differences from Braiins / Vnish / LuxOS:**
+- **HTTP Digest Auth** instead of a POST-to-unlock token flow
+- **CGI endpoints** (`/cgi-bin/*.cgi`) instead of `/api/v1/...` REST paths
+- **Fans** returned as a flat integer array; `FanReading` objects synthesised with `position=index`
+- **Temperatures** are arrays of 4 sensor readings per chain; adapter takes `max()`
+- **Rate unit** is `GH/s`; preserved as-is in `miner_stats`
 
 ---
 
@@ -288,6 +325,7 @@ Each IP in the target range is probed concurrently (up to 128 threads). Three pr
 | Braiins | `GET /api/v1/miner/details` | HTTP 200 or 401 |
 | LuxOS | TCP 4028 `{"command":"version"}` | Response contains `LUXminer` |
 | Vnish | `GET /api/v1/info` | HTTP 200, response contains `firmware_version` |
+| Bitmain | `GET /cgi-bin/get_system_info.cgi` | HTTP 200 + `serinum`; or 401 + `WWW-Authenticate: Digest` |
 
 Probes time out after 2 seconds. Results are sorted by IP and deduplicated by MAC address when merging with existing config.
 

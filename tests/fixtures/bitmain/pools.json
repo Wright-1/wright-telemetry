@@ -1,0 +1,50 @@
+{
+  "STATUS": {
+    "STATUS": "S",
+    "when": 1751944006,
+    "Msg": "pools",
+    "api_version": "1.0.0"
+  },
+  "INFO": {
+    "miner_version": "platform[AML]",
+    "CompileTime": "Fri Apr 18 16:15:41 CST 2025"
+  },
+  "POOLS": [
+    {
+      "index": 0,
+      "url": "stratum+tcp://pool.example.com:3333",
+      "user": "wallet.worker1",
+      "status": "Alive",
+      "priority": 0,
+      "getworks": 308,
+      "accepted": 1024,
+      "rejected": 3,
+      "discarded": 12,
+      "stale": 1,
+      "diff": "1.05M",
+      "diffa": 1073741824,
+      "diffr": 3145728,
+      "diffs": 1048576,
+      "lsdiff": 1048576,
+      "lstime": "0:00:05"
+    },
+    {
+      "index": 1,
+      "url": "stratum+tcp://backup.example.com:3333",
+      "user": "wallet.worker1",
+      "status": "Dead",
+      "priority": 1,
+      "getworks": 0,
+      "accepted": 0,
+      "rejected": 0,
+      "discarded": 0,
+      "stale": 0,
+      "diff": "0",
+      "diffa": 0,
+      "diffr": 0,
+      "diffs": 0,
+      "lsdiff": 0,
+      "lstime": "0"
+    }
+  ]
+}
