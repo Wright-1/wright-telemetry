@@ -21,6 +21,19 @@ logger = logging.getLogger(__name__)
 _POST_TIMEOUT = 20  # seconds
 
 
+def wright_api_v1_url(api_url: str, *segments: str) -> str:
+    """Build ``/api/v1/...`` from the configured Wright API base.
+
+    Used for endpoints that have not migrated to the v2 data pipeline
+    (e.g. ``/v1/telemetry/agent-config``).
+    """
+    base = (api_url or "").strip().rstrip("/")
+    tail = "/".join(segments)
+    if base.endswith("/api"):
+        return f"{base}/v1/{tail}"
+    return f"{base}/api/v1/{tail}"
+
+
 def wright_api_url(api_url: str, *segments: str) -> str:
     """Build ``/api/v2/...`` from the configured Wright API base.
 
@@ -62,6 +75,37 @@ class WrightAPIClient:
 
     def close(self) -> None:
         self._session.close()
+
+    def send_agent_config(self, config: dict[str, Any], agent_version: str) -> bool:
+        """POST an agent config snapshot to ``/v1/telemetry/agent-config``.
+
+        Encrypted with the same AES-256-GCM envelope as telemetry payloads.
+        Called after setup and after remote config reloads so the portal
+        always has an up-to-date view of the agent's configuration and version.
+        """
+        import platform
+        import time
+
+        url = wright_api_v1_url(self.api_url, "telemetry", "agent-config")
+        payload = {
+            "facility_id": self.facility_id,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "data": {
+                "config": config,
+                "agent_version": agent_version,
+                "os": platform.platform(),
+                "time_running": 0,
+            },
+        }
+        try:
+            wire = encrypt_payload(payload, self.api_key)
+            resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)
+            resp.raise_for_status()
+            logger.info("Sent agent config snapshot (HTTP %d)", resp.status_code)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to send agent config snapshot: %s", exc)
+            return False
 
     def send(self, payload: TelemetryPayload) -> bool:
         """Encrypt and POST a telemetry payload.  Returns True on success."""
