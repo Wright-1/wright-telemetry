@@ -157,29 +157,23 @@ def load_subnets_file(path: str) -> list[str]:
 # ------------------------------------------------------------------
 
 def _probe_braiins(ip: str) -> Optional[DiscoveredMiner]:
-    """Hit the Braiins OS REST API; 200 or 401 means it's a Braiins miner.
+    """Hit the Braiins OS REST API; only a 200 confirms a Braiins miner.
 
-    A 401 with ``WWW-Authenticate: Digest`` is Bitmain, not Braiins — skip it.
+    A bare 401 is not treated as Braiins — too many non-Braiins devices
+    (Bitmain CGI, LuxOS) also return 401 on this path, causing false positives.
     """
     url = f"http://{ip}/api/v1/miner/details"
     try:
         resp = requests.get(url, timeout=_PROBE_TIMEOUT)
-        if resp.status_code == 401:
-            # Bitmain uses HTTP Digest Auth and will 401 any unknown path.
-            # Exclude those to avoid false positives.
-            www_auth = resp.headers.get("WWW-Authenticate", "")
-            if "Digest" in www_auth:
-                return None
-        if resp.status_code in (200, 401):
+        if resp.status_code == 200:
             hostname = ""
             mac = ""
-            if resp.status_code == 200:
-                try:
-                    data = resp.json()
-                    hostname = data.get("hostname", "")
-                    mac = data.get("mac_address", "")
-                except Exception:
-                    pass
+            try:
+                data = resp.json()
+                hostname = data.get("hostname", "")
+                mac = data.get("mac_address", "")
+            except Exception:
+                pass
             return DiscoveredMiner(
                 ip=ip, firmware="braiins",
                 hostname=hostname, mac_address=mac,
