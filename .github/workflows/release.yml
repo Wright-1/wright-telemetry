@@ -7,17 +7,7 @@ on:
 permissions:
   contents: write
 
-env:
-  SPACES_BUCKET: wright-one
-  SPACES_REGION: nyc3
-  SPACES_ENDPOINT: https://nyc3.digitaloceanspaces.com
-  SPACES_PUBLIC_BASE: https://wright-one.nyc3.digitaloceanspaces.com
-
 jobs:
-  # ──────────────────────────────────────────────────────────────────
-  # Build jobs — delegate to the per-platform workflows
-  # ──────────────────────────────────────────────────────────────────
-
   build-linux:
     uses: ./.github/workflows/build-linux.yml
     secrets: inherit
@@ -30,110 +20,25 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     secrets: inherit
 
-  # ──────────────────────────────────────────────────────────────────
-  # Publish — runs after all 3 builds succeed
-  # ──────────────────────────────────────────────────────────────────
-
   publish:
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: List artifacts
-        run: find artifacts -type f | sort
-
-      - name: Install AWS CLI
-        run: pip install --quiet awscli
-
-      - name: Upload binaries to Spaces
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          DEST="s3://${SPACES_BUCKET}/releases/v${VERSION}"
-
-          # Linux
-          aws s3 cp artifacts/wright-telemetry-linux/wright-telemetry-linux \
-            "${DEST}/wright-telemetry-linux" \
-            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
-          aws s3 cp artifacts/wright-telemetry-linux/wright-telemetry-linux.sha256 \
-            "${DEST}/wright-telemetry-linux.sha256" \
-            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
-
-          # macOS
-          aws s3 cp artifacts/wright-telemetry-macos/wright-telemetry-macos.zip \
-            "${DEST}/wright-telemetry-macos.zip" \
-            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
-          aws s3 cp artifacts/wright-telemetry-macos/wright-telemetry-macos.zip.sha256 \
-            "${DEST}/wright-telemetry-macos.zip.sha256" \
-            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
-
-          # Windows
-          aws s3 cp artifacts/wright-telemetry-windows/wright-telemetry.exe \
-            "${DEST}/wright-telemetry.exe" \
-            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
-          aws s3 cp artifacts/wright-telemetry-windows/wright-telemetry.exe.sha256 \
-            "${DEST}/wright-telemetry.exe.sha256" \
-            --endpoint-url "${SPACES_ENDPOINT}" --acl public-read
-
-      - name: Generate and upload latest.json
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          BASE="${SPACES_PUBLIC_BASE}/releases/v${VERSION}"
-          cat > latest.json <<EOF
-          {
-            "version": "${VERSION}",
-            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "assets": {
-              "linux": {
-                "url": "${BASE}/wright-telemetry-linux",
-                "checksum_url": "${BASE}/wright-telemetry-linux.sha256"
-              },
-              "darwin": {
-                "url": "${BASE}/wright-telemetry-macos.zip",
-                "checksum_url": "${BASE}/wright-telemetry-macos.zip.sha256"
-              },
-              "win32": {
-                "url": "${BASE}/wright-telemetry.exe",
-                "checksum_url": "${BASE}/wright-telemetry.exe.sha256"
-              }
-            }
-          }
-          EOF
-
-          aws s3 cp latest.json \
-            "s3://${SPACES_BUCKET}/releases/latest.json" \
-            --endpoint-url "${SPACES_ENDPOINT}" \
-            --acl public-read \
-            --cache-control "no-cache, no-store" \
-            --content-type "application/json"
-
-      - name: Create GitHub Release (changelog only)
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          body: |
-            ## Downloads
-
-            Binaries are distributed via the Wright One update service.
-            Agents will auto-update automatically.
-
-            | Platform | Direct link |
-            |----------|-------------|
-            | Linux | [wright-telemetry-linux](${{ env.SPACES_PUBLIC_BASE }}/releases/v${{ steps.version.outputs.version }}/wright-telemetry-linux) |
-            | macOS | [wright-telemetry-macos.zip](${{ env.SPACES_PUBLIC_BASE }}/releases/v${{ steps.version.outputs.version }}/wright-telemetry-macos.zip) |
-            | Windows | [wright-telemetry.exe](${{ env.SPACES_PUBLIC_BASE }}/releases/v${{ steps.version.outputs.version }}/wright-telemetry.exe) |
+          files: |
+            artifacts/wright-telemetry-linux/wright-telemetry-linux
+            artifacts/wright-telemetry-linux/wright-telemetry-linux.sha256
+            artifacts/wright-telemetry-macos/wright-telemetry-macos.zip
+            artifacts/wright-telemetry-macos/wright-telemetry-macos.zip.sha256
+            artifacts/wright-telemetry-windows/wright-telemetry.exe
+            artifacts/wright-telemetry-windows/wright-telemetry.exe.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
