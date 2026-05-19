@@ -26,6 +26,8 @@ from wright_telemetry.scheduler import (
     _build_collectors,
     _detect_fan_dips,
     _poll_cycle,
+    _report_miners_to_api,
+    _resolve_miners,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "braiins"
@@ -286,3 +288,137 @@ class TestDetectFanDips:
             fan_rpm_history, fan_dip_times, miner_last_detected,
         )
         assert result == []
+
+
+# ---------------------------------------------------------------
+# _resolve_miners
+# ---------------------------------------------------------------
+
+class TestResolveMiners:
+
+    def test_returns_config_miners_when_discovery_disabled(self):
+        """Miners explicitly in cfg["miners"] are returned even with discovery off."""
+        cfg = {
+            "miners": [
+                {"url": "http://10.0.0.1", "name": "legacy-a", "firmware": "braiins"},
+                {"url": "http://10.0.0.2", "name": "legacy-b", "firmware": "luxos"},
+            ],
+            "discovery": {"enabled": False},
+        }
+        result = _resolve_miners(cfg)
+        assert len(result) == 2
+        assert result[0]["url"] == "http://10.0.0.1"
+        assert result[1]["url"] == "http://10.0.0.2"
+
+    def test_returns_empty_when_no_miners_and_discovery_disabled(self):
+        cfg = {"discovery": {"enabled": False}}
+        assert _resolve_miners(cfg) == []
+
+    def test_config_miners_included_when_discovery_enabled(self, monkeypatch):
+        """Legacy config miners survive even when the discovery scan finds nothing."""
+        monkeypatch.setattr(
+            "wright_telemetry.scheduler.discover_miners",
+            lambda **_kw: [],
+        )
+        cfg = {
+            "miners": [{"url": "http://10.0.0.1", "name": "legacy", "firmware": "braiins"}],
+            "discovery": {"enabled": True, "subnets": ["10.0.0.0/24"]},
+        }
+        result = _resolve_miners(cfg)
+        assert any(m["url"] == "http://10.0.0.1" for m in result)
+
+    def test_discovered_miners_merged_with_config_miners(self, monkeypatch):
+        """Discovery results are merged in-memory alongside legacy config miners."""
+        from wright_telemetry.discovery import DiscoveredMiner
+
+        monkeypatch.setattr(
+            "wright_telemetry.scheduler.discover_miners",
+            lambda **_kw: [
+                DiscoveredMiner(ip="10.0.0.5", firmware="braiins", hostname="new", mac_address="AA:BB:CC:DD:EE:05"),
+            ],
+        )
+        cfg = {
+            "miners": [{"url": "http://10.0.0.1", "name": "legacy", "firmware": "braiins", "mac_address": "AA:BB:CC:DD:EE:01"}],
+            "discovery": {"enabled": True, "subnets": ["10.0.0.0/24"]},
+        }
+        result = _resolve_miners(cfg)
+        urls = [m["url"] for m in result]
+        assert "http://10.0.0.1" in urls   # legacy preserved
+        assert "http://10.0.0.5" in urls   # newly discovered added
+
+    def test_no_duplicates_when_config_miner_matches_discovered(self, monkeypatch):
+        """A miner already in config is not duplicated when discovery finds the same MAC."""
+        from wright_telemetry.discovery import DiscoveredMiner
+
+        monkeypatch.setattr(
+            "wright_telemetry.scheduler.discover_miners",
+            lambda **_kw: [
+                DiscoveredMiner(ip="10.0.0.1", firmware="braiins", hostname="same", mac_address="AA:BB:CC:DD:EE:01"),
+            ],
+        )
+        cfg = {
+            "miners": [{"url": "http://10.0.0.1", "name": "legacy", "firmware": "braiins", "mac_address": "AA:BB:CC:DD:EE:01"}],
+            "discovery": {"enabled": True, "subnets": ["10.0.0.0/24"]},
+        }
+        result = _resolve_miners(cfg)
+        assert len(result) == 1
+
+
+# ---------------------------------------------------------------
+# _report_miners_to_api
+# ---------------------------------------------------------------
+
+class TestReportMinersToApi:
+
+    def _make_identity(self, uid: str, ip: str = "10.0.0.1", firmware: str = "braiins") -> MinerIdentity:
+        return MinerIdentity(
+            uid=uid,
+            serial_number="SN-001",
+            hostname=f"miner-{uid}",
+            mac_address="AA:BB:CC:DD:EE:01",
+            ip_address=ip,
+            firmware=firmware,
+        )
+
+    def test_sends_mark_miner_for_each_identity(self):
+        api_client = MagicMock()
+        api_client.send.return_value = True
+
+        identities = {
+            "http://10.0.0.1": self._make_identity("uid-1", "10.0.0.1"),
+            "http://10.0.0.2": self._make_identity("uid-2", "10.0.0.2"),
+        }
+        _report_miners_to_api(api_client, "fac-1", identities)
+
+        assert api_client.send.call_count == 2
+        for call in api_client.send.call_args_list:
+            payload = call.args[0]
+            assert payload.metric_type == "mark_miner"
+            assert payload.facility_id == "fac-1"
+
+    def test_payload_data_contains_identity_fields(self):
+        api_client = MagicMock()
+        api_client.send.return_value = True
+
+        identity = self._make_identity("uid-1", "10.0.0.1", "braiins")
+        _report_miners_to_api(api_client, "fac-1", {"http://10.0.0.1": identity})
+
+        payload = api_client.send.call_args.args[0]
+        assert payload.data["ip"] == "10.0.0.1"
+        assert payload.data["firmware"] == "braiins"
+        assert payload.data["hostname"] == "miner-uid-1"
+        assert payload.data["mac_address"] == "AA:BB:CC:DD:EE:01"
+
+    def test_api_failure_does_not_raise(self):
+        """A send() exception must not propagate — the loop should continue."""
+        api_client = MagicMock()
+        api_client.send.side_effect = RuntimeError("network down")
+
+        identities = {"http://10.0.0.1": self._make_identity("uid-1")}
+        # Should not raise
+        _report_miners_to_api(api_client, "fac-1", identities)
+
+    def test_empty_identities_sends_nothing(self):
+        api_client = MagicMock()
+        _report_miners_to_api(api_client, "fac-1", {})
+        api_client.send.assert_not_called()

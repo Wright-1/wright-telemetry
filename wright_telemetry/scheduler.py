@@ -29,6 +29,7 @@ from wright_telemetry.discovery import (
     discover_miners,
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
+    merge_miners,
 )
 from wright_telemetry.models import MinerIdentity, TelemetryPayload
 
@@ -57,11 +58,20 @@ def _check_fd_growth(baseline: int, last_check: float) -> tuple[int, float]:
 
 
 def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Discover miners by scanning configured subnets."""
-    discovery_cfg = cfg.get("discovery", {})
+    """Return miners to poll: legacy config miners merged with any discovered ones.
 
+    Miners in ``cfg["miners"]`` are always included for backwards compatibility —
+    users who ran an older setup wizard may have miners written there.  Discovered
+    miners are merged in-memory only; nothing is ever written back to the config
+    file.  Posting miners to the API (``mark_miner``) is handled separately by
+    :func:`_report_miners_to_api` after identities are fetched.
+    """
+    # Backwards compat: miners explicitly listed in the config file.
+    config_miners: list[dict[str, Any]] = list(cfg.get("miners", []))
+
+    discovery_cfg = cfg.get("discovery", {})
     if not discovery_cfg.get("enabled", False):
-        return []
+        return config_miners
 
     subnets = discovery_cfg.get("subnets")
     default_user = discovery_cfg.get("default_username", "root")
@@ -72,9 +82,40 @@ def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
 
     found = discover_miners(subnets=subnets, firmware_types=firmware_types)
     discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
-
     logger.info("Discovered %d miner(s) via subnet scan", len(discovered_cfgs))
-    return discovered_cfgs
+
+    # Merge in-memory only — config file is never touched.
+    return merge_miners(config_miners, discovered_cfgs)
+
+
+def _report_miners_to_api(
+    api_client: WrightAPIClient,
+    facility_id: str,
+    identities: dict[str, MinerIdentity],
+) -> None:
+    """POST every known miner to the API with ``metric_type='mark_miner'``.
+
+    Called once on startup and again whenever new miners are discovered at
+    runtime.  Never called on every poll cycle — this is registration, not
+    telemetry.
+    """
+    for _url, identity in identities.items():
+        try:
+            api_client.send(TelemetryPayload(
+                metric_type="mark_miner",
+                facility_id=facility_id,
+                miner_identity=identity,
+                data={
+                    "ip": identity.ip_address,
+                    "firmware": identity.firmware,
+                    "hostname": identity.hostname,
+                    "mac_address": identity.mac_address,
+                },
+            ))
+        except Exception as exc:
+            logger.warning(
+                "Failed to report miner '%s' to API: %s", identity.uid, exc
+            )
 
 
 def _build_collectors(
@@ -299,6 +340,7 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
         collectors = _build_collectors(all_miners, default_collector_type)
         _authenticate_all(collectors)
         identities = _fetch_identities(collectors)
+        _report_miners_to_api(api_client, facility_id, identities)
     except KeyboardInterrupt:
         print("\n[BASELINE] Skipped.")
         for _, c in collectors:
@@ -634,6 +676,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
             collectors = _build_collectors(all_miners, default_collector_type)
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
+            _report_miners_to_api(api_client, facility_id, identities)
 
             consecutive_crashes = 0
             fan_rpm_history: dict[tuple[str, int], deque] = {}
@@ -731,6 +774,7 @@ def _run_ws_fan_detection(
     collectors = _build_collectors(miners, default_collector_type)
     _authenticate_all(collectors)
     identities = _fetch_identities(collectors)
+    _report_miners_to_api(api_client, facility_id, identities)
 
     controller.push_event({
         "event": "fan_detection_started",
@@ -848,6 +892,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
+            _report_miners_to_api(api_client, facility_id, identities)
 
             consecutive_crashes = 0
             last_scan = time.time()
@@ -917,6 +962,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
                         _authenticate_all(new_collectors)
                         new_ids = _fetch_identities(new_collectors)
+                        _report_miners_to_api(api_client, facility_id, new_ids)
 
                         collectors.extend(new_collectors)
                         identities.update(new_ids)

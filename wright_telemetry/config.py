@@ -720,19 +720,15 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
 
 def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
     """Phase 2 of setup: miner discovery and final save."""
-    from wright_telemetry.discovery import merge_miners
-
     discovered_miners, discovery_cfg = _wizard_discovery(
         cfg.get("discovery"),
         collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
     )
     cfg["discovery"] = discovery_cfg
-    if discovered_miners:
-        existing = cfg.get("miners", [])
-        cfg["miners"] = merge_miners(
-            [m for m in existing if not m.get("discovered")],
-            discovered_miners,
-        )
+    # Discovered miners are NOT written to the config file.
+    # The scheduler will POST them to the API via metric_type='mark_miner'
+    # on startup, and re-discover them on every scan cycle using the
+    # subnets stored in cfg["discovery"].
 
     save_config(cfg)
     console.print(f"\n  [green]\u2713[/] Configuration saved to [cyan]{CONFIG_FILE}[/]")
