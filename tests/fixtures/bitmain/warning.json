@@ -1,0 +1,22 @@
+{
+  "STATUS": {
+    "STATUS": "S",
+    "when": 1751944531,
+    "Msg": "warning",
+    "api_version": "1.0.0"
+  },
+  "WARNINGS": [
+    {
+      "code": "W003",
+      "msg": "Fan speed below threshold on fan 2",
+      "timestamp": "2025-04-18T10:23:45Z",
+      "level": "warning"
+    },
+    {
+      "code": "T001",
+      "msg": "Chain 0 chip temperature exceeds 80C",
+      "timestamp": "2025-04-18T09:15:00Z",
+      "level": "error"
+    }
+  ]
+}

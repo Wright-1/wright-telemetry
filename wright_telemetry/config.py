@@ -155,7 +155,7 @@ _DEFAULT_POLL_INTERVAL = 30
 _DEFAULT_COLLECTOR_TYPES = ["braiins"]
 _DEFAULT_SCAN_INTERVAL = 30   # seconds between runtime re-scans
 
-_KNOWN_FIRMWARE_TYPES = ["braiins", "luxos", "vnish"]
+_KNOWN_FIRMWARE_TYPES = ["braiins", "bitmain", "luxos", "vnish"]
 
 
 # ------------------------------------------------------------------

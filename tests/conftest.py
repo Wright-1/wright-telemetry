@@ -48,11 +48,13 @@ def check_fd_leaks():
 
 
 BRAIINS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "braiins"
-LUXOS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "luxos"
-VNISH_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "vnish"
-MINER_URL = "http://192.168.1.100"
-LUXOS_HOST = "192.168.1.200"
-VNISH_URL = "http://192.168.1.150"
+LUXOS_FIXTURES_DIR   = Path(__file__).parent / "fixtures" / "luxos"
+VNISH_FIXTURES_DIR   = Path(__file__).parent / "fixtures" / "vnish"
+BITMAIN_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "bitmain"
+MINER_URL   = "http://192.168.1.100"
+LUXOS_HOST  = "192.168.1.200"
+VNISH_URL   = "http://192.168.1.150"
+BITMAIN_URL = "http://192.168.1.200"
 
 
 def _load_braiins(name: str) -> dict[str, Any]:
@@ -65,6 +67,10 @@ def _load_luxos(name: str) -> dict[str, Any]:
 
 def _load_vnish(name: str) -> dict[str, Any]:
     return json.loads((VNISH_FIXTURES_DIR / name).read_text())
+
+
+def _load_bitmain(name: str) -> dict[str, Any]:
+    return json.loads((BITMAIN_FIXTURES_DIR / name).read_text())
 
 
 @pytest.fixture()
@@ -245,5 +251,77 @@ def vnish_collector_no_auth():
     """Return a VnishCollector with no credentials."""
     from wright_telemetry.collectors.vnish import VnishCollector
     collector = VnishCollector(url=VNISH_URL)
+    yield collector
+    collector.close()
+
+
+# ---------------------------------------------------------------------------
+# Bitmain fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def bitmain_fixtures() -> dict[str, Any]:
+    """All Bitmain fixture data keyed by CGI endpoint name."""
+    return {
+        "get_system_info": _load_bitmain("get_system_info.json"),
+        "miner_type":      _load_bitmain("miner_type.json"),
+        "stats":           _load_bitmain("stats.json"),
+        "pools":           _load_bitmain("pools.json"),
+        "warning":         _load_bitmain("warning.json"),
+    }
+
+
+@pytest.fixture()
+def mock_bitmain_api(bitmain_fixtures) -> responses.RequestsMock:
+    """Activate ``responses`` with all Bitmain CGI endpoints returning fixture data."""
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(
+            responses.GET,
+            f"{BITMAIN_URL}/cgi-bin/get_system_info.cgi",
+            json=bitmain_fixtures["get_system_info"],
+            status=200,
+        )
+        rsps.add(
+            responses.GET,
+            f"{BITMAIN_URL}/cgi-bin/miner_type.cgi",
+            json=bitmain_fixtures["miner_type"],
+            status=200,
+        )
+        rsps.add(
+            responses.GET,
+            f"{BITMAIN_URL}/cgi-bin/stats.cgi",
+            json=bitmain_fixtures["stats"],
+            status=200,
+        )
+        rsps.add(
+            responses.GET,
+            f"{BITMAIN_URL}/cgi-bin/pools.cgi",
+            json=bitmain_fixtures["pools"],
+            status=200,
+        )
+        rsps.add(
+            responses.GET,
+            f"{BITMAIN_URL}/cgi-bin/warning.cgi",
+            json=bitmain_fixtures["warning"],
+            status=200,
+        )
+        yield rsps
+
+
+@pytest.fixture()
+def bitmain_collector():
+    """Return a BitmainCollector pointed at the test URL."""
+    from wright_telemetry.collectors.bitmain import BitmainCollector
+    collector = BitmainCollector(url=BITMAIN_URL, username="root", password="root")
+    yield collector
+    collector.close()
+
+
+@pytest.fixture()
+def bitmain_collector_no_auth():
+    """Return a BitmainCollector with no credentials (uses default root:root)."""
+    from wright_telemetry.collectors.bitmain import BitmainCollector
+    collector = BitmainCollector(url=BITMAIN_URL)
     yield collector
     collector.close()

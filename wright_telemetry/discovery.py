@@ -157,32 +157,27 @@ def load_subnets_file(path: str) -> list[str]:
 # ------------------------------------------------------------------
 
 def _probe_braiins(ip: str) -> Optional[DiscoveredMiner]:
-    """Hit the Braiins OS REST API; require HTTP 200 with a Braiins JSON body.
+    """Hit the Braiins OS REST API; only a 200 confirms a Braiins miner.
 
-    A bare 401 is NOT treated as confirmation — many non-Braiins devices
-    (LuxOS, Bitmain stock firmware) return 401 on this path, which caused
-    large numbers of false-positive Braiins detections in mixed environments.
-    Only a 200 response whose JSON contains at least one expected Braiins
-    identity field (``hostname`` or ``mac_address``) is accepted.
+    A bare 401 is not treated as Braiins — too many non-Braiins devices
+    (Bitmain CGI, LuxOS) also return 401 on this path, causing false positives.
     """
     url = f"http://{ip}/api/v1/miner/details"
     try:
         resp = requests.get(url, timeout=_PROBE_TIMEOUT)
-        if resp.status_code != 200:
-            return None
-        try:
-            data = resp.json()
-        except Exception:
-            return None
-        # Require at least one Braiins-specific identity field to avoid
-        # treating arbitrary HTTP-200 responses as Braiins miners.
-        if not (data.get("hostname") or data.get("mac_address") or data.get("uid")):
-            return None
-        return DiscoveredMiner(
-            ip=ip, firmware="braiins",
-            hostname=data.get("hostname", ""),
-            mac_address=data.get("mac_address", ""),
-        )
+        if resp.status_code == 200:
+            hostname = ""
+            mac = ""
+            try:
+                data = resp.json()
+                hostname = data.get("hostname", "")
+                mac = data.get("mac_address", "")
+            except Exception:
+                pass
+            return DiscoveredMiner(
+                ip=ip, firmware="braiins",
+                hostname=hostname, mac_address=mac,
+            )
     except (requests.ConnectionError, requests.Timeout, OSError):
         pass
     return None
@@ -236,6 +231,48 @@ def _probe_luxos(ip: str) -> Optional[DiscoveredMiner]:
     return None
 
 
+def _probe_bitmain(ip: str) -> Optional[DiscoveredMiner]:
+    """Hit the Antminer CGI system-info endpoint with HTTP Digest Auth.
+
+    Positive signal: HTTP 200 JSON response containing a ``serinum`` field.
+    The probe uses the default credentials (``root``/``root``); miners with
+    non-default passwords will still be detected by the 401 signal but will
+    need credentials supplied manually.
+    """
+    from requests.auth import HTTPDigestAuth
+
+    url = f"http://{ip}/cgi-bin/get_system_info.cgi"
+    try:
+        resp = requests.get(
+            url,
+            auth=HTTPDigestAuth("root", "root"),
+            timeout=_PROBE_TIMEOUT,
+        )
+        # Accept 401 as a Bitmain signal only if we also see the Digest challenge
+        # (WWW-Authenticate header contains "Digest") — avoids false positives.
+        if resp.status_code == 401:
+            www_auth = resp.headers.get("WWW-Authenticate", "")
+            if "Digest" in www_auth:
+                return DiscoveredMiner(
+                    ip=ip, firmware="bitmain",
+                    hostname="", mac_address="",
+                )
+            return None
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not data.get("serinum"):
+            return None
+        return DiscoveredMiner(
+            ip=ip,
+            firmware="bitmain",
+            hostname=data.get("hostname", ""),
+            mac_address=data.get("macaddr", ""),
+        )
+    except Exception:
+        return None
+
+
 def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
     """Hit the Vnish REST API; require 200 JSON with ``firmware_version``.
 
@@ -269,6 +306,7 @@ _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
     "braiins": _probe_braiins,
     "luxos": _probe_luxos,
     "vnish": _probe_vnish,
+    "bitmain": _probe_bitmain,
 }
 
 

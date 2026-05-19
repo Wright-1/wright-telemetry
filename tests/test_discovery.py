@@ -91,6 +91,19 @@ class TestProbeBraiins:
 
 # ---------------------------------------------------------------
 # _probe_vnish
+    @responses.activate
+    def test_digest_401_not_treated_as_braiins(self):
+        """A 401 from a Bitmain miner (WWW-Authenticate: Digest) must not
+        be reported as a Braiins miner."""
+        responses.add(
+            responses.GET,
+            "http://10.0.0.5/api/v1/miner/details",
+            status=401,
+            headers={"WWW-Authenticate": 'Digest realm="antminer", nonce="abc123"'},
+        )
+        assert _probe_braiins("10.0.0.5") is None
+
+
 # ---------------------------------------------------------------
 
 class TestProbeVnish:

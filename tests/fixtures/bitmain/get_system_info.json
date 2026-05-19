@@ -1,0 +1,15 @@
+{
+  "nettype": "DHCP",
+  "netdevice": "eth0",
+  "macaddr": "02:34:DA:F1:EB:5D",
+  "hostname": "antminer-rack1-slot4",
+  "ipaddress": "192.168.1.100",
+  "netmask": "255.255.255.0",
+  "gateway": "192.168.1.1",
+  "dnsservers": "8.8.8.8",
+  "system_mode": "GNU/Linux",
+  "system_kernel_version": "Linux 4.9.113 #1 SMP PREEMPT Fri Apr 18 16:41:29 CST 2025",
+  "system_filesystem_version": "FD-1.5(250418-S21+)",
+  "firmware_type": "Factory",
+  "serinum": "JYZZG4UBEJCAH000F"
+}
