@@ -3,9 +3,9 @@ name: Build Linux
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     branches: [main]
+  workflow_call: # reusable — called by release.yml on v* tags
 
 permissions:
   contents: write
@@ -77,12 +77,4 @@ jobs:
             dist/wright-telemetry-linux.sha256
           if-no-files-found: error
 
-      - name: Upload release asset
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/wright-telemetry-linux
-            dist/wright-telemetry-linux.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

@@ -1,6 +1,10 @@
 """Configuration management and interactive setup wizard.
 
-Config is stored at ``~/.wright-telemetry/config.json``.
+Config resolution order:
+  1. ``$WRIGHT_CONFIG`` env var (service installs, CI)
+  2. ``config.json`` next to the frozen executable (portable / web-downloaded zips)
+  3. ``~/.wright-telemetry/.config_path`` pointer file
+  4. ``~/.wright-telemetry/config.json`` (default)
 """
 
 from __future__ import annotations
@@ -36,9 +40,25 @@ from wright_telemetry.discovery import (
 _DEFAULT_CONFIG_DIR = Path.home() / ".wright-telemetry"
 _CONFIG_POINTER = _DEFAULT_CONFIG_DIR / ".config_path"
 
+
+def _portable_config() -> Optional[Path]:
+    """Return ``config.json`` next to the running executable, if it exists.
+
+    Only checked for frozen (PyInstaller) builds so that development
+    installs never accidentally pick up a stale file.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    candidate = Path(sys.executable).resolve().parent / "config.json"
+    return candidate if candidate.is_file() else None
+
+
 if "WRIGHT_CONFIG" in os.environ:
     CONFIG_DIR = Path(os.environ["WRIGHT_CONFIG"]).parent
     CONFIG_FILE = Path(os.environ["WRIGHT_CONFIG"])
+elif (portable := _portable_config()) is not None:
+    CONFIG_FILE = portable
+    CONFIG_DIR = portable.parent
 elif _CONFIG_POINTER.exists():
     CONFIG_FILE = Path(_CONFIG_POINTER.read_text().strip())
     CONFIG_DIR = CONFIG_FILE.parent
