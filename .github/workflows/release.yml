@@ -51,9 +51,7 @@ jobs:
         run: find artifacts -type f | sort
 
       - name: Install AWS CLI
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq awscli
+        run: pip install --quiet awscli
 
       - name: Upload binaries to Spaces
         env:
