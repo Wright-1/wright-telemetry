@@ -34,8 +34,9 @@
 # NETWORK LAYOUT
 # --------------
 #   Three isolated Docker bridge networks simulate separate facility VLANs.
-#   Each subnet contains one Braiins, one Vnish, and one LuxOS fake miner
-#   so that discovery must scan all three subnets to find the full fleet.
+#   Each subnet contains one Braiins, one Vnish, one LuxOS, and one Bitmain
+#   fake miner so that discovery must scan all three subnets to find the
+#   full fleet.
 #
 #   miners-net-a  172.28.0.0/24  — Subnet A
 #   miners-net-b  172.28.1.0/24  — Subnet B
@@ -47,10 +48,11 @@
 #     .10        Braiins  (HTTP port 80)
 #     .20        Vnish    (HTTP port 80)
 #     .30        LuxOS    (TCP  port 4028)
+#     .40        Bitmain  (HTTP port 80, Digest Auth root:root)
 #
-#   Subnet A:   172.28.0.10  172.28.0.20  172.28.0.30
-#   Subnet B:   172.28.1.10  172.28.1.20  172.28.1.30
-#   Subnet C:   172.28.2.10  172.28.2.20  172.28.2.30
+#   Subnet A:   172.28.0.10  172.28.0.20  172.28.0.30  172.28.0.40
+#   Subnet B:   172.28.1.10  172.28.1.20  172.28.1.30  172.28.1.40
+#   Subnet C:   172.28.2.10  172.28.2.20  172.28.2.30  172.28.2.40
 #
 # MINER_INDEX
 # -----------
@@ -58,9 +60,10 @@
 #   so each fake miner gets a distinct hostname, MAC, serial number, and
 #   jittered hashrate — exactly as if they were separate physical machines.
 #
-#   braiins-{a,b,c} → MINER_INDEX 0, 1, 2
-#   vnish-{a,b,c}   → MINER_INDEX 0, 1, 2
-#   luxos-{a,b,c}   → MINER_INDEX 0, 1, 2
+#   braiins-{a,b,c}  → MINER_INDEX 0, 1, 2
+#   vnish-{a,b,c}    → MINER_INDEX 0, 1, 2
+#   luxos-{a,b,c}    → MINER_INDEX 0, 1, 2
+#   bitmain-{a,b,c}  → MINER_INDEX 0, 1, 2
 #
 # ADDING MORE MINERS / SUBNETS
 # ----------------------------
@@ -140,6 +143,15 @@ services:
       miners-net-a:
         ipv4_address: 172.28.0.30
 
+  bitmain-a:
+    <<: *miner-base
+    environment:
+      FIRMWARE: bitmain
+      MINER_INDEX: "0"
+    networks:
+      miners-net-a:
+        ipv4_address: 172.28.0.40
+
   # ── Subnet B  (172.28.1.0/24) ───────────────────────────────────────────────
 
   braiins-b:
@@ -169,6 +181,15 @@ services:
       miners-net-b:
         ipv4_address: 172.28.1.30
 
+  bitmain-b:
+    <<: *miner-base
+    environment:
+      FIRMWARE: bitmain
+      MINER_INDEX: "1"
+    networks:
+      miners-net-b:
+        ipv4_address: 172.28.1.40
+
   # ── Subnet C  (172.28.2.0/24) ───────────────────────────────────────────────
 
   braiins-c:
@@ -197,3 +218,12 @@ services:
     networks:
       miners-net-c:
         ipv4_address: 172.28.2.30
+
+  bitmain-c:
+    <<: *miner-base
+    environment:
+      FIRMWARE: bitmain
+      MINER_INDEX: "2"
+    networks:
+      miners-net-c:
+        ipv4_address: 172.28.2.40

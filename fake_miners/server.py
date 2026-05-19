@@ -57,6 +57,7 @@ The server enforces token-based auth exactly as real hardware does:
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import math
@@ -358,7 +359,85 @@ def personalize(fixtures: dict[str, Any]) -> dict[str, Any]:
                 if key in summary_list[0]:
                     summary_list[0][key] = _jitter(summary_list[0][key])
 
+    elif FIRMWARE == "bitmain":
+        sysinfo = fx.get("get_system_info", {})
+        sysinfo["hostname"] = f"bitmain-fake-{MINER_INDEX:03d}"
+        sysinfo["macaddr"]  = _mac(0x003000)
+        sysinfo["serinum"]  = f"BTFAKE{MINER_INDEX:05d}"
+        sysinfo["ipaddress"] = f"172.28.{MINER_INDEX // 10}.{40 + (MINER_INDEX % 10)}"
+
+        stats_list = fx.get("stats", {}).get("STATS")
+        if isinstance(stats_list, list) and stats_list:
+            for key in ("rate_5s", "rate_30m", "rate_avg", "rate_ideal"):
+                if key in stats_list[0]:
+                    stats_list[0][key] = _jitter(stats_list[0][key])
+
     return fx
+
+
+# ---------------------------------------------------------------------------
+# Digest Auth state (Bitmain uses HTTP Digest Auth, RFC 2617)
+# ---------------------------------------------------------------------------
+
+class _DigestAuthState:
+    """Server-side HTTP Digest Auth (MD5, qop=auth) validator.
+
+    Issues a challenge on every 401.  The nonce is fixed for the lifetime of
+    the server process — sufficient for testing; real hardware rotates nonces.
+    """
+
+    REALM = "antminer"
+
+    def __init__(self, username: str = "root", password: str = "root") -> None:
+        self._username = username
+        self._password = password
+        self._nonce    = hashlib.md5(
+            f"fake-bitmain-{time.time()}".encode()
+        ).hexdigest()
+        self._ha1 = hashlib.md5(
+            f"{username}:{self.REALM}:{password}".encode()
+        ).hexdigest()
+
+    def www_authenticate_header(self) -> str:
+        return (
+            f'Digest realm="{self.REALM}", '
+            f'nonce="{self._nonce}", '
+            f'algorithm=MD5, '
+            f'qop="auth"'
+        )
+
+    def check(self, auth_header: str, method: str) -> bool:
+        """Return True if *auth_header* is a valid Digest response."""
+        if not auth_header or not auth_header.lower().startswith("digest "):
+            return False
+
+        params: dict[str, str] = {}
+        for part in auth_header[7:].split(","):
+            part = part.strip()
+            if "=" in part:
+                k, _, v = part.partition("=")
+                params[k.strip().lower()] = v.strip().strip('"')
+
+        if params.get("username") != self._username:
+            return False
+
+        uri  = params.get("uri", "")
+        ha2  = hashlib.md5(f"{method.upper()}:{uri}".encode()).hexdigest()
+        qop  = params.get("qop", "")
+        nonce = params.get("nonce", "")
+
+        if qop == "auth":
+            nc     = params.get("nc", "")
+            cnonce = params.get("cnonce", "")
+            expected = hashlib.md5(
+                f"{self._ha1}:{nonce}:{nc}:{cnonce}:auth:{ha2}".encode()
+            ).hexdigest()
+        else:
+            expected = hashlib.md5(
+                f"{self._ha1}:{nonce}:{ha2}".encode()
+            ).hexdigest()
+
+        return params.get("response", "") == expected
 
 
 # ---------------------------------------------------------------------------
@@ -741,6 +820,160 @@ def _inject_luxos_pools(
 
 
 # ---------------------------------------------------------------------------
+# Live injection helpers – Bitmain
+# ---------------------------------------------------------------------------
+
+def _inject_bitmain_stats(
+    payload: dict[str, Any], fan_state: FanState, live: LiveMinerState
+) -> dict[str, Any]:
+    """Inject live fan RPMs, chain temperatures, hashrate, power, and elapsed."""
+    payload = copy.deepcopy(payload)
+    stats_list = payload.get("STATS")
+    if not isinstance(stats_list, list) or not stats_list:
+        return payload
+    s = stats_list[0]
+
+    # Elapsed
+    s["elapsed"] = s.get("elapsed", 0) + live.elapsed()
+
+    # Fan RPMs — flat list indexed by position
+    fan_list = s.get("fan", [])
+    for i in range(len(fan_list)):
+        fan_list[i] = fan_state.current_rpm(i)
+
+    # Hashrate
+    hf = live.hashrate_factor()
+    for key in ("rate_5s",):
+        if key in s:
+            s[key] = round(s[key] * hf, 2)
+    if "rate_30m" in s:
+        s["rate_30m"] = round(s["rate_30m"] * live.hashrate_factor_30m(), 2)
+    if "rate_avg" in s:
+        s["rate_avg"] = round(s["rate_avg"] * live.hashrate_factor_av(), 2)
+
+    # Power
+    pf = live.power_factor()
+    if "watt" in s:
+        s["watt"] = round(s["watt"] * pf)
+    base_ghs = s.get("rate_avg", 0)
+    if s.get("watt") and base_ghs:
+        s["jt"] = round(s["watt"] / (base_ghs / 1000.0), 2)
+
+    # Per-chain temps and hashrate
+    chains = s.get("chain", [])
+    n = max(len(chains), 1)
+    for i, c in enumerate(chains):
+        td = live.temp_delta(i)
+        for temp_key in ("temp_chip", "temp_pcb", "temp_pic"):
+            arr = c.get(temp_key)
+            if isinstance(arr, list):
+                c[temp_key] = [round(t + td, 1) if isinstance(t, (int, float)) else t for t in arr]
+        if "rate_real" in c:
+            c["rate_real"] = round(c["rate_real"] * hf, 2)
+
+    return payload
+
+
+def _inject_bitmain_pools(
+    payload: dict[str, Any], live: LiveMinerState
+) -> dict[str, Any]:
+    """Accumulate pool share counters."""
+    payload = copy.deepcopy(payload)
+    for p in payload.get("POOLS", []):
+        new_acc = p.get("accepted", 0) + live.accepted_delta()
+        new_rej = p.get("rejected", 0) + live.rejected_delta()
+        p["accepted"] = new_acc
+        p["rejected"] = new_rej
+        p["stale"]    = p.get("stale", 0) + live.stale_delta()
+        p["diffa"]    = round(p.get("diffa", 0) + live.difficulty_accepted_delta())
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Bitmain CGI HTTP handler
+# ---------------------------------------------------------------------------
+
+_BITMAIN_GET = {
+    "/cgi-bin/get_system_info.cgi": "get_system_info",
+    "/cgi-bin/miner_type.cgi":      "miner_type",
+    "/cgi-bin/stats.cgi":           "stats",
+    "/cgi-bin/pools.cgi":           "pools",
+    "/cgi-bin/warning.cgi":         "warning",
+}
+
+
+def _make_bitmain_handler(
+    fixtures:   dict[str, Any],
+    fan_state:  FanState,
+    live_state: LiveMinerState,
+    digest_auth: _DigestAuthState,
+) -> type[BaseHTTPRequestHandler]:
+    """HTTP handler simulating Bitmain Antminer CGI firmware with Digest Auth."""
+
+    _inject: dict[str, Callable[[dict], dict]] = {
+        "stats": lambda p: _inject_bitmain_stats(p, fan_state, live_state),
+        "pools": lambda p: _inject_bitmain_pools(p, live_state),
+        # get_system_info, miner_type, warning: static
+    }
+
+    class _Handler(BaseHTTPRequestHandler):
+        server_version = "lighttpd/1.4.53"
+        sys_version    = ""
+
+        def log_message(self, fmt, *args):
+            logger.debug(fmt, *args)
+
+        def _send_json(self, payload: Any, status: int = 200) -> None:
+            body = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_digest_challenge(self) -> None:
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", digest_auth.www_authenticate_header())
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _read_body(self) -> bytes:
+            n = int(self.headers.get("Content-Length", "0"))
+            return self.rfile.read(n) if n else b""
+
+        def do_GET(self):
+            if self.path == "/control":
+                self._send_json(fan_state.status())
+                return
+
+            auth_hdr = self.headers.get("Authorization", "")
+            if not digest_auth.check(auth_hdr, "GET"):
+                self._send_digest_challenge()
+                return
+
+            key = _BITMAIN_GET.get(self.path)
+            if key is None:
+                self._send_json({"error": "not found"}, 404)
+                return
+
+            payload  = fixtures[key]
+            injector = _inject.get(key)
+            if injector:
+                payload = injector(payload)
+            self._send_json(payload)
+
+        def do_POST(self):
+            if self.path == "/control":
+                status, resp = _dispatch_control(self._read_body(), fan_state)
+                self._send_json(resp, status)
+                return
+            self._read_body()
+            self._send_json({"error": "not found"}, 404)
+
+    return _Handler
+
+
+# ---------------------------------------------------------------------------
 # Auth state
 # ---------------------------------------------------------------------------
 
@@ -1055,9 +1288,9 @@ def _make_control_handler(fan_state: FanState) -> type[BaseHTTPRequestHandler]:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    if FIRMWARE not in ("braiins", "vnish", "luxos"):
+    if FIRMWARE not in ("braiins", "vnish", "luxos", "bitmain"):
         logger.error(
-            "Unknown FIRMWARE=%r — must be braiins, vnish, or luxos", FIRMWARE
+            "Unknown FIRMWARE=%r — must be braiins, vnish, luxos, or bitmain", FIRMWARE
         )
         sys.exit(1)
 
@@ -1075,6 +1308,14 @@ def main() -> None:
         base_rpms = {
             f["id"]: f["rpm"]
             for f in raw_fixtures.get("status", {}).get("fans", [])
+        }
+    elif FIRMWARE == "bitmain":
+        # Bitmain fans are a flat RPM array — use index as position key.
+        base_rpms = {
+            i: rpm
+            for i, rpm in enumerate(
+                (raw_fixtures.get("stats", {}).get("STATS") or [{}])[0].get("fan", [])
+            )
         }
     else:  # luxos
         base_rpms = {
@@ -1097,7 +1338,21 @@ def main() -> None:
         live_state._ACCEPTED_RATE,
     )
 
-    if FIRMWARE in ("braiins", "vnish"):
+    if FIRMWARE == "bitmain":
+        digest_auth = _DigestAuthState(username="root", password="root")
+        ThreadingHTTPServer.allow_reuse_address = True
+        server = ThreadingHTTPServer(
+            ("0.0.0.0", HTTP_PORT),
+            _make_bitmain_handler(fixtures, fan_state, live_state, digest_auth),
+        )
+        logger.info(
+            "fake-bitmain miner #%d  ready on HTTP port %d  "
+            "(Digest Auth root:root, control: /control)",
+            MINER_INDEX, HTTP_PORT,
+        )
+        server.serve_forever()
+
+    elif FIRMWARE in ("braiins", "vnish"):
         ThreadingHTTPServer.allow_reuse_address = True
         server = ThreadingHTTPServer(
             ("0.0.0.0", HTTP_PORT),
