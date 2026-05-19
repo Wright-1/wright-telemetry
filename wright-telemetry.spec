@@ -1,11 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for wright-telemetry single-file executable."""
 
+import os
 import sys
+import importlib
 from pathlib import Path
 import pyfiglet
 
 block_cipher = None
+
+# Locate pyfiglet fonts so they're bundled in the frozen binary
+_pyfiglet_fonts = os.path.join(
+    os.path.dirname(importlib.import_module("pyfiglet").__file__), "fonts"
+)
 
 a = Analysis(
     ["main.py"],
@@ -27,6 +34,7 @@ a = Analysis(
         "websockets.asyncio",
         "websockets.asyncio.client",
         "websockets.asyncio.server",
+        "pyfiglet.fonts",
     ],
     hookspath=[],
     hooksconfig={},
@@ -46,14 +54,12 @@ exe = EXE(
     a.binaries,
     a.zipfiles,
     a.datas,
-    [],
     name="wright-telemetry",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,

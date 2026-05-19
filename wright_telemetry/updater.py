@@ -1,11 +1,11 @@
-"""Auto-update via GitHub Releases. Polls on a background thread.
+"""Auto-update via the Wright API. Polls on a background thread.
 
 Never raises — a failed update check must not prevent the collector from running.
 
 Flow:
-  1. Fetch latest release from GitHub API
-  2. Compare tag version to running __version__
-  3. If newer, download the platform-appropriate asset
+  1. Call GET /api/agent/updates/check on the Wright API
+  2. If an update is available, download the binary from the returned URL
+  3. Verify SHA256 checksum
   4. Replace the running binary and restart the process
   5. Sleep for update_check_interval seconds and repeat
 """
@@ -26,18 +26,14 @@ from pathlib import Path
 from typing import Optional
 
 import requests
+import urllib3
 
 logger = logging.getLogger(__name__)
 
-GITHUB_REPO = "Wright-1/wright-telemetry"
-_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _CONNECT_TIMEOUT = 15  # seconds to establish connection
-_READ_TIMEOUT = 60    # seconds per socket read (important for large binaries)
-
-_MAX_BACKOFF = 3600  # seconds
-
-# Release asset filenames to try, in order, for each host OS only (never cross-platform).
-_LEGACY_LINUX_ASSET = "wright-telemetry"  # older releases before linux used a distinct name
+_READ_TIMEOUT = 60     # seconds per socket read (important for large binaries)
+_MAX_BACKOFF = 3600    # seconds
+_DEFAULT_INTERVAL = 60  # 1 minute
 
 
 def _running_os() -> Optional[str]:
@@ -52,17 +48,17 @@ def _running_os() -> Optional[str]:
     return None
 
 
-def _release_asset_candidates(os_name: str) -> tuple[str, ...]:
-    if os_name == "linux":
-        return ("wright-telemetry-linux", _LEGACY_LINUX_ASSET)
-    if os_name == "darwin":
-        return ("wright-telemetry-macos.zip",)
-    if os_name == "win32":
-        return ("wright-telemetry.exe",)
-    return ()
+def _update_check_url(api_url: str) -> str:
+    """Build the update check URL from the configured Wright API base.
 
-
-_DEFAULT_INTERVAL = 60  # 1 minute
+    Config typically stores ``https://api.wrightone.io/api`` (with /api mount)
+    or just ``https://api.wrightone.io`` (bare host).  The Fastify endpoint
+    lives at ``/api/agent/updates/check``.
+    """
+    base = (api_url or "").strip().rstrip("/")
+    if base.endswith("/api"):
+        return f"{base}/agent/updates/check"
+    return f"{base}/api/agent/updates/check"
 
 
 def check_for_update(cfg: dict) -> None:
@@ -71,64 +67,74 @@ def check_for_update(cfg: dict) -> None:
         logger.debug("Auto-update check disabled by config")
         return
     interval = int(cfg.get("update_check_interval", _DEFAULT_INTERVAL))
-    threading.Thread(target=_update_loop, args=(interval,), daemon=True).start()
+    api_url = cfg.get("wright_api_url", "")
+    threading.Thread(
+        target=_update_loop, args=(interval, api_url), daemon=True
+    ).start()
 
 
-def _update_loop(interval: int) -> None:
+def _update_loop(interval: int, api_url: str) -> None:
     backoff = float(interval)
     while True:
         try:
-            ok, rate_limit_sleep = _perform_update_check()
+            ok = _perform_update_check(api_url)
         except Exception as exc:
             logger.warning("Update check failed (non-fatal): %s", exc)
             ok = False
-            rate_limit_sleep = None
 
         if ok:
             backoff = float(interval)
             time.sleep(interval)
             continue
 
-        if rate_limit_sleep is not None:
-            wait = max(rate_limit_sleep, backoff)
-            logger.info("Next update check in %.0fs (rate limit or backoff)", wait)
-            time.sleep(wait)
-            backoff = min(max(backoff * 2, interval), _MAX_BACKOFF)
-        else:
-            wait = backoff
-            logger.info("Next update check in %.0fs (backoff after error)", wait)
-            time.sleep(wait)
-            backoff = min(backoff * 2, _MAX_BACKOFF)
+        wait = backoff
+        logger.info("Next update check in %.0fs (backoff after error)", wait)
+        time.sleep(wait)
+        backoff = min(backoff * 2, _MAX_BACKOFF)
 
 
-def _github_session_headers() -> dict[str, str]:
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if token:
-        return {"Authorization": f"Bearer {token.strip()}"}
-    return {}
-
-
-def _perform_update_check() -> tuple[bool, Optional[float]]:
-    """Return (True, None) if the check finished without a recoverable API failure.
-
-    On failure, returns (False, None) for generic errors or (False, seconds) when
-    GitHub rate-limited (caller should sleep at least that long).
-    """
+def _perform_update_check(api_url: str) -> bool:
+    """Return True if the check completed cleanly (up to date or updated)."""
     # Only applies to frozen PyInstaller binaries; skip in dev/source installs
     if not getattr(sys, "frozen", False):
         logger.debug("Running from source — skipping update check")
-        return True, None
+        return True
 
     from wright_telemetry import __version__
 
-    release, rate_sleep = _fetch_latest_release()
-    if release is None:
-        return False, rate_sleep
+    os_name = _running_os()
+    if os_name is None:
+        logger.warning("Auto-update not supported on platform %s", sys.platform)
+        return True
 
-    latest_version = release["tag_name"].lstrip("v")
-    if not _is_newer(latest_version, __version__):
+    url = _update_check_url(api_url)
+    try:
+        # Suppress TLS warnings — matches existing WrightAPIClient pattern
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        resp = requests.get(
+            url,
+            params={"os": os_name, "version": __version__},
+            timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
+            verify=False,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning("Could not reach update API: %s", exc)
+        return False
+
+    data = resp.json()
+
+    if not data.get("update_available"):
         logger.info("wright-telemetry is up to date (v%s)", __version__)
-        return True, None
+        return True
+
+    latest_version = data.get("latest_version", "unknown")
+    download_url = data.get("download_url")
+    checksum_url = data.get("checksum_url")
+
+    if not download_url or not checksum_url:
+        logger.warning("Update response missing download_url or checksum_url")
+        return True
 
     logger.info(
         "Update available: v%s -> v%s. Downloading...",
@@ -136,72 +142,28 @@ def _perform_update_check() -> tuple[bool, Optional[float]]:
         latest_version,
     )
 
-    asset = _find_asset_for_os(release["assets"])
-    if asset is None:
-        os_name = _running_os() or sys.platform
-        logger.warning(
-            "No release asset found for this OS (%s) — skipping update",
-            os_name,
-        )
-        return True, None
-
-    checksum_asset = _find_checksum_asset(release["assets"], asset["name"])
-    if checksum_asset is None:
-        logger.warning("No checksum asset found for %s — skipping update", asset["name"])
-        return True, None
+    asset_name = download_url.rstrip("/").split("/")[-1]
+    checksum_name = checksum_url.rstrip("/").split("/")[-1]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
-        download_path = tmppath / asset["name"]
-        checksum_path = tmppath / checksum_asset["name"]
-        _download(asset["browser_download_url"], download_path)
-        _download(checksum_asset["browser_download_url"], checksum_path)
+        download_path = tmppath / asset_name
+        checksum_path = tmppath / checksum_name
+        _download(download_url, download_path)
+        _download(checksum_url, checksum_path)
         _verify_checksum(download_path, checksum_path)
         new_binary = _extract_binary(download_path, tmppath)
         if new_binary is None:
             logger.warning("Could not extract binary from downloaded asset")
-            return True, None
+            return True
         _replace_and_restart(new_binary)
 
+    # _replace_and_restart never returns (it exec's or exits), but if somehow
+    # we get here, treat it as success to avoid backoff loops.
+    return True
 
-def _fetch_latest_release() -> tuple[Optional[dict], Optional[float]]:
-    """Return (release_json, rate_limit_retry_after_seconds).
 
-    On success: (dict, None). On failure: (None, None) or (None, seconds) for 403.
-    """
-    headers = _github_session_headers()
-    try:
-        resp = requests.get(
-            _RELEASES_URL,
-            headers=headers,
-            timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
-        )
-    except requests.RequestException as exc:
-        logger.warning("Could not reach GitHub releases API: %s", exc)
-        return None, None
-
-    if resp.status_code == 403:
-        reset = resp.headers.get("X-RateLimit-Reset")
-        retry_after = resp.headers.get("Retry-After")
-        if retry_after and retry_after.isdigit():
-            sleep_s = float(retry_after) + 2.0
-        elif reset and reset.isdigit():
-            sleep_s = max(0.0, float(int(reset) - time.time())) + 5.0
-        else:
-            sleep_s = float(_MAX_BACKOFF)
-        logger.warning(
-            "GitHub releases API returned 403 (rate limit or forbidden); retry in ~%.0fs",
-            sleep_s,
-        )
-        return None, sleep_s
-
-    try:
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        logger.warning("Could not reach GitHub releases API: %s", exc)
-        return None, None
-
-    return resp.json(), None
+# ── Helpers (unchanged) ──────────────────────────────────────────────────
 
 
 def _is_newer(latest: str, current: str) -> bool:
@@ -214,30 +176,8 @@ def _is_newer(latest: str, current: str) -> bool:
         return False
 
 
-def _find_asset_for_os(assets: list[dict]) -> dict | None:
-    os_name = _running_os()
-    if os_name is None:
-        logger.warning("Auto-update not supported on platform %s", sys.platform)
-        return None
-    names = _release_asset_candidates(os_name)
-    by_name = {a["name"]: a for a in assets}
-    for name in names:
-        if name in by_name:
-            return by_name[name]
-    return None
-
-
-def _find_checksum_asset(assets: list[dict], asset_name: str) -> dict | None:
-    target = asset_name + ".sha256"
-    for asset in assets:
-        if asset["name"] == target:
-            return asset
-    return None
-
-
 def _verify_checksum(download_path: Path, checksum_path: Path) -> None:
     """Raise ValueError if the SHA256 of download_path doesn't match checksum_path."""
-    # .sha256 files use sha256sum format: "<hex>  <filename>"
     expected_hex = checksum_path.read_text().split()[0].lower()
     actual_hex = hashlib.sha256(download_path.read_bytes()).hexdigest()
     if actual_hex != expected_hex:
@@ -286,20 +226,18 @@ def _extract_binary(asset_path: Path, workdir: Path) -> Path | None:
     if name.endswith(".zip"):
         with zipfile.ZipFile(asset_path) as zf:
             _safe_extractall_zip(zf, workdir)
-        # macOS zip contains bare binary; Windows zip contains the .exe
         for candidate in ("wright-telemetry", "wright-telemetry.exe"):
             binary = workdir / candidate
             if binary.exists():
                 return binary
         return None
 
-    # Linux: bare binary (e.g. wright-telemetry-linux or legacy wright-telemetry)
+    # Linux: bare binary (e.g. wright-telemetry-linux)
     return asset_path
 
 
 def _replace_and_restart(new_binary: Path) -> None:
     current = Path(sys.executable)
-
     if sys.platform == "win32":
         _replace_and_restart_windows(new_binary, current)
     else:
@@ -308,8 +246,6 @@ def _replace_and_restart(new_binary: Path) -> None:
 
 def _replace_and_restart_unix(new_binary: Path, current: Path) -> None:
     new_binary.chmod(0o755)
-    # Stage next to the target so os.rename is atomic (same filesystem).
-    # The running inode stays alive until execv replaces the process image.
     staged = current.with_suffix(".new")
     shutil.copy2(new_binary, staged)
     staged.chmod(0o755)
@@ -326,9 +262,6 @@ def _replace_and_restart_unix(new_binary: Path, current: Path) -> None:
 
 
 def _replace_and_restart_windows(new_binary: Path, current: Path) -> None:
-    # Windows won't let us overwrite a running executable.
-    # Write the new binary alongside the current one, then launch a PowerShell
-    # one-liner that waits for this process to exit, swaps the files, and restarts.
     staged = current.with_name(current.stem + "-update" + current.suffix)
     shutil.copy2(new_binary, staged)
 
