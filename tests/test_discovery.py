@@ -55,9 +55,9 @@ class TestProbeBraiins:
         assert result.mac_address == "AA:BB:CC:DD:EE:F1"
 
     @responses.activate
-    def test_401_returns_none(self):
-        """A bare 401 must NOT be treated as Braiins — many non-Braiins devices
-        (LuxOS, Bitmain stock) return 401 on this path, causing false positives."""
+    def test_401_still_detected(self):
+        """A bare 401 means Braiins with auth enabled — must be treated as a
+        positive hit so the miner is polled using the configured credentials."""
         responses.add(
             responses.GET,
             "http://10.0.0.2/api/v1/miner/details",
@@ -65,7 +65,10 @@ class TestProbeBraiins:
             status=401,
         )
         result = _probe_braiins("10.0.0.2")
-        assert result is None
+        assert result is not None
+        assert result.firmware == "braiins"
+        assert result.hostname == ""
+        assert result.mac_address == ""
 
     @responses.activate
     def test_404_returns_none(self):
