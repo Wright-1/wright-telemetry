@@ -1,44 +1,4 @@
-name: Release
-
-on:
-  push:
-    tags: ["v*"]
-
-permissions:
-  contents: write
-
-jobs:
-  build-linux:
-    uses: ./.github/workflows/build-linux.yml
-    secrets: inherit
-
-  build-macos:
-    uses: ./.github/workflows/build-macos.yml
-    secrets: inherit
-
-  build-windows:
-    uses: ./.github/workflows/build-windows.yml
-    secrets: inherit
-
-  publish:
-    needs: [build-linux, build-macos, build-windows]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            artifacts/wright-telemetry-linux/wright-telemetry-linux
-            artifacts/wright-telemetry-linux/wright-telemetry-linux.sha256
-            artifacts/wright-telemetry-macos/wright-telemetry-macos.zip
-            artifacts/wright-telemetry-macos/wright-telemetry-macos.zip.sha256
-            artifacts/wright-telemetry-windows/wright-telemetry.exe
-            artifacts/wright-telemetry-windows/wright-telemetry.exe.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# Placeholder — releases are handled directly by the build workflows.
+# Each of build-linux.yml, build-macos.yml, and build-windows.yml triggers
+# on tags matching "v*" and uploads its binary to the GitHub Release via
+# softprops/action-gh-release.
