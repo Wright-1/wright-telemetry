@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call: # reusable — called by release.yml on v* tags
 
 permissions:
   contents: write
