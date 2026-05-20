@@ -196,7 +196,12 @@ class ScanManager:
             })
 
         fw = self._firmware_types or None
-        found = scan_hosts(hosts, firmware_types=fw, progress_cb=progress_cb)
+        found = scan_hosts(
+            hosts,
+            firmware_types=fw,
+            progress_cb=progress_cb,
+            cancel_event=self._cancel_event,
+        )
 
         if self._cancel_event.is_set():
             self._finish_cancelled(subnet)
