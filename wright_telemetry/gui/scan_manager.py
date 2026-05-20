@@ -34,6 +34,7 @@ class SubnetScanResult:
     miners_found: int = 0
     firmware_breakdown: dict[str, int] = field(default_factory=dict)
     last_scanned: Optional[float] = None
+    local: bool = False             # True if auto-detected from local interfaces
 
 
 class ScanManager:
@@ -44,6 +45,7 @@ class ScanManager:
         self._firmware_types: list[str] = list(firmware_types)
         self._queue: list[str] = []
         self._results: dict[str, SubnetScanResult] = {}
+        self._local_subnets: set[str] = set()
         self._lock = threading.Lock()
         self._cancel_event = threading.Event()
         self._worker: Optional[threading.Thread] = None
@@ -51,23 +53,31 @@ class ScanManager:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def enqueue(self, subnets: list[str]) -> None:
+    def enqueue(self, subnets: list[str], local: bool = False) -> None:
         """Add subnets to the queue; ignored if already queued or scanning."""
         with self._lock:
             for s in subnets:
                 s = s.strip()
                 if not s:
                     continue
+                if local:
+                    self._local_subnets.add(s)
+                is_local = s in self._local_subnets
                 if s not in self._results:
-                    self._results[s] = SubnetScanResult(subnet=s, status="queued")
+                    self._results[s] = SubnetScanResult(
+                        subnet=s, status="queued", local=is_local
+                    )
                     self._queue.append(s)
-                    self._controller.push_gui_event({"event": "scan_queued", "subnet": s})
+                    self._controller.push_gui_event({
+                        "event": "scan_queued", "subnet": s, "local": is_local
+                    })
                 elif self._results[s].status not in ("queued", "scanning"):
-                    # Re-queue completed / cancelled subnet for a fresh scan
                     self._results[s].status = "queued"
                     if s not in self._queue and s != self._current_subnet:
                         self._queue.append(s)
-                    self._controller.push_gui_event({"event": "scan_queued", "subnet": s})
+                    self._controller.push_gui_event({
+                        "event": "scan_queued", "subnet": s, "local": is_local
+                    })
         self._ensure_worker()
 
     def cancel(self) -> None:
@@ -119,6 +129,7 @@ class ScanManager:
                     miners_found=r.miners_found,
                     firmware_breakdown=dict(r.firmware_breakdown),
                     last_scanned=r.last_scanned,
+                    local=r.local,
                 )
                 for r in self._results.values()
             ]

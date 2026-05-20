@@ -202,7 +202,12 @@ class ScanningEngine:
         all_subnets = list(dict.fromkeys(detected + config_subnets))  # dedupe, preserve order
         if all_subnets:
             logger.info("Auto-enqueueing %d subnet(s) for initial scan", len(all_subnets))
-            self.scan_manager.enqueue(all_subnets)
+            # Mark detected subnets as local; config subnets keep local=False
+            # unless they were also detected
+            self.scan_manager.enqueue(detected, local=True)
+            extra = [s for s in config_subnets if s not in detected]
+            if extra:
+                self.scan_manager.enqueue(extra, local=False)
 
     # ── Event drain (Qt main thread via QTimer) ──────────────────────────────
 

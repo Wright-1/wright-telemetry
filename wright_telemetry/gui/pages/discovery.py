@@ -460,7 +460,10 @@ class _ScanRow(QWidget):
         self._status_lbl = _lbl("", 12, 500, T.TEXT_MUTED, fixed_w=_W_STATUS)
         row.addWidget(self._status_lbl)
 
-        self._cidr_lbl = _lbl(result.subnet, 12, 400, T.TEXT_PRIMARY)
+        self._cidr_lbl = QLabel()
+        self._cidr_lbl.setFont(make_font(12, 400))
+        self._cidr_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self._cidr_lbl.setStyleSheet("background: transparent;")
         self._cidr_lbl.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -542,8 +545,15 @@ class _ScanRow(QWidget):
             f"color: {color}; background: transparent;"
         )
 
-        cidr_alpha = T.TEXT_PRIMARY if result.status in ("queued", "scanning") else T.TEXT_MUTED
-        self._cidr_lbl.setStyleSheet(f"color: {cidr_alpha}; background: transparent;")
+        cidr_color = T.TEXT_PRIMARY if result.status in ("queued", "scanning") else T.TEXT_MUTED
+        local_tag = (
+            f' <span style="font-size:10px; color:{T.TEXT_MUTED}; '
+            f'background:#F3F4F6; border-radius:3px; padding:1px 5px;">local</span>'
+            if result.local else ""
+        )
+        self._cidr_lbl.setText(
+            f'<span style="color:{cidr_color};">{result.subnet}</span>{local_tag}'
+        )
 
         if result.status == "queued":
             self._miners_lbl.setText("—")
@@ -827,8 +837,15 @@ class DiscoveryPage(QWidget):
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     def _on_scan_queued(self, subnet: str) -> None:
+        # Fetch the real result (which carries the local flag) if available
+        is_local = False
+        if self._engine is not None:
+            for r in self._engine.scan_manager.get_all_results():
+                if r.subnet == subnet:
+                    is_local = r.local
+                    break
         self._scans_card.add_or_update_row(
-            SubnetScanResult(subnet=subnet, status="queued")
+            SubnetScanResult(subnet=subnet, status="queued", local=is_local)
         )
         self._set_status_scanning()
 
