@@ -35,6 +35,7 @@ def fetch_agent_info(
         if base.endswith("/api"):
             base = base[: -len("/api")]
         url = f"{base}/api/agent/info"
+        print(f"[WRIGHT] GET {url}")
         try:
             r = requests.get(
                 url,
@@ -42,6 +43,7 @@ def fetch_agent_info(
                 timeout=_TIMEOUT,
             )
             payload = r.json()
+            print(f"[WRIGHT] GET {url} → {r.status_code}")
             if r.status_code == 200 and payload.get("success"):
                 push_gui_event({"event": "agent_info", "data": payload["data"]})
             else:
@@ -49,6 +51,7 @@ def fetch_agent_info(
                 logger.warning("agent-info fetch failed: %s", err)
                 push_gui_event({"event": "agent_info_error", "error": err})
         except Exception as exc:
+            print(f"[WRIGHT] GET {url} → ERROR: {exc}")
             logger.warning("agent-info fetch exception: %s", exc)
             push_gui_event({"event": "agent_info_error", "error": str(exc)})
 
