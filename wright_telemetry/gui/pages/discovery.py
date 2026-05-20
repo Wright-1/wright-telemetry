@@ -10,11 +10,11 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -170,6 +170,7 @@ class _ProgressEntryCard(QWidget):
         self._engine = engine
         self._scanning = False
         self._fw_toggles: dict[str, _FirmwareToggle] = {}
+        self._warning: Optional[_WarningCard] = None
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("pe_card")
@@ -253,37 +254,54 @@ class _ProgressEntryCard(QWidget):
         if engine is not None:
             active_types = engine._cfg.get("collector_types") or []
 
-        grid_rows = [QHBoxLayout(), QHBoxLayout()]
-        for i, (key, label) in enumerate(self.FIRMWARE_OPTIONS):
+        # Firmware toggles (left) + warning card (right) side by side
+        fw_and_warn = QHBoxLayout()
+        fw_and_warn.setSpacing(20)
+        fw_and_warn.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        fw_col = QVBoxLayout()
+        fw_col.setSpacing(10)
+        fw_col.setAlignment(Qt.AlignmentFlag.AlignTop)
+        for key, label in self.FIRMWARE_OPTIONS:
             checked = key in active_types or not active_types
             toggle = _FirmwareToggle(key, label, checked)
             toggle.toggle.toggled.connect(self._on_firmware_changed)
             self._fw_toggles[key] = toggle
-            grid_rows[i // 2].addWidget(toggle, 1)
+            fw_col.addWidget(toggle)
 
-        for gr in grid_rows:
-            entry.addLayout(gr)
+        fw_col_widget = QWidget()
+        fw_col_widget.setStyleSheet("background: transparent;")
+        fw_col_widget.setLayout(fw_col)
+        fw_col_widget.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
+        )
+        fw_and_warn.addWidget(fw_col_widget)
 
-        # CIDR input
-        entry.addSpacing(2)
+        self._warning = _WarningCard()
+        self._warning.setVisible(False)
+        fw_and_warn.addWidget(self._warning, 1)
+
+        entry.addLayout(fw_and_warn)
+
+        # CIDR input — multi-value, comma-separated
+        entry.addSpacing(4)
         entry.addWidget(_lbl("CIDR RANGE", 10, 600, T.TEXT_MUTED))
-        self._cidr_input = QLineEdit()
-        self._cidr_input.setPlaceholderText("192.168.1.0/24")
+        self._cidr_input = QTextEdit()
+        self._cidr_input.setPlaceholderText("192.168.1.0/24, 10.0.1.0/24")
         self._cidr_input.setFont(make_font(12, 400))
-        self._cidr_input.setFixedHeight(36)
+        self._cidr_input.setFixedHeight(58)
         self._cidr_input.setStyleSheet(f"""
-            QLineEdit {{
+            QTextEdit {{
                 background: {T.BG_WINDOW};
                 border: 1px solid {T.BORDER_DEFAULT};
                 border-radius: 6px;
-                padding: 0 10px;
+                padding: 6px 10px;
                 color: {T.TEXT_PRIMARY};
             }}
-            QLineEdit:focus {{
+            QTextEdit:focus {{
                 border-color: {T.ACCENT_BLUE};
             }}
         """)
-        self._cidr_input.returnPressed.connect(self._on_add)
         entry.addWidget(self._cidr_input)
 
         add_btn = QPushButton("ADD TO QUEUE")
@@ -392,13 +410,17 @@ class _ProgressEntryCard(QWidget):
         selected = [k for k, t in self._fw_toggles.items() if t.isChecked()]
         self._engine.update_firmware_types(selected)
 
+    def set_warning_visible(self, visible: bool) -> None:
+        if self._warning is not None:
+            self._warning.setVisible(visible)
+
     def _on_add(self) -> None:
         if self._engine is None:
             return
-        raw = self._cidr_input.text().strip()
+        raw = self._cidr_input.toPlainText().strip()
         if not raw:
             return
-        for cidr in (c.strip() for c in raw.split(",") if c.strip()):
+        for cidr in (c.strip() for c in raw.replace("\n", ",").split(",") if c.strip()):
             self._engine.enqueue_subnet(cidr)
         self._cidr_input.clear()
 
@@ -680,15 +702,8 @@ class DiscoveryPage(QWidget):
                                   T.CONTENT_PADDING, T.CONTENT_PADDING)
         layout.setSpacing(20)
 
-        # ── Heading row: title + warning card side by side ────────────────────
-        heading_row = QHBoxLayout()
-        heading_row.setSpacing(24)
-        heading_row.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        title_col = QVBoxLayout()
-        title_col.setSpacing(8)
-        title_col.setAlignment(Qt.AlignmentFlag.AlignTop)
-        title_col.addWidget(_lbl("Discover Miners", 22, 700, T.TEXT_PRIMARY))
+        # ── Heading ───────────────────────────────────────────────────────────
+        layout.addWidget(_lbl("Discover Miners", 22, 700, T.TEXT_PRIMARY))
 
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
@@ -697,21 +712,7 @@ class DiscoveryPage(QWidget):
         status_row.addWidget(self._status_dot)
         status_row.addWidget(self._status_lbl)
         status_row.addStretch()
-        title_col.addLayout(status_row)
-
-        title_widget = QWidget()
-        title_widget.setStyleSheet("background: transparent;")
-        title_widget.setLayout(title_col)
-        title_widget.setSizePolicy(
-            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
-        )
-        heading_row.addWidget(title_widget)
-
-        self._warning = _WarningCard()
-        self._warning.setVisible(False)
-        heading_row.addWidget(self._warning, 1)
-
-        layout.addLayout(heading_row)
+        layout.addLayout(status_row)
 
         # ── Combined progress + subnet entry card ─────────────────────────────
         self._progress_entry = _ProgressEntryCard(engine)
@@ -737,6 +738,14 @@ class DiscoveryPage(QWidget):
                         or result.last_scanned > self._last_scan_ts
                     ):
                         self._last_scan_ts = result.last_scanned
+
+            # Restore warning state from existing scan results
+            any_complete = any(
+                r.status == "complete"
+                for r in engine.scan_manager.get_all_results()
+            )
+            total = engine.scan_manager.total_miners()
+            self._progress_entry.set_warning_visible(any_complete and total == 0)
 
             if engine.scan_manager.is_scanning():
                 self._set_status_scanning()
@@ -808,7 +817,7 @@ class DiscoveryPage(QWidget):
 
     def _on_total_changed(self, total: int) -> None:
         self._total_miners = total
-        self._warning.setVisible(self._scan_completed and total == 0)
+        self._progress_entry.set_warning_visible(self._scan_completed and total == 0)
         if total > 0:
             n = len(self._scans_card._rows)
             s = "s" if total != 1 else ""
