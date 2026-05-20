@@ -7,7 +7,9 @@ and re-emits the appropriate Qt signal on the main thread.
 
 from __future__ import annotations
 
+import logging
 import threading
+import traceback
 from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
@@ -16,6 +18,8 @@ from wright_telemetry.ws_client import AgentController, WebSocketClient
 
 if TYPE_CHECKING:
     pass
+
+logger = logging.getLogger(__name__)
 
 
 class EngineSignals(QObject):
@@ -65,12 +69,18 @@ class ScanningEngine:
         import wright_telemetry.collectors.luxos    # noqa: F401
         import wright_telemetry.collectors.vnish    # noqa: F401
 
-        # Scheduler thread
+        # Scheduler thread — wrapped so exceptions are never silently swallowed
         from wright_telemetry.scheduler import run as scheduler_run
+
+        def _run_scheduler() -> None:
+            try:
+                scheduler_run(self._cfg, controller=self.controller)
+            except Exception:
+                logger.exception("Scheduler thread crashed")
+                traceback.print_exc()
+
         self._scheduler_thread = threading.Thread(
-            target=scheduler_run,
-            args=(self._cfg,),
-            kwargs={"controller": self.controller},
+            target=_run_scheduler,
             daemon=True,
             name="wright-scheduler",
         )
