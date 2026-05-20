@@ -82,3 +82,4 @@ class MainWindow(QWidget):
         if key in self.pages:
             self.stack.setCurrentWidget(self.pages[key])
             self.sidebar.set_active(key)
+            self.security.setVisible(key == "permissions")
