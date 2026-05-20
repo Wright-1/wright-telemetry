@@ -818,10 +818,13 @@ class DiscoveryPage(QWidget):
     def _on_queue_empty(self) -> None:
         self._progress_entry.set_idle(self._last_scan_ts)
         self._set_status_idle()
+        # Only reveal the warning once the entire queue has finished
+        self._warning.setVisible(self._scan_completed and self._total_miners == 0)
 
     def _on_total_changed(self, total: int) -> None:
         self._total_miners = total
-        self._warning.setVisible(self._scan_completed and total == 0)
+        # Warning visibility is controlled by _on_queue_empty, not here
+        self._warning.setVisible(False)
         if total > 0:
             n = len(self._scans_card._rows)
             s = "s" if total != 1 else ""
