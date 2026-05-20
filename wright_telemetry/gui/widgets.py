@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import QColor, QPainter, QPainterPath
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -27,7 +26,7 @@ class ToggleSwitch(QWidget):
 
     TRACK_W = 40
     TRACK_H = 22
-    THUMB_R = 8  # radius
+    THUMB_R = 8
 
     def __init__(self, checked: bool = True, parent: QWidget | None = None):
         super().__init__(parent)
@@ -61,8 +60,10 @@ class ToggleSwitch(QWidget):
         thumb_y = self.TRACK_H / 2
         p.setBrush(QColor("#FFFFFF"))
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(int(thumb_x - self.THUMB_R), int(thumb_y - self.THUMB_R),
-                       self.THUMB_R * 2, self.THUMB_R * 2)
+        p.drawEllipse(
+            int(thumb_x - self.THUMB_R), int(thumb_y - self.THUMB_R),
+            self.THUMB_R * 2, self.THUMB_R * 2,
+        )
         p.end()
 
 
@@ -70,21 +71,20 @@ class ToggleSwitch(QWidget):
 
 
 class ChevronLabel(QLabel):
-    """A small chevron that can point down or right."""
+    """Small chevron pointing right (collapsed) or down (expanded)."""
 
     def __init__(self, expanded: bool = False, parent: QWidget | None = None):
         super().__init__(parent)
         self._expanded = expanded
         self.setFixedSize(20, 20)
-        self._update_text()
+        self._refresh()
 
     def setExpanded(self, expanded: bool) -> None:
         self._expanded = expanded
-        self._update_text()
+        self._refresh()
 
-    def _update_text(self) -> None:
-        arrow = "▾" if self._expanded else "›"
-        self.setText(arrow)
+    def _refresh(self) -> None:
+        self.setText("▾" if self._expanded else "›")
         self.setStyleSheet(f"color: {T.TEXT_MUTED}; font-size: 14px;")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -93,12 +93,17 @@ class ChevronLabel(QLabel):
 
 
 class PermissionRow(QWidget):
-    """A single permission item: colored left border, icon area, title,
-    subtitle, toggle, chevron, and expandable detail text."""
+    """Colored left-border card: icon + title + subtitle + toggle + chevron.
+
+    The left border is rendered by letting the outer container's background
+    color (the category color) show through a 3 px gap on the left side of
+    the white inner content widget.
+    """
 
     def __init__(
         self,
         key: str,
+        icon: str,
         title: str,
         subtitle: str,
         detail: str,
@@ -109,34 +114,59 @@ class PermissionRow(QWidget):
         super().__init__(parent)
         self.key = key
         self._expanded = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self.setStyleSheet(
-            f"""
-            PermissionRow {{
-                background: {T.BG_CARD};
-                border: 1px solid {T.BORDER_DEFAULT};
-                border-left: {T.PERM_ROW_BORDER_W}px solid {category_color};
+        # Outer shell — category color acts as the left border
+        self.setObjectName(f"prow_{key}")
+        self.setStyleSheet(f"""
+            QWidget#prow_{key} {{
+                background: {category_color};
                 border-radius: 6px;
             }}
-            """
-        )
+        """)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 12, 16, 12)
-        outer.setSpacing(0)
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # 3 px transparent strip — the outer background shows through here
+        strip = QWidget()
+        strip.setFixedWidth(T.PERM_ROW_BORDER_W)
+        strip.setStyleSheet("background: transparent;")
+        outer_layout.addWidget(strip)
+
+        # White content area (right ¾ of the card)
+        content = QWidget()
+        content.setObjectName(f"prow_c_{key}")
+        content.setStyleSheet(f"""
+            QWidget#prow_c_{key} {{
+                background: {T.BG_CARD};
+                border-top: 1px solid {T.BORDER_DEFAULT};
+                border-right: 1px solid {T.BORDER_DEFAULT};
+                border-bottom: 1px solid {T.BORDER_DEFAULT};
+                border-left: none;
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }}
+        """)
+        outer_layout.addWidget(content, 1)
+
+        inner = QVBoxLayout(content)
+        inner.setContentsMargins(14, 11, 14, 11)
+        inner.setSpacing(0)
 
         # ── Header row ────────────────────────────────────────────────────────
         header = QHBoxLayout()
         header.setSpacing(12)
 
-        # Icon placeholder (colored dot for now)
-        icon = QLabel("●")
-        icon.setFixedSize(24, 24)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet(f"color: {category_color}; font-size: 14px; border: none;")
-        header.addWidget(icon)
+        icon_lbl = QLabel(icon)
+        icon_lbl.setFixedSize(22, 22)
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_lbl.setStyleSheet(
+            f"color: {category_color}; font-size: 15px; border: none;"
+        )
+        header.addWidget(icon_lbl)
 
-        # Title + subtitle column
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
 
@@ -152,26 +182,31 @@ class PermissionRow(QWidget):
 
         header.addLayout(text_col, 1)
 
-        # Toggle
+        # Toggle — intercept click so it doesn't also trigger row expand
         self.toggle = ToggleSwitch(checked=checked)
+        self.toggle.mousePressEvent = self._on_toggle_click
         header.addWidget(self.toggle)
 
-        # Chevron
         self.chevron = ChevronLabel(expanded=False)
-        self.chevron.setCursor(Qt.CursorShape.PointingHandCursor)
         header.addWidget(self.chevron)
 
-        outer.addLayout(header)
+        inner.addLayout(header)
 
-        # ── Detail text (hidden by default) ───────────────────────────────────
+        # ── Expandable detail ─────────────────────────────────────────────────
         self.detail_label = QLabel(detail)
         self.detail_label.setFont(make_font(*T.FONT_PERM_DESC))
         self.detail_label.setStyleSheet(
-            f"color: {T.TEXT_SECONDARY}; border: none; padding: 8px 0 0 36px;"
+            f"color: {T.TEXT_SECONDARY}; border: none; padding: 8px 0 0 34px;"
         )
         self.detail_label.setWordWrap(True)
         self.detail_label.setVisible(False)
-        outer.addWidget(self.detail_label)
+        inner.addWidget(self.detail_label)
+
+    def _on_toggle_click(self, ev) -> None:
+        """Flip toggle state without propagating the click to expand the row."""
+        self.toggle._checked = not self.toggle._checked
+        self.toggle.toggled.emit(self.toggle._checked)
+        self.toggle.update()
 
     def mousePressEvent(self, ev):  # noqa: N802
         self._expanded = not self._expanded

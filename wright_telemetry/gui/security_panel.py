@@ -1,113 +1,186 @@
-"""Right-side security profile panel (dark background)."""
+"""Right-side security panel: dark security-profile card + white GitHub card."""
 
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
 
 
+def _dark_card(parent: QWidget | None = None) -> QWidget:
+    """Return the dark 'Security Profile' card widget."""
+    card = QWidget(parent)
+    card.setStyleSheet(f"""
+        QWidget {{
+            background: {T.BG_SECURITY};
+            border-radius: 8px;
+        }}
+    """)
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(16, 16, 16, 16)
+    layout.setSpacing(10)
+
+    # Header row: lock icon + SECURITY PROFILE label
+    header_row = QHBoxLayout()
+    header_row.setSpacing(8)
+
+    lock = QLabel("🔒")
+    lock.setFixedSize(18, 18)
+    lock.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lock.setStyleSheet("font-size: 12px; border: none; background: transparent;")
+    header_row.addWidget(lock)
+
+    title = QLabel("SECURITY PROFILE")
+    title.setFont(make_font(*T.FONT_SECTION_HEADING))
+    title.setStyleSheet(
+        f"color: {T.TEXT_ON_DARK}; letter-spacing: 2px; "
+        f"border: none; background: transparent;"
+    )
+    header_row.addWidget(title)
+    header_row.addStretch()
+    layout.addLayout(header_row)
+
+    # Description
+    desc = QLabel(
+        "Data never leaves your network without\npermission. AES-256 encrypted."
+    )
+    desc.setFont(make_font(*T.FONT_BODY_SMALL))
+    desc.setStyleSheet(
+        f"color: {T.TEXT_ON_DARK_MUTED}; border: none; background: transparent;"
+    )
+    desc.setWordWrap(True)
+    layout.addWidget(desc)
+
+    # Encrypted Stream badge
+    badge = QWidget()
+    badge.setStyleSheet("""
+        QWidget {
+            background: #2A2D35;
+            border-radius: 5px;
+            border: 1px solid #3A3D45;
+        }
+    """)
+    badge_layout = QHBoxLayout(badge)
+    badge_layout.setContentsMargins(12, 7, 12, 7)
+    badge_layout.setSpacing(0)
+
+    badge_text = QLabel("Encrypted Stream")
+    badge_text.setFont(make_font(12, 500))
+    badge_text.setStyleSheet(
+        f"color: {T.TEXT_ON_DARK}; border: none; background: transparent;"
+    )
+    badge_layout.addWidget(badge_text, 1)
+
+    check = QLabel("✓")
+    check.setFont(make_font(14, 700))
+    check.setStyleSheet(
+        f"color: {T.ACCENT_GREEN}; border: none; background: transparent;"
+    )
+    badge_layout.addWidget(check)
+
+    layout.addWidget(badge)
+
+    return card
+
+
+def _github_card(parent: QWidget | None = None) -> QWidget:
+    """Return the white GitHub repository card."""
+    card = QWidget(parent)
+    card.setStyleSheet(f"""
+        QWidget {{
+            background: {T.BG_CARD};
+            border-radius: 8px;
+            border: 1px solid {T.BORDER_DEFAULT};
+        }}
+    """)
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(16, 14, 16, 14)
+    layout.setSpacing(8)
+
+    # Placeholder image area (terminal icon)
+    img_area = QWidget()
+    img_area.setFixedHeight(72)
+    img_area.setStyleSheet(f"""
+        QWidget {{
+            background: {T.BG_SIDEBAR};
+            border-radius: 6px;
+            border: 1px solid {T.BORDER_DEFAULT};
+        }}
+    """)
+    img_layout = QVBoxLayout(img_area)
+    ph_icon = QLabel(">_")
+    ph_icon.setFont(make_font(18, 600))
+    ph_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    ph_icon.setStyleSheet(
+        f"color: {T.TEXT_MUTED}; border: none; background: transparent;"
+    )
+    img_layout.addWidget(ph_icon)
+    layout.addWidget(img_area)
+
+    # Title
+    gh_title = QLabel("GitHub Repository")
+    gh_title.setFont(make_font(13, 600))
+    gh_title.setStyleSheet(
+        f"color: {T.TEXT_PRIMARY}; border: none; background: transparent;"
+    )
+    layout.addWidget(gh_title)
+
+    # Description
+    gh_desc = QLabel("Open source. Auditable. See the code you are installing.")
+    gh_desc.setFont(make_font(*T.FONT_BODY_SMALL))
+    gh_desc.setStyleSheet(
+        f"color: {T.TEXT_SECONDARY}; border: none; background: transparent;"
+    )
+    gh_desc.setWordWrap(True)
+    layout.addWidget(gh_desc)
+
+    layout.addSpacing(2)
+
+    # View Code button
+    view_btn = QPushButton("⛓  View Code")
+    view_btn.setFont(make_font(*T.FONT_BUTTON))
+    view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    view_btn.setStyleSheet(f"""
+        QPushButton {{
+            background: transparent;
+            color: {T.TEXT_PRIMARY};
+            border: 1px solid {T.BORDER_DEFAULT};
+            border-radius: 6px;
+            padding: 7px 14px;
+        }}
+        QPushButton:hover {{
+            background: {T.BG_SIDEBAR};
+        }}
+    """)
+    layout.addWidget(view_btn)
+
+    return card
+
+
 class SecurityPanel(QWidget):
-    """Dark panel showing encryption status and GitHub link."""
+    """Fixed-width right panel: light background, dark security card on top,
+    white GitHub card below."""
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setFixedWidth(T.SECURITY_PANEL_W)
-        self.setStyleSheet(f"background: {T.BG_SECURITY}; border-left: 1px solid #2A2D35;")
+        self.setStyleSheet(
+            f"background: {T.BG_WINDOW}; "
+            f"border-left: 1px solid {T.BORDER_DEFAULT};"
+        )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T.SECURITY_PADDING, 24, T.SECURITY_PADDING, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(T.SECURITY_PADDING, 20, T.SECURITY_PADDING, 20)
+        layout.setSpacing(12)
 
-        # ── Header ────────────────────────────────────────────────────────────
-        header_row = QHBoxLayout()
-        lock_icon = QLabel("🔒")
-        lock_icon.setStyleSheet("font-size: 14px; border: none;")
-        header_row.addWidget(lock_icon)
-
-        title = QLabel("SECURITY PROFILE")
-        title.setFont(make_font(*T.FONT_SECTION_HEADING))
-        title.setStyleSheet(
-            f"color: {T.TEXT_ON_DARK}; letter-spacing: 2px; border: none;"
-        )
-        header_row.addWidget(title)
-        header_row.addStretch()
-        layout.addLayout(header_row)
-
-        # ── Description ───────────────────────────────────────────────────────
-        desc = QLabel(
-            "Data never leaves your network without\npermission. AES-256 encrypted."
-        )
-        desc.setFont(make_font(*T.FONT_BODY_SMALL))
-        desc.setStyleSheet(f"color: {T.TEXT_ON_DARK_MUTED};")
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
-
-        # ── Encryption badge ──────────────────────────────────────────────────
-        badge = QWidget()
-        badge.setStyleSheet(
-            f"background: #2A2D35; border-radius: 6px; border: 1px solid #3A3D45;"
-        )
-        badge_layout = QHBoxLayout(badge)
-        badge_layout.setContentsMargins(12, 8, 12, 8)
-
-        badge_text = QLabel("Encrypted Stream")
-        badge_text.setFont(make_font(*T.FONT_BODY_SMALL))
-        badge_text.setStyleSheet(f"color: {T.TEXT_ON_DARK}; border: none;")
-        badge_layout.addWidget(badge_text, 1)
-
-        check = QLabel("✓")
-        check.setStyleSheet(f"color: {T.ACCENT_GREEN}; font-size: 16px; font-weight: bold; border: none;")
-        badge_layout.addWidget(check)
-
-        layout.addWidget(badge)
-
-        layout.addSpacing(8)
-
-        # ── GitHub section ────────────────────────────────────────────────────
-        # Placeholder image area
-        gh_placeholder = QWidget()
-        gh_placeholder.setFixedHeight(80)
-        gh_placeholder.setStyleSheet(
-            "background: #2A2D35; border-radius: 6px; border: 1px solid #3A3D45;"
-        )
-        ph_layout = QVBoxLayout(gh_placeholder)
-        ph_icon = QLabel("▷")
-        ph_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ph_icon.setStyleSheet(f"color: {T.TEXT_ON_DARK_MUTED}; font-size: 24px; border: none;")
-        ph_layout.addWidget(ph_icon)
-        layout.addWidget(gh_placeholder)
-
-        gh_title = QLabel("GitHub Repository")
-        gh_title.setFont(make_font(13, 600))
-        gh_title.setStyleSheet(f"color: {T.TEXT_ON_DARK};")
-        layout.addWidget(gh_title)
-
-        gh_desc = QLabel("Open source. Auditable. See the code\nyou are installing.")
-        gh_desc.setFont(make_font(*T.FONT_BODY_SMALL))
-        gh_desc.setStyleSheet(f"color: {T.TEXT_ON_DARK_MUTED};")
-        gh_desc.setWordWrap(True)
-        layout.addWidget(gh_desc)
-
-        layout.addSpacing(4)
-
-        view_btn = QPushButton("👁  View Code")
-        view_btn.setFont(make_font(*T.FONT_BUTTON))
-        view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        view_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                color: {T.TEXT_ON_DARK};
-                border: 1px solid #3A3D45;
-                border-radius: 6px;
-                padding: 8px 16px;
-            }}
-            QPushButton:hover {{
-                background: #2A2D35;
-            }}
-        """)
-        layout.addWidget(view_btn)
-
+        layout.addWidget(_dark_card())
+        layout.addWidget(_github_card())
         layout.addStretch(1)

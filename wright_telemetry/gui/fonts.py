@@ -9,7 +9,10 @@ from wright_telemetry.gui.theme import FONT_FAMILY
 
 def make_font(size: int, weight: int) -> QFont:
     """Return a QFont for the given pixel size and CSS-style weight (400–700)."""
-    f = QFont(FONT_FAMILY)
+    f = QFont()
+    # Try each family in order; Qt picks the first one it finds
+    f.setFamilies(["SF Pro Display", "SF Pro Text", ".AppleSystemUIFont",
+                   "Helvetica Neue", "Segoe UI", "Arial"])
     f.setPixelSize(size)
     # Map CSS weight → QFont.Weight enum
     _map = {

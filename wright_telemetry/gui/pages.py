@@ -23,6 +23,7 @@ from wright_telemetry.gui.widgets import PermissionRow, PrimaryButton, Secondary
 PERMISSIONS = [
     {
         "key": "cooling",
+        "icon": T.CATEGORY_ICONS["cooling"],
         "title": "Temperature & Fan RPM",
         "subtitle": "Reads sensors to predict lifespan.",
         "detail": (
@@ -33,6 +34,7 @@ PERMISSIONS = [
     },
     {
         "key": "hashrate",
+        "icon": T.CATEGORY_ICONS["hashrate"],
         "title": "Hashrate & Power Stats",
         "subtitle": "Monitors efficiency and savings.",
         "detail": (
@@ -43,6 +45,7 @@ PERMISSIONS = [
     },
     {
         "key": "uptime",
+        "icon": T.CATEGORY_ICONS["uptime"],
         "title": "Uptime & Firmware Info",
         "subtitle": "Tracks reliability metrics.",
         "detail": (
@@ -53,6 +56,7 @@ PERMISSIONS = [
     },
     {
         "key": "hashboards",
+        "icon": T.CATEGORY_ICONS["hashboards"],
         "title": "Per-Hashboard Chip Temps",
         "subtitle": "Detailed hardware diagnostics.",
         "detail": (
@@ -63,6 +67,7 @@ PERMISSIONS = [
     },
     {
         "key": "errors",
+        "icon": T.CATEGORY_ICONS["errors"],
         "title": "Miner Errors",
         "subtitle": "Automatically files support reports.",
         "detail": (
@@ -73,6 +78,7 @@ PERMISSIONS = [
     },
     {
         "key": "auto_update",
+        "icon": T.CATEGORY_ICONS["auto_update"],
         "title": "Automatic Updates",
         "subtitle": "Keeps the agent secure.",
         "detail": (
@@ -83,6 +89,7 @@ PERMISSIONS = [
     },
     {
         "key": "remote_config",
+        "icon": T.CATEGORY_ICONS["remote_config"],
         "title": "Remote Configuration",
         "subtitle": "Adjust settings remotely from your dashboard.",
         "detail": (
@@ -141,6 +148,7 @@ class PermissionsPage(QWidget):
             color = T.CATEGORY_COLORS.get(perm["key"], T.ACCENT_BLUE)
             row = PermissionRow(
                 key=perm["key"],
+                icon=perm["icon"],
                 title=perm["title"],
                 subtitle=perm["subtitle"],
                 detail=perm["detail"],

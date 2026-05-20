@@ -45,10 +45,23 @@ CATEGORY_COLORS: dict[str, str] = {
     "remote_config": ACCENT_BLUE,
 }
 
+# Unicode icons for each permission category
+CATEGORY_ICONS: dict[str, str] = {
+    "cooling":      "⬡",   # temperature / fan
+    "hashrate":     "⚡",   # power / hashrate
+    "uptime":       "⊛",   # reliability / shield
+    "hashboards":   "⊞",   # grid / hashboards
+    "errors":       "△",   # warning / errors
+    "auto_update":  "↻",   # refresh / updates
+    "remote_config":"⇌",   # remote / sync
+}
+
 
 # ── Typography ────────────────────────────────────────────────────────────────
 
-FONT_FAMILY = "Roboto"
+# Use system font — Roboto is not always installed
+# On macOS this resolves to SF Pro; on Windows to Segoe UI
+FONT_FAMILY = ".AppleSystemUIFont, Helvetica Neue, Arial"
 
 # (size_px, weight)  — weight uses QFont constants: 400=Normal, 500=Medium, 600=DemiBold, 700=Bold
 FONT_PAGE_HEADING = (22, 600)
