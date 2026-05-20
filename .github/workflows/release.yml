@@ -1,4 +1,94 @@
-# Placeholder — releases are handled directly by the build workflows.
-# Each of build-linux.yml, build-macos.yml, and build-windows.yml triggers
-# on tags matching "v*" and uploads its binary to the GitHub Release via
-# softprops/action-gh-release.
+name: Release
+
+# Generates and publishes latest.json to DO Spaces after a tag push.
+# Binaries are uploaded to both GitHub Releases and DO Spaces by each
+# per-platform build workflow (build-linux.yml, build-macos.yml, build-windows.yml).
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  SPACES_BUCKET: wright-one
+  SPACES_ENDPOINT: https://nyc3.digitaloceanspaces.com
+  SPACES_PUBLIC_BASE: https://wright-one.nyc3.digitaloceanspaces.com
+
+jobs:
+  publish-manifest:
+    runs-on: ubuntu-latest
+    # Give the per-platform builds a head start so latest.json is written
+    # after the binaries are available on Spaces.
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install AWS CLI
+        run: pip install --quiet awscli
+
+      - name: Wait for binaries to land on Spaces
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Poll until all three binaries are present (up to ~15 min)
+          FILES=(
+            "releases/v${VERSION}/wright-telemetry-linux"
+            "releases/v${VERSION}/wright-telemetry-macos.zip"
+            "releases/v${VERSION}/wright-telemetry.exe"
+          )
+          MAX_ATTEMPTS=45   # 45 × 20s = 15 min
+          for FILE in "${FILES[@]}"; do
+            echo "Waiting for s3://${SPACES_BUCKET}/${FILE} ..."
+            for i in $(seq 1 $MAX_ATTEMPTS); do
+              if aws s3 ls "s3://${SPACES_BUCKET}/${FILE}" \
+                  --endpoint-url "${SPACES_ENDPOINT}" > /dev/null 2>&1; then
+                echo "  ✓ found on attempt ${i}"
+                break
+              fi
+              if [ "$i" -eq "$MAX_ATTEMPTS" ]; then
+                echo "  ✗ timed out waiting for ${FILE}" >&2
+                exit 1
+              fi
+              sleep 20
+            done
+          done
+
+      - name: Generate and upload latest.json
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          BASE="${SPACES_PUBLIC_BASE}/releases/v${VERSION}"
+          cat > latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "assets": {
+              "linux": {
+                "url": "${BASE}/wright-telemetry-linux",
+                "checksum_url": "${BASE}/wright-telemetry-linux.sha256"
+              },
+              "darwin": {
+                "url": "${BASE}/wright-telemetry-macos.zip",
+                "checksum_url": "${BASE}/wright-telemetry-macos.zip.sha256"
+              },
+              "win32": {
+                "url": "${BASE}/wright-telemetry.exe",
+                "checksum_url": "${BASE}/wright-telemetry.exe.sha256"
+              }
+            }
+          }
+          EOF
+
+          aws s3 cp latest.json \
+            "s3://${SPACES_BUCKET}/releases/latest.json" \
+            --endpoint-url "${SPACES_ENDPOINT}" \
+            --acl public-read \
+            --cache-control "no-cache, no-store" \
+            --content-type "application/json"
+
+          echo "latest.json uploaded:"
+          cat latest.json
