@@ -307,7 +307,7 @@ class _ProgressEntryCard(QWidget):
         """)
         entry.addWidget(self._cidr_input)
 
-        add_btn = QPushButton("ADD TO QUEUE")
+        add_btn = QPushButton("ADD SUBNETS")
         add_btn.setFont(make_font(12, 600))
         add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_btn.setFixedHeight(38)

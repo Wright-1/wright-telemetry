@@ -73,7 +73,7 @@ class MainWindow(QWidget):
         self.pages: dict[str, QWidget] = {
             "permissions": PermissionsPage(engine=engine),
             "discovery": DiscoveryPage(engine=engine),
-            "overview": OverviewPage(),
+            "overview": OverviewPage(engine=engine),
         }
         for key in self.PAGE_KEYS:
             self.stack.addWidget(self.pages[key])

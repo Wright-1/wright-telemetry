@@ -1,8 +1,11 @@
-"""Overview page — agent status, system health, miner topology, portal CTA."""
+"""Overview page — live agent status, facility/customer details, miner count."""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+import time
+from typing import TYPE_CHECKING, Optional
+
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -17,6 +20,8 @@ from PyQt6.QtWidgets import (
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
 
+if TYPE_CHECKING:
+    from wright_telemetry.gui.engine import ScanningEngine
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,52 +65,6 @@ def _vdiv() -> QFrame:
     return f
 
 
-# ── Update banner ─────────────────────────────────────────────────────────────
-
-class _UpdateBanner(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setObjectName("update_banner")
-        self.setStyleSheet("""
-            QWidget#update_banner {
-                background: #FFF8F5;
-                border: 1px solid #FECAA0;
-                border-radius: 8px;
-            }
-        """)
-        row = QHBoxLayout(self)
-        row.setContentsMargins(16, 12, 16, 12)
-        row.setSpacing(10)
-
-        icon = _lbl("⚠", 14, 600, T.ACCENT_ORANGE)
-        icon.setFixedWidth(20)
-        row.addWidget(icon)
-
-        msg = _lbl(
-            "Agent version is out of date. Please update to the latest version "
-            "(v0.8.1) to ensure stability.",
-            13, 400, T.TEXT_PRIMARY,
-        )
-        msg.setWordWrap(True)
-        row.addWidget(msg, 1)
-
-        btn = QPushButton("Update Now")
-        btn.setFont(make_font(12, 600))
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {T.TEXT_PRIMARY};
-                color: #FFFFFF;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 18px;
-            }}
-            QPushButton:hover {{ background: #2A2D35; }}
-        """)
-        row.addWidget(btn)
-
-
 # ── Agent Details card ────────────────────────────────────────────────────────
 
 class _AgentDetailsCard(QWidget):
@@ -120,55 +79,82 @@ class _AgentDetailsCard(QWidget):
         layout.setContentsMargins(20, 16, 20, 20)
         layout.setSpacing(14)
 
-        # Header row
+        # Header
         hdr = QHBoxLayout()
-        icon = _lbl("ⓘ", 14, 400, T.TEXT_SECONDARY)
-        icon.setFixedWidth(20)
-        hdr.addWidget(icon)
+        hdr.setSpacing(8)
+        hdr.addWidget(_lbl("ⓘ", 14, 400, T.TEXT_SECONDARY))
         hdr.addWidget(_lbl("Agent Details", 14, 700, T.TEXT_PRIMARY))
         hdr.addStretch()
-
-        badge = QWidget()
-        badge.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        badge.setObjectName("id_badge")
-        badge.setStyleSheet(f"""
-            QWidget#id_badge {{
-                background: {T.BG_SIDEBAR};
-                border: 1px solid {T.BORDER_DEFAULT};
-                border-radius: 12px;
-            }}
-        """)
-        b_row = QHBoxLayout(badge)
-        b_row.setContentsMargins(10, 4, 10, 4)
-        b_row.addWidget(_lbl("Instance ID: WTC-9921-X", 11, 500, T.TEXT_SECONDARY))
-        hdr.addWidget(badge)
         layout.addLayout(hdr)
-
         layout.addWidget(_hdiv())
 
         # Three info columns
         cols = QHBoxLayout()
         cols.setSpacing(0)
 
-        for label, value, stretch in [
-            ("AGENT VERSION",  "v0.7.3",                  False),
-            ("CUSTOMER NAME",  "John Doe",                 False),
-            ("FACILITY / RACK","North Data Center – Rack 4", True),
-        ]:
-            col = QVBoxLayout()
-            col.setSpacing(4)
-            col.addWidget(_lbl(label, 10, 600, T.TEXT_MUTED))
-            val = _lbl(value, 18, 700, T.TEXT_PRIMARY, wrap=True)
-            col.addWidget(val)
-            cell = QWidget()
-            cell.setStyleSheet("background: transparent;")
-            cell.setLayout(col)
-            cols.addWidget(cell, 1 if stretch else 0)
-            if label != "FACILITY / RACK":
-                cols.addWidget(_vdiv())
-                cols.addSpacing(20)
+        # Agent version — static
+        ver_col = QVBoxLayout()
+        ver_col.setSpacing(4)
+        ver_col.addWidget(_lbl("AGENT VERSION", 10, 600, T.TEXT_MUTED))
+        try:
+            from wright_telemetry import __version__ as _ver
+        except ImportError:
+            _ver = "—"
+        ver_col.addWidget(_lbl(_ver, 18, 700, T.TEXT_PRIMARY))
+        ver_w = QWidget()
+        ver_w.setStyleSheet("background: transparent;")
+        ver_w.setLayout(ver_col)
+        cols.addWidget(ver_w)
+        cols.addWidget(_vdiv())
+        cols.addSpacing(20)
+
+        # Customer name — live
+        cust_col = QVBoxLayout()
+        cust_col.setSpacing(4)
+        cust_col.addWidget(_lbl("CUSTOMER NAME", 10, 600, T.TEXT_MUTED))
+        self._customer_lbl = _lbl("Loading…", 18, 700, T.TEXT_MUTED)
+        cust_col.addWidget(self._customer_lbl)
+        cust_w = QWidget()
+        cust_w.setStyleSheet("background: transparent;")
+        cust_w.setLayout(cust_col)
+        cols.addWidget(cust_w)
+        cols.addWidget(_vdiv())
+        cols.addSpacing(20)
+
+        # Facility — live
+        fac_col = QVBoxLayout()
+        fac_col.setSpacing(4)
+        fac_col.addWidget(_lbl("FACILITY", 10, 600, T.TEXT_MUTED))
+        self._facility_lbl = _lbl("Loading…", 18, 700, T.TEXT_MUTED, wrap=True)
+        fac_col.addWidget(self._facility_lbl)
+        fac_w = QWidget()
+        fac_w.setStyleSheet("background: transparent;")
+        fac_w.setLayout(fac_col)
+        cols.addWidget(fac_w, 1)
 
         layout.addLayout(cols)
+
+    def set_agent_info(self, data: dict) -> None:
+        customer_name = data.get("customer_name") or "—"
+        facility_name = data.get("facility_name") or "—"
+        facility_code = data.get("facility_code") or ""
+
+        self._customer_lbl.setText(customer_name)
+        self._customer_lbl.setStyleSheet(
+            f"color: {T.TEXT_PRIMARY}; background: transparent;"
+        )
+        display = f"{facility_name}"
+        if facility_code:
+            display += f"  ·  {facility_code}"
+        self._facility_lbl.setText(display)
+        self._facility_lbl.setStyleSheet(
+            f"color: {T.TEXT_PRIMARY}; background: transparent;"
+        )
+
+    def set_error(self, _err: str) -> None:
+        for lbl in (self._customer_lbl, self._facility_lbl):
+            lbl.setText("—")
+            lbl.setStyleSheet(f"color: {T.TEXT_MUTED}; background: transparent;")
 
 
 # ── Operational Status card ───────────────────────────────────────────────────
@@ -176,6 +162,8 @@ class _AgentDetailsCard(QWidget):
 class _OperationalStatusCard(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._start_ts = time.time()
+
         card = _card("ops_card")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -192,148 +180,141 @@ class _OperationalStatusCard(QWidget):
         hdr.addWidget(_lbl("Operational Status", 14, 700, T.TEXT_PRIMARY))
         hdr.addStretch()
         layout.addLayout(hdr)
-
         layout.addWidget(_hdiv())
 
         layout.addWidget(_lbl("SYSTEM UPTIME", 10, 600, T.TEXT_MUTED))
-        layout.addWidget(_lbl("14d 06h 12m", 28, 700, T.TEXT_PRIMARY))
+        self._uptime_lbl = _lbl("0d 00h 00m", 28, 700, T.TEXT_PRIMARY)
+        layout.addWidget(self._uptime_lbl)
 
-        # Active badge
+        # Engine / miner status row
         status_row = QHBoxLayout()
         status_row.setSpacing(5)
-        dot = _lbl("●", 10, 400, T.ACCENT_GREEN)
-        status_row.addWidget(dot)
-        status_row.addWidget(_lbl("Collector Engine Active", 12, 500, T.ACCENT_GREEN))
+        self._status_dot = _lbl("●", 10, 400, T.ACCENT_GREEN)
+        self._status_lbl = _lbl("Collector Engine Active", 12, 500, T.ACCENT_GREEN)
+        status_row.addWidget(self._status_dot)
+        status_row.addWidget(self._status_lbl)
         status_row.addStretch()
         layout.addLayout(status_row)
 
+        layout.addSpacing(8)
+
+        # Miner count
+        layout.addWidget(_lbl("MINERS REPORTING", 10, 600, T.TEXT_MUTED))
+        self._miner_count_lbl = _lbl("—", 22, 700, T.TEXT_PRIMARY)
+        layout.addWidget(self._miner_count_lbl)
+
         layout.addStretch()
 
+        # Refresh uptime every 60s
+        self._uptime_timer = QTimer(self)
+        self._uptime_timer.setInterval(60_000)
+        self._uptime_timer.timeout.connect(self._refresh_uptime)
+        self._uptime_timer.start()
+        self._refresh_uptime()
 
-# ── System Health card ────────────────────────────────────────────────────────
+    def _refresh_uptime(self) -> None:
+        elapsed = int(time.time() - self._start_ts)
+        d, rem = divmod(elapsed, 86400)
+        h, rem = divmod(rem, 3600)
+        m = rem // 60
+        self._uptime_lbl.setText(f"{d}d {h:02d}h {m:02d}m")
 
-class _HealthItem(QWidget):
-    def __init__(self, icon: str, icon_color: str, border_color: str,
-                 title: str, desc: str, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setObjectName("health_item")
-        self.setStyleSheet(f"""
-            QWidget#health_item {{
-                background: {T.BG_WINDOW};
-                border: 1px solid {T.BORDER_DEFAULT};
-                border-left: 3px solid {border_color};
-                border-radius: 6px;
-            }}
-        """)
-        row = QHBoxLayout(self)
-        row.setContentsMargins(12, 10, 12, 10)
-        row.setSpacing(10)
-
-        ic = _lbl(icon, 14, 600, icon_color)
-        ic.setFixedWidth(20)
-        row.addWidget(ic)
-
-        text = QVBoxLayout()
-        text.setSpacing(2)
-        text.addWidget(_lbl(title, 12, 600, T.TEXT_PRIMARY))
-        text.addWidget(_lbl(desc, 11, 400, T.TEXT_SECONDARY, wrap=True))
-        row.addLayout(text, 1)
-
-
-class _SystemHealthCard(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        card = _card("health_card")
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(card)
-
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 16, 20, 20)
-        layout.setSpacing(10)
-
-        # Header
-        hdr = QHBoxLayout()
-        hdr.addWidget(_lbl("System Health", 14, 700, T.TEXT_PRIMARY))
-        hdr.addStretch()
-
-        warn_badge = QWidget()
-        warn_badge.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        warn_badge.setObjectName("warn_badge")
-        warn_badge.setStyleSheet("""
-            QWidget#warn_badge {
-                background: #FFF3E0;
-                border-radius: 10px;
-            }
-        """)
-        wb = QHBoxLayout(warn_badge)
-        wb.setContentsMargins(10, 4, 10, 4)
-        wb.addWidget(_lbl("1 Active Warning", 11, 600, T.ACCENT_ORANGE))
-        hdr.addWidget(warn_badge)
-        layout.addLayout(hdr)
-
-        layout.addWidget(_hdiv())
-
-        layout.addWidget(_HealthItem(
-            "⚠", T.ACCENT_ORANGE, T.ACCENT_ORANGE,
-            "API Connection Latency",
-            "High latency detected in us-east-1 relay node (142ms).",
-        ))
-        layout.addWidget(_HealthItem(
-            "✓", T.ACCENT_GREEN, T.ACCENT_GREEN,
-            "Local Buffer Integrity",
-            "Journal logs are rotating successfully.",
-        ))
-        layout.addStretch()
+    def set_miner_count(self, count: int) -> None:
+        self._miner_count_lbl.setText(str(count))
+        if count > 0:
+            self._status_dot.setStyleSheet(
+                f"color: {T.ACCENT_GREEN}; background: transparent;"
+            )
+            self._status_lbl.setText("Collector Engine Active")
+            self._status_lbl.setStyleSheet(
+                f"color: {T.ACCENT_GREEN}; background: transparent;"
+            )
+        else:
+            self._status_dot.setStyleSheet(
+                f"color: {T.TEXT_MUTED}; background: transparent;"
+            )
+            self._status_lbl.setText("No miners reporting")
+            self._status_lbl.setStyleSheet(
+                f"color: {T.TEXT_MUTED}; background: transparent;"
+            )
 
 
 # ── Miner Topology card ───────────────────────────────────────────────────────
 
-class _FirmwareBar(QWidget):
-    """Segmented bar showing firmware distribution."""
+_FW_COLORS = {
+    "braiins": "#111318",
+    "vnish":   "#555C68",
+    "luxos":   "#C8CDD5",
+    "bitmain": "#8B95A3",
+}
+_FW_LABELS = {
+    "braiins": "Braiins OS",
+    "vnish":   "Vnish",
+    "luxos":   "LuxOS",
+    "bitmain": "Bitmain",
+}
 
-    SEGMENTS = [
-        ("24", T.TEXT_PRIMARY,  "#111318"),   # Braiins — darkest
-        ("12", "#555C68",       "#555C68"),   # Vnish — mid gray
-        ("20", "#C8CDD5",       "#C8CDD5"),   # LuxOS — light gray
-    ]
+
+class _FirmwareBar(QWidget):
+    """Segmented bar showing live firmware distribution."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(2)
+        self._row = QHBoxLayout(self)
+        self._row.setContentsMargins(0, 0, 0, 0)
+        self._row.setSpacing(2)
+        self._segments: list[QWidget] = []
+        self._render({})
 
-        for i, (count, text_color, bg) in enumerate(self.SEGMENTS):
-            seg = QWidget()
-            seg.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            seg.setObjectName(f"seg{i}")
+    def update_distribution(self, breakdown: dict[str, int]) -> None:
+        # Clear old segments
+        while self._row.count():
+            item = self._row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._segments.clear()
+        self._render(breakdown)
+
+    def _render(self, breakdown: dict[str, int]) -> None:
+        items = [(k, v) for k, v in breakdown.items() if v > 0]
+        if not items:
+            # Placeholder empty bar
+            placeholder = QWidget()
+            placeholder.setStyleSheet(
+                f"background: {T.BORDER_DEFAULT}; border-radius: 5px;"
+            )
+            placeholder.setFixedHeight(28)
+            self._row.addWidget(placeholder, 1)
+            return
+
+        total = sum(v for _, v in items)
+        for i, (key, count) in enumerate(items):
+            bg = _FW_COLORS.get(key, "#9CA3AF")
+            text_color = "white" if key in ("braiins", "vnish") else T.TEXT_PRIMARY
 
             radius = ""
             if i == 0:
-                radius = "border-top-left-radius: 5px; border-bottom-left-radius: 5px;"
-            elif i == len(self.SEGMENTS) - 1:
-                radius = "border-top-right-radius: 5px; border-bottom-right-radius: 5px;"
+                radius = "border-top-left-radius:5px; border-bottom-left-radius:5px;"
+            if i == len(items) - 1:
+                radius += "border-top-right-radius:5px; border-bottom-right-radius:5px;"
 
-            seg.setStyleSheet(f"""
-                QWidget#seg{i} {{
-                    background: {bg};
-                    {radius}
-                }}
-            """)
+            name = f"seg_{key}"
+            seg = QWidget()
+            seg.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            seg.setObjectName(name)
+            seg.setStyleSheet(f"QWidget#{name}{{background:{bg};{radius}}}")
             seg.setFixedHeight(28)
 
-            lbl = QLabel(count)
+            lbl = QLabel(str(count))
             lbl.setFont(make_font(12, 600))
-            lbl.setStyleSheet(f"color: {'white' if i == 0 else T.BG_CARD}; background: transparent;")
+            lbl.setStyleSheet(f"color:{text_color}; background:transparent;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             seg_layout = QHBoxLayout(seg)
             seg_layout.setContentsMargins(0, 0, 0, 0)
             seg_layout.addWidget(lbl)
 
-            row.addWidget(seg, int(count))
+            self._row.addWidget(seg, count)
 
 
 class _MinerTopologyCard(QWidget):
@@ -359,32 +340,52 @@ class _MinerTopologyCard(QWidget):
 
         count_col = QVBoxLayout()
         count_col.setAlignment(Qt.AlignmentFlag.AlignRight)
-        count_col.addWidget(_lbl("56", 28, 700, T.TEXT_PRIMARY))
-        total_lbl = _lbl("TOTAL MINERS", 10, 600, T.TEXT_MUTED)
-        total_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-        count_col.addWidget(total_lbl)
+        self._total_lbl = _lbl("—", 28, 700, T.TEXT_PRIMARY)
+        self._total_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+        count_col.addWidget(self._total_lbl)
+        total_label = _lbl("TOTAL MINERS", 10, 600, T.TEXT_MUTED)
+        total_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        count_col.addWidget(total_label)
         hdr.addLayout(count_col)
         layout.addLayout(hdr)
 
         layout.addWidget(_hdiv())
 
-        # Firmware distribution bar
         fw_hdr = QHBoxLayout()
         fw_hdr.addWidget(_lbl("Firmware Distribution", 12, 600, T.TEXT_PRIMARY))
         fw_hdr.addStretch()
-        fw_hdr.addWidget(_lbl("Braiins OS / Vnish / LuxOS", 11, 400, T.TEXT_MUTED))
+        self._fw_legend_hdr = _lbl("—", 11, 400, T.TEXT_MUTED)
+        fw_hdr.addWidget(self._fw_legend_hdr)
         layout.addLayout(fw_hdr)
 
-        layout.addWidget(_FirmwareBar())
+        self._fw_bar = _FirmwareBar()
+        layout.addWidget(self._fw_bar)
 
         # Legend
-        legend = QHBoxLayout()
-        legend.setSpacing(0)
-        for dot_color, label, count in [
-            ("#111318", "Braiins OS", "24 nodes"),
-            ("#555C68", "Vnish",      "12 nodes"),
-            ("#C8CDD5", "LuxOS",      "20 nodes"),
-        ]:
+        self._legend_layout = QHBoxLayout()
+        self._legend_layout.setSpacing(0)
+        self._legend_widgets: list[QWidget] = []
+        layout.addLayout(self._legend_layout)
+
+    def update_distribution(self, breakdown: dict[str, int]) -> None:
+        total = sum(breakdown.values())
+        self._total_lbl.setText(str(total) if total else "—")
+
+        active = {k: v for k, v in breakdown.items() if v > 0}
+        self._fw_legend_hdr.setText(
+            "  /  ".join(_FW_LABELS.get(k, k) for k in active) if active else "—"
+        )
+
+        self._fw_bar.update_distribution(breakdown)
+
+        # Rebuild legend
+        for w in self._legend_widgets:
+            self._legend_layout.removeWidget(w)
+            w.deleteLater()
+        self._legend_widgets.clear()
+
+        for key, count in active.items():
+            dot_color = _FW_COLORS.get(key, "#9CA3AF")
             item = QHBoxLayout()
             item.setSpacing(6)
             dot = _lbl("●", 10, 400, dot_color)
@@ -392,14 +393,14 @@ class _MinerTopologyCard(QWidget):
             item.addWidget(dot)
             col = QVBoxLayout()
             col.setSpacing(0)
-            col.addWidget(_lbl(label, 12, 600, T.TEXT_PRIMARY))
-            col.addWidget(_lbl(count, 11, 400, T.TEXT_MUTED))
+            col.addWidget(_lbl(_FW_LABELS.get(key, key), 12, 600, T.TEXT_PRIMARY))
+            col.addWidget(_lbl(f"{count} node{'s' if count != 1 else ''}", 11, 400, T.TEXT_MUTED))
             item.addLayout(col)
             cell = QWidget()
             cell.setStyleSheet("background: transparent;")
             cell.setLayout(item)
-            legend.addWidget(cell, 1)
-        layout.addLayout(legend)
+            self._legend_layout.addWidget(cell, 1)
+            self._legend_widgets.append(cell)
 
 
 # ── Portal CTA banner ─────────────────────────────────────────────────────────
@@ -409,12 +410,7 @@ class _PortalBanner(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("portal_banner")
-        self.setStyleSheet(f"""
-            QWidget#portal_banner {{
-                background: #E8E9EB;
-                border-radius: 8px;
-            }}
-        """)
+        self.setStyleSheet("QWidget#portal_banner { background: #E8E9EB; border-radius: 8px; }")
         self.setFixedHeight(200)
 
         layout = QVBoxLayout(self)
@@ -424,21 +420,18 @@ class _PortalBanner(QWidget):
         title = _lbl("Further Analytics Online", 20, 700, T.TEXT_PRIMARY)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
-
         layout.addSpacing(6)
 
         sub = _lbl("Real-time visualization of your fleet.", 13, 400, T.TEXT_SECONDARY)
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(sub)
-
         layout.addSpacing(10)
 
         link = _lbl("portal.wrightfan.com  ↗", 13, 500, T.TEXT_PRIMARY)
         link.setAlignment(Qt.AlignmentFlag.AlignCenter)
         link.setCursor(Qt.CursorShape.PointingHandCursor)
         link.setStyleSheet(
-            f"color: {T.TEXT_PRIMARY}; background: transparent; "
-            "text-decoration: underline;"
+            f"color: {T.TEXT_PRIMARY}; background: transparent; text-decoration: underline;"
         )
         layout.addWidget(link)
 
@@ -446,10 +439,13 @@ class _PortalBanner(QWidget):
 # ── Page ──────────────────────────────────────────────────────────────────────
 
 class OverviewPage(QWidget):
-    """Step 3: agent overview."""
+    """Overview: live facility/customer details, miner count, firmware topology."""
 
-    def __init__(self, parent=None):
+    def __init__(self, engine: Optional["ScanningEngine"] = None, parent=None):
         super().__init__(parent)
+        self._engine = engine
+        self._fw_breakdown: dict[str, int] = {}
+
         self.setStyleSheet(f"background: {T.BG_WINDOW};")
 
         scroll = QScrollArea()
@@ -464,28 +460,72 @@ class OverviewPage(QWidget):
                                   T.CONTENT_PADDING, T.CONTENT_PADDING)
         layout.setSpacing(16)
 
-        # Update banner
-        layout.addWidget(_UpdateBanner())
+        # Row 1: Agent Details (full width)
+        self._agent_card = _AgentDetailsCard()
+        layout.addWidget(self._agent_card)
 
-        # Row 1: Agent Details + Operational Status
-        row1 = QHBoxLayout()
-        row1.setSpacing(16)
-        row1.addWidget(_AgentDetailsCard(), 3)
-        row1.addWidget(_OperationalStatusCard(), 2)
-        layout.addLayout(row1)
-
-        # Row 2: System Health + Miner Topology
+        # Row 2: Operational Status + Miner Topology
         row2 = QHBoxLayout()
         row2.setSpacing(16)
-        row2.addWidget(_SystemHealthCard(), 2)
-        row2.addWidget(_MinerTopologyCard(), 3)
+        self._ops_card  = _OperationalStatusCard()
+        self._topo_card = _MinerTopologyCard()
+        row2.addWidget(self._ops_card,  2)
+        row2.addWidget(self._topo_card, 3)
         layout.addLayout(row2)
 
         # Portal CTA
         layout.addWidget(_PortalBanner())
 
         scroll.setWidget(content)
-
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
+
+        # ── Connect engine signals ───────────────────────────────────────────
+        if engine is not None:
+            engine.signals.agent_info_loaded.connect(self._on_agent_info)
+            engine.signals.agent_info_error.connect(self._on_agent_info_error)
+            engine.signals.miner_count_changed.connect(self._on_miner_count)
+            engine.signals.scan_complete.connect(self._on_scan_complete)
+            engine.signals.poll_cycle_complete.connect(self._on_poll_cycle)
+
+            # Populate from scan_manager state on open
+            self._refresh_topology_from_engine()
+
+    # ── Signal slots ─────────────────────────────────────────────────────────
+
+    def _on_agent_info(self, data: dict) -> None:
+        self._agent_card.set_agent_info(data)
+
+    def _on_agent_info_error(self, err: str) -> None:
+        self._agent_card.set_error(err)
+
+    def _on_miner_count(self, count: int) -> None:
+        self._ops_card.set_miner_count(count)
+
+    def _on_scan_complete(self, subnet: str, miners_found: int, breakdown: object) -> None:
+        # Merge new breakdown into aggregate
+        bd: dict[str, int] = breakdown if isinstance(breakdown, dict) else {}
+        for key, val in bd.items():
+            self._fw_breakdown[key] = self._fw_breakdown.get(key, 0) + val
+        self._topo_card.update_distribution(self._fw_breakdown)
+
+    def _on_poll_cycle(self) -> None:
+        # Refresh miner count from engine after each poll
+        if self._engine is not None:
+            count = len(self._engine._cfg.get("miners", []))
+            self._ops_card.set_miner_count(count)
+
+    def _refresh_topology_from_engine(self) -> None:
+        if self._engine is None:
+            return
+        breakdown: dict[str, int] = {}
+        for result in self._engine.scan_manager.get_all_results():
+            if result.status == "complete":
+                for k, v in result.firmware_breakdown.items():
+                    breakdown[k] = breakdown.get(k, 0) + v
+        self._fw_breakdown = breakdown
+        self._topo_card.update_distribution(breakdown)
+
+        miners = self._engine._cfg.get("miners", [])
+        self._ops_card.set_miner_count(len(miners))

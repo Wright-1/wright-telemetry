@@ -40,6 +40,10 @@ class EngineSignals(QObject):
     discovery_total_changed = pyqtSignal(int)   # total miners across all subnets
     subnet_removed = pyqtSignal(str)            # subnet removed by user
 
+    # ── Portal metadata ──────────────────────────────────────────────────────
+    agent_info_loaded = pyqtSignal(dict)        # facility + customer details
+    agent_info_error  = pyqtSignal(str)         # human-readable error
+
 
 class ScanningEngine:
     """Manages the background scanning loop, portal WebSocket, and scan queue.
@@ -109,6 +113,9 @@ class ScanningEngine:
 
         # Auto-enqueue: detected local subnets + any already in config
         self._auto_enqueue_initial_subnets()
+
+        # Fetch facility / customer info from portal
+        self._fetch_agent_info()
 
         # GUI event drain timer
         self._timer.start()
@@ -194,6 +201,14 @@ class ScanningEngine:
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
+    def _fetch_agent_info(self) -> None:
+        from wright_telemetry.gui.portal_client import fetch_agent_info
+        fetch_agent_info(
+            api_url=self._cfg.get("wright_api_url", ""),
+            api_key=self._cfg.get("wright_api_key", ""),
+            push_gui_event=self.controller.push_gui_event,
+        )
+
     def _auto_enqueue_initial_subnets(self) -> None:
         """Enqueue detected local subnets + any already saved in config."""
         from wright_telemetry.discovery import default_subnets
@@ -253,3 +268,9 @@ class ScanningEngine:
 
             elif etype == "subnet_removed":
                 self.signals.subnet_removed.emit(event["subnet"])
+
+            elif etype == "agent_info":
+                self.signals.agent_info_loaded.emit(event["data"])
+
+            elif etype == "agent_info_error":
+                self.signals.agent_info_error.emit(event["error"])
