@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -19,14 +22,18 @@ from wright_telemetry.gui.pages.overview import OverviewPage
 from wright_telemetry.gui.security_panel import SecurityPanel
 from wright_telemetry.gui.sidebar import Sidebar
 
+if TYPE_CHECKING:
+    from wright_telemetry.gui.engine import ScanningEngine
+
 
 class MainWindow(QWidget):
     """Top-level window: title bar label + three-column body."""
 
     PAGE_KEYS = ["permissions", "discovery", "overview"]
 
-    def __init__(self, version: str = "0.7.3"):
+    def __init__(self, version: str = "0.7.3", engine: "ScanningEngine | None" = None):
         super().__init__()
+        self._engine = engine
         self.setWindowTitle("Wright Telemetry Collector — Local Agent")
         self.resize(T.WINDOW_W, T.WINDOW_H)
         self.setMinimumSize(T.WINDOW_MIN_W, T.WINDOW_MIN_H)
@@ -64,7 +71,7 @@ class MainWindow(QWidget):
         # Stacked content area
         self.stack = QStackedWidget()
         self.pages: dict[str, QWidget] = {
-            "permissions": PermissionsPage(),
+            "permissions": PermissionsPage(engine=engine),
             "discovery": DiscoveryPage(),
             "overview": OverviewPage(),
         }
@@ -77,6 +84,20 @@ class MainWindow(QWidget):
         body.addWidget(self.security)
 
         root.addLayout(body, 1)
+
+        # ── Engine signal connections ────────────────────────────────────────
+        if engine is not None:
+            engine.signals.ws_status_changed.connect(self.sidebar.set_ws_status)
+
+        # Wire permissions → discovery navigation
+        self.pages["permissions"].next_clicked.connect(
+            lambda: self._switch_page("discovery")
+        )
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._engine is not None:
+            self._engine.stop()
+        event.accept()
 
     def _switch_page(self, key: str) -> None:
         if key in self.pages:

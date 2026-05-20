@@ -6,7 +6,9 @@ All pages are static for now — no backend connections.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from typing import TYPE_CHECKING
+
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -18,6 +20,9 @@ from PyQt6.QtWidgets import (
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
 from wright_telemetry.gui.widgets import PermissionRow, PrimaryButton, SecondaryButton
+
+if TYPE_CHECKING:
+    from wright_telemetry.gui.engine import ScanningEngine
 
 # Permission data — mirrors consent.py METRICS
 PERMISSIONS = [
@@ -104,8 +109,11 @@ PERMISSIONS = [
 class PermissionsPage(QWidget):
     """Step 1: data-sharing permissions with toggles."""
 
-    def __init__(self, parent: QWidget | None = None):
+    next_clicked = pyqtSignal()
+
+    def __init__(self, engine: "ScanningEngine | None" = None, parent: QWidget | None = None):
         super().__init__(parent)
+        self._engine = engine
         self.setStyleSheet(f"background: {T.BG_WINDOW};")
 
         outer = QVBoxLayout(self)
@@ -176,6 +184,7 @@ class PermissionsPage(QWidget):
         bottom.addStretch()
 
         next_btn = PrimaryButton("Next: Discover Miners  →")
+        next_btn.clicked.connect(self._on_next)
         bottom.addWidget(next_btn)
 
         outer.addLayout(bottom)
@@ -183,5 +192,11 @@ class PermissionsPage(QWidget):
     def get_consent(self) -> dict[str, bool]:
         """Return current toggle states as a consent dict."""
         return {row.key: row.toggle.isChecked() for row in self.rows}
+
+    def _on_next(self) -> None:
+        """Save consent to disk, signal the engine to reload, then navigate."""
+        if self._engine is not None:
+            self._engine.update_consent(self.get_consent())
+        self.next_clicked.emit()
 
 
