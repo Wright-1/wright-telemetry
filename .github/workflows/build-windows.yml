@@ -90,6 +90,7 @@ jobs:
 
       - name: Upload binary to DO Spaces
         if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET }}
