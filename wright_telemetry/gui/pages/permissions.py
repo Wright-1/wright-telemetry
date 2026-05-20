@@ -6,7 +6,9 @@ All pages are static for now — no backend connections.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from typing import TYPE_CHECKING
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -18,6 +20,9 @@ from PyQt6.QtWidgets import (
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
 from wright_telemetry.gui.widgets import PermissionRow, PrimaryButton, SecondaryButton
+
+if TYPE_CHECKING:
+    from wright_telemetry.gui.engine import ScanningEngine
 
 # Permission data — mirrors consent.py METRICS
 PERMISSIONS = [
@@ -104,8 +109,17 @@ PERMISSIONS = [
 class PermissionsPage(QWidget):
     """Step 1: data-sharing permissions with toggles."""
 
-    def __init__(self, parent: QWidget | None = None):
+    next_clicked = pyqtSignal()
+
+    def __init__(self, engine: "ScanningEngine | None" = None, parent: QWidget | None = None):
         super().__init__(parent)
+        self._engine = engine
+
+        # Debounce: wait 300ms after the last toggle before saving
+        self._debounce = QTimer()
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(300)
+        self._debounce.timeout.connect(self._flush_consent)
         self.setStyleSheet(f"background: {T.BG_WINDOW};")
 
         outer = QVBoxLayout(self)
@@ -156,6 +170,7 @@ class PermissionsPage(QWidget):
                 checked=True,
             )
             scroll_layout.addWidget(row)
+            row.toggle.toggled.connect(self._on_toggle_changed)
             self.rows.append(row)
 
         scroll_layout.addStretch()
@@ -176,6 +191,7 @@ class PermissionsPage(QWidget):
         bottom.addStretch()
 
         next_btn = PrimaryButton("Next: Discover Miners  →")
+        next_btn.clicked.connect(self._on_next)
         bottom.addWidget(next_btn)
 
         outer.addLayout(bottom)
@@ -183,5 +199,20 @@ class PermissionsPage(QWidget):
     def get_consent(self) -> dict[str, bool]:
         """Return current toggle states as a consent dict."""
         return {row.key: row.toggle.isChecked() for row in self.rows}
+
+    def _on_toggle_changed(self, _checked: bool) -> None:
+        """Restart the debounce timer on every toggle flip."""
+        self._debounce.start()  # restarts automatically if already running
+
+    def _flush_consent(self) -> None:
+        """Save current consent state and signal the scheduler."""
+        if self._engine is not None:
+            self._engine.update_consent(self.get_consent())
+
+    def _on_next(self) -> None:
+        """Flush any pending debounce immediately, then navigate."""
+        self._debounce.stop()
+        self._flush_consent()
+        self.next_clicked.emit()
 
 

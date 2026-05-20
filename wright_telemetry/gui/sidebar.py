@@ -112,6 +112,28 @@ class Sidebar(QWidget):
         ver_row.addStretch()
         inner_layout.addLayout(ver_row)
 
+        inner_layout.addSpacing(8)
+
+        # ── WebSocket status ──────────────────────────────────────────────────
+        ws_row = QHBoxLayout()
+        ws_row.setContentsMargins(T.SIDEBAR_PADDING, 0, T.SIDEBAR_PADDING, 0)
+        ws_row.setSpacing(6)
+
+        self._ws_dot = QLabel("●")
+        self._ws_dot.setFont(make_font(9, 400))
+        self._ws_dot.setFixedWidth(14)
+
+        self._ws_label = QLabel("Connecting…")
+        self._ws_label.setFont(make_font(11, 400))
+
+        ws_row.addWidget(self._ws_dot)
+        ws_row.addWidget(self._ws_label)
+        ws_row.addStretch()
+        inner_layout.addLayout(ws_row)
+
+        # Apply initial (connecting) style
+        self.set_ws_status("connecting")
+
         outer.addWidget(inner_widget, 1)
 
         # Right border as a plain 1px frame
@@ -119,6 +141,28 @@ class Sidebar(QWidget):
         border.setFixedWidth(1)
         border.setStyleSheet(f"background: {T.BORDER_DEFAULT}; border: none;")
         outer.addWidget(border)
+
+    # ── WebSocket status ──────────────────────────────────────────────────
+
+    _WS_STATES: dict[str, tuple[str, str, str]] = {
+        #  status          dot_color           label_color         label_text
+        "connecting":   (T.TEXT_MUTED,    T.TEXT_MUTED,    "Connecting…"),
+        "connected":    (T.ACCENT_GREEN,  T.ACCENT_GREEN,  "Connected"),
+        "reconnecting": (T.ACCENT_ORANGE, T.ACCENT_ORANGE, "Reconnecting…"),
+        "disconnected": (T.ACCENT_RED,    T.TEXT_MUTED,    "Disconnected"),
+    }
+
+    def set_ws_status(self, status: str) -> None:
+        dot_color, label_color, label_text = self._WS_STATES.get(
+            status, self._WS_STATES["disconnected"]
+        )
+        self._ws_dot.setStyleSheet(
+            f"color: {dot_color}; background: transparent;"
+        )
+        self._ws_label.setStyleSheet(
+            f"color: {label_color}; background: transparent;"
+        )
+        self._ws_label.setText(label_text)
 
     def set_active(self, key: str) -> None:
         for k, item in self._items.items():

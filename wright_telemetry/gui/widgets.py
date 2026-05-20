@@ -50,7 +50,7 @@ class ToggleSwitch(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        track_color = QColor(T.ACCENT_BLUE) if self._checked else QColor("#D1D5DB")
+        track_color = QColor(T.TEXT_PRIMARY) if self._checked else QColor("#D1D5DB")
         path = QPainterPath()
         r = self.TRACK_H / 2
         path.addRoundedRect(0, 0, self.TRACK_W, self.TRACK_H, r, r)

@@ -894,6 +894,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
             identities = _fetch_identities(collectors)
             _report_miners_to_api(api_client, facility_id, identities)
 
+            if controller:
+                controller.push_gui_event({
+                    "event": "miners_resolved",
+                    "count": len(collectors),
+                })
+
             consecutive_crashes = 0
             last_scan = time.time()
             try:
@@ -981,6 +987,10 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     discovery_enabled = discovery_cfg.get("enabled", False)
                     scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
                     logger.info("Configuration reloaded from disk")
+                    if metrics:
+                        print(f"[WRIGHT] Config reloaded — active metrics: {', '.join(metrics)}")
+                    else:
+                        print("[WRIGHT] Config reloaded — all metrics disabled, collector will idle")
                     try:
                         safe_cfg = {k: v for k, v in cfg.items() if k != "wright_api_key"}
                         api_client.send_agent_config(safe_cfg, __version__)
@@ -988,6 +998,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         logger.warning("Failed to send agent config after reload: %s", exc)
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
+
+                if controller:
+                    controller.push_gui_event({
+                        "event": "poll_cycle_complete",
+                        "miner_count": len(collectors),
+                    })
 
                 if _fd_baseline:
                     _fd_baseline, _fd_last_check = _check_fd_growth(_fd_baseline, _fd_last_check)
