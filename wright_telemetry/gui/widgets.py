@@ -261,10 +261,12 @@ class NavItem(QWidget):
                 f"border-bottom-right-radius: 4px;"
             )
             self.icon_lbl.setStyleSheet(
-                f"color: {T.TEXT_PRIMARY}; font-size: 13px; border: none;"
+                f"color: {T.TEXT_PRIMARY}; font-size: 13px; "
+                f"border: none; background: transparent;"
             )
             self.text_lbl.setStyleSheet(
-                f"color: {T.TEXT_PRIMARY}; font-weight: 600; border: none;"
+                f"color: {T.TEXT_PRIMARY}; font-weight: 600; "
+                f"border: none; background: transparent;"
             )
         else:
             self.setStyleSheet(
@@ -273,10 +275,12 @@ class NavItem(QWidget):
                 "border-radius: 4px;"
             )
             self.icon_lbl.setStyleSheet(
-                f"color: {T.TEXT_SECONDARY}; font-size: 13px; border: none;"
+                f"color: {T.TEXT_SECONDARY}; font-size: 13px; "
+                f"border: none; background: transparent;"
             )
             self.text_lbl.setStyleSheet(
-                f"color: {T.TEXT_SECONDARY}; border: none;"
+                f"color: {T.TEXT_SECONDARY}; "
+                f"border: none; background: transparent;"
             )
 
     def mousePressEvent(self, ev):  # noqa: N802
