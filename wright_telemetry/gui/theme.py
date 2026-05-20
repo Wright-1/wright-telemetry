@@ -31,7 +31,7 @@ ACCENT_RED = "#EF4444"
 ACCENT_ORANGE = "#F97316"
 ACCENT_PURPLE = "#8B5CF6"
 
-NAV_ACTIVE_BG = "#EBF5FF"
+NAV_ACTIVE_BG = "#E4E5E7"
 
 # ── Permission category colors (left border) ─────────────────────────────────
 

@@ -254,16 +254,29 @@ class NavItem(QWidget):
 
     def _apply_style(self) -> None:
         if self._active:
-            bg = T.NAV_ACTIVE_BG
-            fg = T.ACCENT_BLUE
-            border = f"border-left: 3px solid {T.ACCENT_BLUE};"
+            self.setStyleSheet(
+                f"background: {T.NAV_ACTIVE_BG}; "
+                f"border-left: 3px solid {T.ACCENT_BLUE}; "
+                f"border-radius: 4px;"
+            )
+            self.icon_lbl.setStyleSheet(
+                f"color: {T.TEXT_PRIMARY}; font-size: 13px; border: none;"
+            )
+            self.text_lbl.setStyleSheet(
+                f"color: {T.TEXT_PRIMARY}; font-weight: 600; border: none;"
+            )
         else:
-            bg = "transparent"
-            fg = T.TEXT_SECONDARY
-            border = "border-left: 3px solid transparent;"
-        self.setStyleSheet(f"background: {bg}; {border} border-radius: 4px;")
-        self.icon_lbl.setStyleSheet(f"color: {fg}; font-size: 14px; border: none;")
-        self.text_lbl.setStyleSheet(f"color: {fg}; border: none;")
+            self.setStyleSheet(
+                "background: transparent; "
+                "border-left: 3px solid transparent; "
+                "border-radius: 4px;"
+            )
+            self.icon_lbl.setStyleSheet(
+                f"color: {T.TEXT_SECONDARY}; font-size: 13px; border: none;"
+            )
+            self.text_lbl.setStyleSheet(
+                f"color: {T.TEXT_SECONDARY}; border: none;"
+            )
 
     def mousePressEvent(self, ev):  # noqa: N802
         self.clicked.emit(self.key)
