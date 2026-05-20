@@ -178,7 +178,6 @@ class _ProgressEntryCard(QWidget):
         self._engine = engine
         self._scanning = False
         self._fw_toggles: dict[str, _FirmwareToggle] = {}
-        self._warning: Optional[_WarningCard] = None
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("pe_card")
@@ -283,10 +282,7 @@ class _ProgressEntryCard(QWidget):
             fw_row.addWidget(toggle)
 
         fw_and_warn.addWidget(fw_row_widget)
-
-        self._warning = _WarningCard()
-        self._warning.setVisible(False)
-        fw_and_warn.addWidget(self._warning, 1)
+        fw_and_warn.addStretch()
 
         entry.addLayout(fw_and_warn)
 
@@ -416,10 +412,6 @@ class _ProgressEntryCard(QWidget):
             return
         selected = [k for k, t in self._fw_toggles.items() if t.isChecked()]
         self._engine.update_firmware_types(selected)
-
-    def set_warning_visible(self, visible: bool) -> None:
-        if self._warning is not None:
-            self._warning.setVisible(visible)
 
     def _on_add(self) -> None:
         if self._engine is None:
@@ -721,6 +713,11 @@ class DiscoveryPage(QWidget):
         status_row.addStretch()
         layout.addLayout(status_row)
 
+        # ── Warning card (above scan progress, hidden until 0-miner scan) ──────
+        self._warning = _WarningCard()
+        self._warning.setVisible(False)
+        layout.addWidget(self._warning)
+
         # ── Combined progress + subnet entry card ─────────────────────────────
         self._progress_entry = _ProgressEntryCard(engine)
         layout.addWidget(self._progress_entry)
@@ -752,7 +749,7 @@ class DiscoveryPage(QWidget):
                 for r in engine.scan_manager.get_all_results()
             )
             total = engine.scan_manager.total_miners()
-            self._progress_entry.set_warning_visible(any_complete and total == 0)
+            self._warning.setVisible(any_complete and total == 0)
 
             if engine.scan_manager.is_scanning():
                 self._set_status_scanning()
@@ -824,7 +821,7 @@ class DiscoveryPage(QWidget):
 
     def _on_total_changed(self, total: int) -> None:
         self._total_miners = total
-        self._progress_entry.set_warning_visible(self._scan_completed and total == 0)
+        self._warning.setVisible(self._scan_completed and total == 0)
         if total > 0:
             n = len(self._scans_card._rows)
             s = "s" if total != 1 else ""
