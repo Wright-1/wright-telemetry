@@ -74,6 +74,15 @@ class ScanManager:
         """Cancel the current scan.  Queued subnets remain."""
         self._cancel_event.set()
 
+    def remove(self, subnet: str) -> None:
+        """Remove a subnet from results and queue. Cancels it if currently scanning."""
+        with self._lock:
+            self._results.pop(subnet, None)
+            if subnet in self._queue:
+                self._queue.remove(subnet)
+            if self._current_subnet == subnet:
+                self._cancel_event.set()
+
     def start_all(self) -> None:
         """Re-queue every known subnet and start scanning."""
         with self._lock:

@@ -34,7 +34,7 @@ _W_STATUS   = 108
 _W_MINERS   =  56
 _W_FW       = 168
 _W_CHECKED  =  86
-_W_ACTIONS  =  34
+_W_ACTIONS  =  70   # two 30px buttons + gap
 _W_GAP      =  12   # spacing between fixed cols
 
 
@@ -489,11 +489,7 @@ class _ScanRow(QWidget):
 
         row.addSpacing(_W_GAP)
 
-        self._btn = QPushButton("↺")
-        self._btn.setFixedSize(_W_ACTIONS, _W_ACTIONS)
-        self._btn.setFont(make_font(13, 400))
-        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn.setStyleSheet(f"""
+        btn_style = f"""
             QPushButton {{
                 background: transparent;
                 color: {T.TEXT_MUTED};
@@ -504,9 +500,38 @@ class _ScanRow(QWidget):
                 background: {T.BG_SIDEBAR};
                 color: {T.TEXT_PRIMARY};
             }}
-        """)
+        """
+        del_hover = f"""
+            QPushButton {{
+                background: transparent;
+                color: {T.TEXT_MUTED};
+                border: none;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background: #FEE2E2;
+                color: {T.ACCENT_RED};
+            }}
+        """
+
+        self._btn = QPushButton("↺")
+        self._btn.setFixedSize(30, 30)
+        self._btn.setFont(make_font(13, 400))
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn.setStyleSheet(btn_style)
         self._btn.clicked.connect(self._on_action)
         row.addWidget(self._btn)
+
+        row.addSpacing(4)
+
+        self._delete_btn = QPushButton("🗑")
+        self._delete_btn.setFixedSize(30, 30)
+        self._delete_btn.setFont(make_font(13, 400))
+        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn.setStyleSheet(del_hover)
+        self._delete_btn.setToolTip("Remove subnet")
+        self._delete_btn.clicked.connect(self._on_delete)
+        row.addWidget(self._delete_btn)
 
         self.update(result)
 
@@ -523,8 +548,8 @@ class _ScanRow(QWidget):
         if result.status == "queued":
             self._miners_lbl.setText("—")
             self._fw_lbl.setText("—")
-            self._btn.setText("🗑")
-            self._btn.setToolTip("Remove from queue")
+            self._btn.setText("—")
+            self._btn.setEnabled(False)
         elif result.status == "scanning":
             pct = (
                 int(result.scanned_hosts / result.total_hosts * 100)
@@ -533,16 +558,19 @@ class _ScanRow(QWidget):
             self._miners_lbl.setText(f"{pct}%")
             self._fw_lbl.setText("scanning…")
             self._btn.setText("⊗")
+            self._btn.setEnabled(True)
             self._btn.setToolTip("Cancel scan")
         elif result.status == "cancelled":
             self._miners_lbl.setText("—")
             self._fw_lbl.setText("—")
             self._btn.setText("↺")
+            self._btn.setEnabled(True)
             self._btn.setToolTip("Retry scan")
         else:  # complete
             self._miners_lbl.setText(str(result.miners_found))
             self._fw_lbl.setText(_fw_summary(result.firmware_breakdown))
             self._btn.setText("↺")
+            self._btn.setEnabled(True)
             self._btn.setToolTip("Rescan subnet")
 
         self._time_lbl.setText(_time_ago(result.last_scanned))
@@ -550,11 +578,14 @@ class _ScanRow(QWidget):
     def _on_action(self) -> None:
         if self._engine is None:
             return
-        btn = self._btn.text()
-        if btn == "⊗":
+        if self._btn.text() == "⊗":
             self._engine.cancel_scan()
         else:
             self._engine.scan_manager.enqueue([self.subnet])
+
+    def _on_delete(self) -> None:
+        if self._engine is not None:
+            self._engine.remove_subnet(self.subnet)
 
 
 # ── Active scans card ─────────────────────────────────────────────────────────
@@ -564,6 +595,7 @@ class _ActiveScansCard(QWidget):
         super().__init__(parent)
         self._engine = engine
         self._rows: dict[str, _ScanRow] = {}
+        self._dividers: dict[str, QFrame] = {}
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("scans_card")
@@ -634,7 +666,7 @@ class _ActiveScansCard(QWidget):
         ch.addSpacing(_W_GAP)
         ch.addWidget(_ch_lbl("LAST CHECKED",     _W_CHECKED, right=True))
         ch.addSpacing(_W_GAP)
-        ch.addWidget(_ch_lbl("",                 _W_ACTIONS))  # actions col
+        ch.addWidget(_ch_lbl("",                 _W_ACTIONS))  # two action buttons
 
         self._outer.addWidget(col_hdr_w)
         self._outer.addWidget(_hdiv())
@@ -661,10 +693,25 @@ class _ActiveScansCard(QWidget):
             self._rows[result.subnet].update(result)
         else:
             row = _ScanRow(result, self._engine)
+            div = _hdiv()
             self._rows[result.subnet] = row
+            self._dividers[result.subnet] = div
             idx = self._rows_layout.count() - 1   # before stretch
-            self._rows_layout.insertWidget(idx, _hdiv())
             self._rows_layout.insertWidget(idx, row)
+            self._rows_layout.insertWidget(idx + 1, div)
+        self._refresh_badge()
+
+    def remove_row(self, subnet: str) -> None:
+        row = self._rows.pop(subnet, None)
+        div = self._dividers.pop(subnet, None)
+        if row:
+            row.setVisible(False)
+            self._rows_layout.removeWidget(row)
+            row.deleteLater()
+        if div:
+            div.setVisible(False)
+            self._rows_layout.removeWidget(div)
+            div.deleteLater()
         self._refresh_badge()
 
     def _refresh_badge(self) -> None:
@@ -686,6 +733,7 @@ class DiscoveryPage(QWidget):
         self._scan_completed = False
         self._total_miners = 0
         self._last_scan_ts: Optional[float] = None
+        self._had_cancel = False
 
         self.setStyleSheet(f"background: {T.BG_WINDOW};")
 
@@ -774,6 +822,7 @@ class DiscoveryPage(QWidget):
         engine.signals.scan_cancelled.connect(self._on_scan_cancelled)
         engine.signals.scan_queue_empty.connect(self._on_queue_empty)
         engine.signals.discovery_total_changed.connect(self._on_total_changed)
+        engine.signals.subnet_removed.connect(self._scans_card.remove_row)
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
@@ -810,6 +859,7 @@ class DiscoveryPage(QWidget):
         ))
 
     def _on_scan_cancelled(self, subnet: str) -> None:
+        self._had_cancel = True
         self._scans_card.add_or_update_row(
             SubnetScanResult(subnet=subnet, status="cancelled")
         )
@@ -818,8 +868,10 @@ class DiscoveryPage(QWidget):
     def _on_queue_empty(self) -> None:
         self._progress_entry.set_idle(self._last_scan_ts)
         self._set_status_idle()
-        # Only reveal the warning once the entire queue has finished
-        self._warning.setVisible(self._scan_completed and self._total_miners == 0)
+        # Only show warning when queue fully completes with no cancels and no miners
+        show = self._scan_completed and self._total_miners == 0 and not self._had_cancel
+        self._warning.setVisible(show)
+        self._had_cancel = False   # reset for next scan session
 
     def _on_total_changed(self, total: int) -> None:
         self._total_miners = total

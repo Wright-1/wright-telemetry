@@ -38,6 +38,7 @@ class EngineSignals(QObject):
     scan_cancelled = pyqtSignal(str)            # subnet
     scan_queue_empty = pyqtSignal()
     discovery_total_changed = pyqtSignal(int)   # total miners across all subnets
+    subnet_removed = pyqtSignal(str)            # subnet removed by user
 
 
 class ScanningEngine:
@@ -162,6 +163,23 @@ class ScanningEngine:
         """Start or resume scanning — re-queues all known subnets."""
         self.scan_manager.start_all()
 
+    def remove_subnet(self, subnet: str) -> None:
+        """Remove subnet from scan queue, results, and saved config."""
+        self.scan_manager.remove(subnet)
+        from wright_telemetry.config import load_config, save_config
+        cfg = load_config() or {}
+        disc = cfg.get("discovery", {})
+        subnets: list[str] = disc.get("subnets", [])
+        if subnet in subnets:
+            subnets.remove(subnet)
+            disc["subnets"] = subnets
+            cfg["discovery"] = disc
+            save_config(cfg)
+            self._cfg = cfg
+            self.controller.request_config_reload()
+        # Tell the GUI to remove the row
+        self.controller.push_gui_event({"event": "subnet_removed", "subnet": subnet})
+
     def update_firmware_types(self, types: list[str]) -> None:
         """Persist firmware type selection and re-queue all subnets for rescan."""
         from wright_telemetry.config import load_config, save_config
@@ -227,3 +245,6 @@ class ScanningEngine:
 
             elif etype == "discovery_total":
                 self.signals.discovery_total_changed.emit(event["total"])
+
+            elif etype == "subnet_removed":
+                self.signals.subnet_removed.emit(event["subnet"])
