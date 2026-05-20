@@ -175,11 +175,6 @@ class PermissionsPage(QWidget):
 
         bottom.addStretch()
 
-        cancel_btn = SecondaryButton("Cancel")
-        bottom.addWidget(cancel_btn)
-
-        bottom.addSpacing(8)
-
         next_btn = PrimaryButton("Next: Discover Miners  →")
         bottom.addWidget(next_btn)
 

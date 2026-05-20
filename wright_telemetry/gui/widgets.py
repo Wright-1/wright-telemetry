@@ -257,7 +257,8 @@ class NavItem(QWidget):
             self.setStyleSheet(
                 f"background: {T.NAV_ACTIVE_BG}; "
                 f"border-left: 3px solid {T.ACCENT_BLUE}; "
-                f"border-radius: 4px;"
+                f"border-top-right-radius: 4px; "
+                f"border-bottom-right-radius: 4px;"
             )
             self.icon_lbl.setStyleSheet(
                 f"color: {T.TEXT_PRIMARY}; font-size: 13px; border: none;"
