@@ -85,8 +85,13 @@ class AgentController:
                 return events
 
     def request_config_reload(self) -> None:
-        """Signal the scheduler to reload config from disk."""
+        """Signal the scheduler to reload config from disk.
+
+        Also sets _mode_changed so the scheduler wakes immediately from
+        wait_for_mode_change() instead of sleeping the full poll interval.
+        """
         self._config_reload.set()
+        self._mode_changed.set()  # wake the scheduler immediately
 
     def check_config_reload(self) -> bool:
         """Return True if a config reload was requested, clearing the flag."""

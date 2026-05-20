@@ -114,6 +114,14 @@ class ScanningEngine:
         cfg["consent"] = consent
         save_config(cfg)
         self._cfg = cfg
+
+        enabled = [k for k, v in consent.items() if v]
+        disabled = [k for k, v in consent.items() if not v]
+        print(f"[WRIGHT] Consent saved — enabled: {enabled or 'none'}")
+        if disabled:
+            print(f"[WRIGHT]              disabled: {disabled}")
+        logger.info("Consent updated via GUI: enabled=%s disabled=%s", enabled, disabled)
+
         self.controller.request_config_reload()
 
     # ------------------------------------------------------------------
