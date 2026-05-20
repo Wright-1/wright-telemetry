@@ -71,7 +71,9 @@ class ScanManager:
         self._ensure_worker()
 
     def cancel(self) -> None:
-        """Cancel the current scan.  Queued subnets remain."""
+        """Cancel the current scan and clear the entire queue."""
+        with self._lock:
+            self._queue.clear()
         self._cancel_event.set()
 
     def remove(self, subnet: str) -> None:
