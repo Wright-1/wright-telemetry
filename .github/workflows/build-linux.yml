@@ -57,7 +57,7 @@ jobs:
 
       - name: Build binary
         env:
-          WRIGHT_LOKI_AUTH: ${{ secrets.LOKI_BASIC_AUTH }}
+          WRIGHT_LOKI_AUTH: ${{ secrets.WRIGHT_LOKI_AUTH }}
         run: pyinstaller wright-telemetry.spec
 
       - name: Verify binary runs
