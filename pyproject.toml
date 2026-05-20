@@ -20,6 +20,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gui = [
+    "PyQt6>=6.6",
+]
 dev = [
     "pyinstaller>=6.0",
     "pytest>=7.0",

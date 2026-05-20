@@ -1,0 +1,248 @@
+"""Page widgets for each wizard step.
+
+Each page is a QWidget that can be swapped into the main content area.
+All pages are static for now — no backend connections.
+"""
+
+from __future__ import annotations
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
+
+from wright_telemetry.gui.fonts import make_font
+from wright_telemetry.gui import theme as T
+from wright_telemetry.gui.widgets import PermissionRow, PrimaryButton, SecondaryButton
+
+# Permission data — mirrors consent.py METRICS
+PERMISSIONS = [
+    {
+        "key": "cooling",
+        "title": "Temperature & Fan RPM",
+        "subtitle": "Reads sensors to predict lifespan.",
+        "detail": (
+            "Detailed access required for monitoring temperature & fan RPM. "
+            "This permission allows the local agent to query specific endpoints "
+            "on your mining hardware."
+        ),
+    },
+    {
+        "key": "hashrate",
+        "title": "Hashrate & Power Stats",
+        "subtitle": "Monitors efficiency and savings.",
+        "detail": (
+            "Reads your miner's hashrate, pool stats, and power consumption. "
+            "Wright uses this to show how fans are saving you money by keeping "
+            "your miner running at peak efficiency."
+        ),
+    },
+    {
+        "key": "uptime",
+        "title": "Uptime & Firmware Info",
+        "subtitle": "Tracks reliability metrics.",
+        "detail": (
+            "Reads how long your miner has been running and its firmware version. "
+            "Wright uses this to show how modular design increases uptime "
+            "compared to stock fans."
+        ),
+    },
+    {
+        "key": "hashboards",
+        "title": "Per-Hashboard Chip Temps",
+        "subtitle": "Detailed hardware diagnostics.",
+        "detail": (
+            "Reads temperature and status for each hashboard in your miner. "
+            "Wright uses this for granular degradation detection, spotting "
+            "hot-spots before they cause downtime."
+        ),
+    },
+    {
+        "key": "errors",
+        "title": "Miner Errors",
+        "subtitle": "Automatically files support reports.",
+        "detail": (
+            "Reads the error log from your miner (timestamps, error codes, "
+            "affected components). Wright uses this to notify you of fan "
+            "failures and automatically file support reports on your behalf."
+        ),
+    },
+    {
+        "key": "auto_update",
+        "title": "Automatic Updates",
+        "subtitle": "Keeps the agent secure.",
+        "detail": (
+            "Allows Wright One to automatically download and apply new versions "
+            "of this agent in the background. Checks run hourly and require no "
+            "action on your part."
+        ),
+    },
+    {
+        "key": "remote_config",
+        "title": "Remote Configuration",
+        "subtitle": "Adjust settings remotely from your dashboard.",
+        "detail": (
+            "Allows Wright One support and your customer portal to view and "
+            "update this agent's configuration remotely. Passwords are never "
+            "transmitted; they are always masked before leaving your machine."
+        ),
+    },
+]
+
+
+class PermissionsPage(QWidget):
+    """Step 1: data-sharing permissions with toggles."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setStyleSheet(f"background: {T.BG_WINDOW};")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(T.CONTENT_PADDING, T.CONTENT_PADDING, T.CONTENT_PADDING, 0)
+        outer.setSpacing(0)
+
+        # ── Heading ───────────────────────────────────────────────────────────
+        title = QLabel("Welcome to Wright Telemetry")
+        title.setFont(make_font(*T.FONT_PAGE_HEADING))
+        title.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
+        outer.addWidget(title)
+
+        outer.addSpacing(8)
+
+        desc = QLabel(
+            "Runs on your local network, monitors miners every 30 seconds, "
+            "and streams performance data to your Wright Fan dashboard for "
+            "real-time visibility and predictive alerts."
+        )
+        desc.setFont(make_font(*T.FONT_PAGE_DESC))
+        desc.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        desc.setWordWrap(True)
+        outer.addWidget(desc)
+
+        outer.addSpacing(20)
+
+        # ── Scrollable permission list ────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setStyleSheet("background: transparent;")
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(8)
+
+        self.rows: list[PermissionRow] = []
+        for perm in PERMISSIONS:
+            color = T.CATEGORY_COLORS.get(perm["key"], T.ACCENT_BLUE)
+            row = PermissionRow(
+                key=perm["key"],
+                title=perm["title"],
+                subtitle=perm["subtitle"],
+                detail=perm["detail"],
+                category_color=color,
+                checked=True,
+            )
+            scroll_layout.addWidget(row)
+            self.rows.append(row)
+
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_content)
+        outer.addWidget(scroll, 1)
+
+        # ── Bottom bar ────────────────────────────────────────────────────────
+        outer.addSpacing(12)
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 12, 0, 16)
+
+        help_lbl = QLabel("ⓘ  Need help? <a style='color: " + T.ACCENT_BLUE + ";' href='#'>Security Guide.</a>")
+        help_lbl.setFont(make_font(*T.FONT_BODY_SMALL))
+        help_lbl.setStyleSheet(f"color: {T.TEXT_MUTED};")
+        help_lbl.setTextFormat(Qt.TextFormat.RichText)
+        bottom.addWidget(help_lbl)
+
+        bottom.addStretch()
+
+        cancel_btn = SecondaryButton("Cancel")
+        bottom.addWidget(cancel_btn)
+
+        bottom.addSpacing(8)
+
+        next_btn = PrimaryButton("Next: Discover Miners  →")
+        bottom.addWidget(next_btn)
+
+        outer.addLayout(bottom)
+
+    def get_consent(self) -> dict[str, bool]:
+        """Return current toggle states as a consent dict."""
+        return {row.key: row.toggle.isChecked() for row in self.rows}
+
+
+class DiscoveryPage(QWidget):
+    """Step 2: subnet input and miner discovery (placeholder)."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setStyleSheet(f"background: {T.BG_WINDOW};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(T.CONTENT_PADDING, T.CONTENT_PADDING, T.CONTENT_PADDING, T.CONTENT_PADDING)
+
+        title = QLabel("Discover Miners")
+        title.setFont(make_font(*T.FONT_PAGE_HEADING))
+        title.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        layout.addSpacing(8)
+
+        desc = QLabel("Enter your network subnets to scan for mining hardware.")
+        desc.setFont(make_font(*T.FONT_PAGE_DESC))
+        desc.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        layout.addWidget(desc)
+
+        layout.addStretch()
+
+        placeholder = QLabel("Discovery UI will be built here.")
+        placeholder.setFont(make_font(14, 400))
+        placeholder.setStyleSheet(f"color: {T.TEXT_MUTED};")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(placeholder)
+
+        layout.addStretch()
+
+
+class OverviewPage(QWidget):
+    """Step 3: agent overview with link to web portal (placeholder)."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setStyleSheet(f"background: {T.BG_WINDOW};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(T.CONTENT_PADDING, T.CONTENT_PADDING, T.CONTENT_PADDING, T.CONTENT_PADDING)
+
+        title = QLabel("Agent Overview")
+        title.setFont(make_font(*T.FONT_PAGE_HEADING))
+        title.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        layout.addSpacing(8)
+
+        desc = QLabel("Your agent is configured. Visit the web portal for detailed monitoring.")
+        desc.setFont(make_font(*T.FONT_PAGE_DESC))
+        desc.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        layout.addWidget(desc)
+
+        layout.addStretch()
+
+        placeholder = QLabel("Overview UI will be built here.")
+        placeholder.setFont(make_font(14, 400))
+        placeholder.setStyleSheet(f"color: {T.TEXT_MUTED};")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(placeholder)
+
+        layout.addStretch()

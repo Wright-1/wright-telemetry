@@ -2,7 +2,8 @@
 
 Usage:
     wright-telemetry                       Run the collector (starts setup if first time)
-    wright-telemetry --setup               Re-run the setup wizard
+    wright-telemetry --gui                 Open the graphical setup wizard
+    wright-telemetry --setup               Re-run the TUI setup wizard
     wright-telemetry --detect-wright-fans  Start Wright Fan detection mode
     wright-telemetry --discover            Scan all local subnets for miners and exit
     wright-telemetry --subnets-file FILE   Import VLANs from file, scan, and save to config
@@ -144,7 +145,8 @@ def _parse_args() -> argparse.Namespace:
         prog="wright-telemetry",
         description="Collects miner telemetry and sends it to the Wright Fan dashboard.",
     )
-    parser.add_argument("--setup", action="store_true", help="Re-run the setup wizard")
+    parser.add_argument("--gui", action="store_true", help="Open the graphical setup wizard")
+    parser.add_argument("--setup", action="store_true", help="Re-run the TUI setup wizard")
     parser.add_argument("--set-config", action="store_true", help="Choose or create the config file interactively")
     parser.add_argument("--discover", action="store_true", help="Scan all local subnets for miners and exit")
     parser.add_argument("--subnets-file", metavar="FILE", help="Import VLANs from a text file (one CIDR per line), save to config, and scan")
@@ -167,6 +169,11 @@ def main() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     args = _parse_args()
+
+    if args.gui:
+        from wright_telemetry.gui.app import run_gui
+        run_gui()
+        return
 
     if args.loki_auth:
         os.environ["WRIGHT_LOKI_AUTH"] = args.loki_auth
