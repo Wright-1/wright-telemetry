@@ -72,7 +72,7 @@ class MainWindow(QWidget):
         self.stack = QStackedWidget()
         self.pages: dict[str, QWidget] = {
             "permissions": PermissionsPage(engine=engine),
-            "discovery": DiscoveryPage(),
+            "discovery": DiscoveryPage(engine=engine),
             "overview": OverviewPage(),
         }
         for key in self.PAGE_KEYS:
