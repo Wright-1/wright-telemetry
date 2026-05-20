@@ -84,10 +84,14 @@ def _fw_summary(breakdown: dict) -> str:
 # ── Warning card (inline with heading — no side stripe) ───────────────────────
 
 class _WarningCard(QWidget):
-    """Checklist of things to verify when no miners are found.
+    """Urgent checklist shown when a scan completes with zero miners found."""
 
-    Uses a full border + amber background tint. No side-stripe accent.
-    """
+    _CHECKS = [
+        "Miners are on the same subnet as this host.",
+        "No firewall is blocking port 4028.",
+        "You have selected the correct firmware types.",
+        "Miners are powered on and running.",
+    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -95,37 +99,41 @@ class _WarningCard(QWidget):
         self.setObjectName("warn_card")
         self.setStyleSheet("""
             QWidget#warn_card {
-                background: #FFFBEB;
-                border: 1px solid #FDE68A;
+                background: #FEF2F2;
+                border: 1px solid #F87171;
                 border-radius: 8px;
             }
         """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(10)
 
-        # Title
+        # Title row
         title_row = QHBoxLayout()
         title_row.setSpacing(8)
-        title_row.addWidget(_lbl("⚠", 13, 600, T.ACCENT_ORANGE))
-        title_row.addWidget(_lbl("No miners detected — check these first:", 13, 600, T.TEXT_PRIMARY))
+        icon = _lbl("⚠", 15, 700, T.ACCENT_RED)
+        icon.setFixedWidth(20)
+        title_row.addWidget(icon)
+        title = _lbl("No miners found", 13, 700, T.ACCENT_RED)
+        title_row.addWidget(title)
         title_row.addStretch()
         layout.addLayout(title_row)
 
-        checks = [
-            "Miners are on the same subnet as this host.",
-            "No firewall is blocking port 4028.",
-            "You have selected the correct firmware types below.",
-            "Miners are powered on and running.",
-        ]
-        for item in checks:
+        sub = _lbl(
+            "Scan finished with 0 results. Verify each of the following:",
+            11, 400, "#9CA3AF",
+        )
+        layout.addWidget(sub)
+
+        # Numbered checklist
+        for i, item in enumerate(self._CHECKS, 1):
             row = QHBoxLayout()
-            row.setSpacing(8)
-            row.setContentsMargins(4, 0, 0, 0)
-            dot = _lbl("◦", 12, 400, T.ACCENT_ORANGE)
-            dot.setFixedWidth(14)
-            row.addWidget(dot)
-            row.addWidget(_lbl(item, 12, 400, T.TEXT_SECONDARY, wrap=True))
+            row.setSpacing(10)
+            row.setContentsMargins(2, 0, 0, 0)
+            num = _lbl(str(i), 11, 700, T.ACCENT_RED)
+            num.setFixedWidth(14)
+            row.addWidget(num)
+            row.addWidget(_lbl(item, 12, 400, "#374151", wrap=True))
             row.addStretch()
             layout.addLayout(row)
 
@@ -272,9 +280,7 @@ class _ProgressEntryCard(QWidget):
         fw_col_widget = QWidget()
         fw_col_widget.setStyleSheet("background: transparent;")
         fw_col_widget.setLayout(fw_col)
-        fw_col_widget.setSizePolicy(
-            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
-        )
+        fw_col_widget.setFixedWidth(160)   # keeps column from bleeding into warning space
         fw_and_warn.addWidget(fw_col_widget)
 
         self._warning = _WarningCard()
