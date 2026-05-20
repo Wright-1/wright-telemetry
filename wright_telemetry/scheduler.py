@@ -292,7 +292,11 @@ def _poll_cycle(
                         metric_type="baseline",
                         facility_id=facility_id,
                         miner_identity=identity,
-                        data=baseline.to_dict(),
+                        # Use to_pipeline_dict() so the payload matches the
+                        # handleBaseline() format the data-pipeline expects:
+                        # {"baselines": [{"fan_position", "avg_rpm", ...}],
+                        #  "window_start": ..., "window_end": ...}
+                        data=baseline.to_pipeline_dict(),
                     ))
             except Exception as exc:
                 logger.warning("Error updating baseline for '%s': %s", name, exc)

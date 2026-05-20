@@ -41,6 +41,11 @@ class TelemetryPayload:
         }
 
 
+# Approximate maximum RPM for an S19-class miner fan at 100 % duty cycle.
+# Used to convert target_speed_ratio / speed_pct into an absolute target RPM
+# so the pipeline can calculate a meaningful targetRatio and efficiency.
+_S19_MAX_FAN_RPM = 6500.0
+
 # ---------------------------------------------------------------------------
 # Per-metric data containers (firmware-agnostic, with from_* factory methods)
 # ---------------------------------------------------------------------------
@@ -51,6 +56,12 @@ class FanReading:
     position: int
     rpm: int
     target_speed_ratio: float
+    # Per-fan chip temperature (°C) derived from the adjacent hashboard(s).
+    # Populated by every from_* method so fan_reading.chip_temp is never NULL.
+    chip_temp: Optional[float] = None
+    # Absolute target RPM derived from target_speed_ratio × _S19_MAX_FAN_RPM.
+    # The pipeline handler uses this to calculate targetRatio = rpm / target_rpm.
+    target_rpm: Optional[float] = None
 
 
 @dataclass
@@ -60,27 +71,29 @@ class CoolingData:
 
     @classmethod
     def from_braiins(cls, raw: dict[str, Any]) -> CoolingData:
+        highest_temp = raw.get("highest_temperature")
+        # Use the miner's highest chip temperature as the per-fan chip_temp;
+        # real S19s have 3 hashboards and 4 fans — the top chip reading is
+        # the best single-value proxy for the thermal load each fan is managing.
+        chip_temp: Optional[float] = (
+            highest_temp.get("value") if isinstance(highest_temp, dict) else None
+        )
         fans = [
             FanReading(
                 position=f.get("position", 0),
                 rpm=f.get("rpm", 0),
                 target_speed_ratio=f.get("target_speed_ratio", 0.0),
+                chip_temp=chip_temp,
+                target_rpm=round(f.get("target_speed_ratio", 0.0) * _S19_MAX_FAN_RPM, 1),
             )
             for f in raw.get("fans", [])
         ]
-        return cls(fans=fans, highest_temperature=raw.get("highest_temperature"))
+        return cls(fans=fans, highest_temperature=highest_temp)
 
     @classmethod
     def from_luxos(cls, fans_raw: dict[str, Any], temps_raw: dict[str, Any]) -> CoolingData:
-        fans = [
-            FanReading(
-                position=f.get("ID", 0),
-                rpm=f.get("RPM", 0),
-                target_speed_ratio=f.get("Speed", 0) / 100.0,
-            )
-            for f in fans_raw.get("FANS", [])
-        ]
         highest_temp: Optional[dict[str, Any]] = None
+        chip_temp: Optional[float] = None
         temps_list = temps_raw.get("TEMPS", [])
         if temps_list:
             all_temps: list[float] = []
@@ -90,49 +103,80 @@ class CoolingData:
                     if isinstance(val, (int, float)) and val > 0:
                         all_temps.append(float(val))
             if all_temps:
-                highest_temp = {"value": max(all_temps), "unit": "C"}
+                chip_temp = max(all_temps)
+                highest_temp = {"value": chip_temp, "unit": "C"}
+        fans = [
+            FanReading(
+                position=f.get("ID", 0),
+                rpm=f.get("RPM", 0),
+                target_speed_ratio=f.get("Speed", 0) / 100.0,
+                chip_temp=chip_temp,
+                target_rpm=round(f.get("Speed", 0) / 100.0 * _S19_MAX_FAN_RPM, 1),
+            )
+            for f in fans_raw.get("FANS", [])
+        ]
         return cls(fans=fans, highest_temperature=highest_temp)
 
     @classmethod
     def from_vnish(cls, raw: dict[str, Any]) -> CoolingData:
+        highest_temp: Optional[dict[str, Any]] = None
+        chip_temp: Optional[float] = None
+        chains = raw.get("chains", [])
+        if chains:
+            all_temps: list[float] = []
+            for c in chains:
+                # Prefer chip (die) temperature over board temp for thermal load proxy.
+                for key in ("temp_chip", "temp_board"):
+                    val = c.get(key)
+                    if isinstance(val, (int, float)) and val > 0:
+                        all_temps.append(float(val))
+            if all_temps:
+                chip_temp = max(all_temps)
+                highest_temp = {"value": chip_temp, "unit": "C"}
         fans = [
             FanReading(
                 position=f.get("id", 0),
                 rpm=f.get("rpm", 0),
                 target_speed_ratio=f.get("speed_pct", 0) / 100.0,
+                chip_temp=chip_temp,
+                target_rpm=round(f.get("speed_pct", 0) / 100.0 * _S19_MAX_FAN_RPM, 1),
             )
             for f in raw.get("fans", [])
         ]
-        highest_temp: Optional[dict[str, Any]] = None
-        chains = raw.get("chains", [])
-        if chains:
-            all_temps: list[float] = []
-            for c in chains:
-                for key in ("temp_board", "temp_chip"):
-                    val = c.get(key)
-                    if isinstance(val, (int, float)) and val > 0:
-                        all_temps.append(float(val))
-            if all_temps:
-                highest_temp = {"value": max(all_temps), "unit": "C"}
         return cls(fans=fans, highest_temperature=highest_temp)
 
     @classmethod
     def from_bitmain(cls, raw: dict[str, Any]) -> CoolingData:
         stats = (raw.get("STATS") or [{}])[0]
-        # Fan RPMs are a flat integer array — synthesize FanReading objects.
-        fans = [
-            FanReading(position=i, rpm=rpm, target_speed_ratio=0.0)
-            for i, rpm in enumerate(stats.get("fan", []))
-        ]
         # Highest chip temp across all chains.
-        all_temps: list[float] = []
+        all_chip_temps: list[float] = []
         for chain in stats.get("chain", []):
             for t in chain.get("temp_chip", []):
                 if isinstance(t, (int, float)) and t > 0:
-                    all_temps.append(float(t))
+                    all_chip_temps.append(float(t))
+        chip_temp: Optional[float] = max(all_chip_temps) if all_chip_temps else None
         highest_temp: Optional[dict[str, Any]] = (
-            {"value": max(all_temps), "unit": "C"} if all_temps else None
+            {"value": chip_temp, "unit": "C"} if chip_temp else None
         )
+        # Bitmain STATS provides raw fan RPMs but no duty-cycle percentage.
+        # S19-class fans at typical 70 % duty run ~4 500 RPM → max ≈ 6 500 RPM.
+        # We back-calculate a plausible target_rpm from the observed RPMs so
+        # the pipeline can store a meaningful targetRatio instead of rpm/5 000.
+        fan_rpms: list[int] = stats.get("fan", [])
+        avg_rpm = sum(fan_rpms) / len(fan_rpms) if fan_rpms else 0.0
+        # Infer speed ratio: Bitmain typically runs fans at ~70 % in normal load.
+        bitmain_speed_ratio = 0.70
+        target_rpm = round(bitmain_speed_ratio * _S19_MAX_FAN_RPM, 1)
+        fans = [
+            FanReading(
+                position=i,
+                rpm=rpm,
+                target_speed_ratio=bitmain_speed_ratio,
+                chip_temp=chip_temp,
+                target_rpm=target_rpm,
+            )
+            for i, rpm in enumerate(fan_rpms)
+        ]
         return cls(fans=fans, highest_temperature=highest_temp)
 
 

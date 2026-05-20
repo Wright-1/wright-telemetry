@@ -45,9 +45,51 @@ class BaselineRecord:
     baseline_sample_count: int
     baseline_start_time: str
     baseline_end_time: str
+    # Average efficiency = avg_rpm / avg_target_rpm, reflecting how closely the
+    # fan tracked its speed target during the baseline window.
+    baseline_efficiency: Optional[float] = None
+    # Average target RPM observed during the baseline window.
+    baseline_target_rpm: Optional[float] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def to_pipeline_dict(self) -> dict[str, Any]:
+        """Return the payload format expected by the data-pipeline handleBaseline().
+
+        The pipeline handler expects::
+
+            {
+                "baselines": [
+                    {
+                        "fan_position": int,
+                        "avg_rpm":       float,
+                        "rpm_stddev":    float,
+                        "avg_chip_temp": float | null,
+                        "temp_stddev":   float | null,
+                        "efficiency":    float | null,
+                        "sample_count":  int,
+                    }
+                ],
+                "window_start": str,   # ISO-8601
+                "window_end":   str,   # ISO-8601
+            }
+        """
+        return {
+            "baselines": [
+                {
+                    "fan_position": self.fan_position,
+                    "avg_rpm": self.baseline_rpm,
+                    "rpm_stddev": self.baseline_rpm_stddev,
+                    "avg_chip_temp": self.baseline_temp,
+                    "temp_stddev": self.baseline_temp_stddev,
+                    "efficiency": self.baseline_efficiency,
+                    "sample_count": self.baseline_sample_count,
+                }
+            ],
+            "window_start": self.baseline_start_time,
+            "window_end": self.baseline_end_time,
+        }
 
 
 class BaselineTracker:
@@ -111,13 +153,24 @@ class BaselineTracker:
         during this call (usually empty; one entry when the threshold is hit).
         """
         now = time.time()
-        chip_temp: Optional[float] = None
-        if cooling.highest_temperature:
-            chip_temp = cooling.highest_temperature.get("value")
+        # Prefer the per-fan chip_temp (added in FanReading v2); fall back to
+        # the miner-level highest_temperature so older collectors still work.
+        global_chip_temp: Optional[float] = (
+            cooling.highest_temperature.get("value")
+            if cooling.highest_temperature
+            else None
+        )
 
         newly_established: list[BaselineRecord] = []
 
         for fan in cooling.fans:
+            # Use per-fan chip_temp when available, otherwise the global value.
+            chip_temp: Optional[float] = (
+                fan.chip_temp if getattr(fan, "chip_temp", None) is not None
+                else global_chip_temp
+            )
+            target_rpm: Optional[float] = getattr(fan, "target_rpm", None)
+
             key = f"{identity.uid}:{fan.position}"
             entry = self._state.setdefault(key, {
                 "first_seen": now,
@@ -139,7 +192,8 @@ class BaselineTracker:
             if chip_temp is not None and chip_temp >= self._healthy_temp_ceil:
                 continue
 
-            entry["samples"].append([now, fan.rpm, chip_temp])
+            # Each sample: [timestamp, rpm, chip_temp, target_rpm]
+            entry["samples"].append([now, fan.rpm, chip_temp, target_rpm])
             self._save()
 
             if len(entry["samples"]) >= self._min_samples:
@@ -213,7 +267,9 @@ class BaselineTracker:
         samples: list[list],
     ) -> BaselineRecord:
         rpms = [s[1] for s in samples]
+        # Support both 3-element [ts, rpm, temp] and 4-element [ts, rpm, temp, target_rpm].
         temps = [s[2] for s in samples if s[2] is not None]
+        target_rpms = [s[3] for s in samples if len(s) > 3 and s[3] is not None]
         timestamps = [s[0] for s in samples]
 
         avg_rpm = sum(rpms) / len(rpms)
@@ -226,6 +282,13 @@ class BaselineTracker:
             temp_stddev = math.sqrt(
                 sum((t - avg_temp) ** 2 for t in temps) / len(temps)
             )
+
+        avg_target_rpm: Optional[float] = None
+        efficiency: Optional[float] = None
+        if target_rpms:
+            avg_target_rpm = sum(target_rpms) / len(target_rpms)
+            if avg_target_rpm > 0:
+                efficiency = round(avg_rpm / avg_target_rpm, 4)
 
         return BaselineRecord(
             machine_id=machine_id,
@@ -246,4 +309,6 @@ class BaselineTracker:
             baseline_end_time=time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime(max(timestamps))
             ),
+            baseline_efficiency=efficiency,
+            baseline_target_rpm=round(avg_target_rpm, 1) if avg_target_rpm else None,
         )
