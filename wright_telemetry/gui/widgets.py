@@ -232,6 +232,8 @@ class NavItem(QWidget):
         self._active = active
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(T.NAV_ROW_H)
+        # Required for QWidget background to actually paint
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 0, 12, 0)
