@@ -13,7 +13,9 @@ from PyQt6.QtWidgets import (
 
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
-from wright_telemetry.gui.pages import DiscoveryPage, OverviewPage, PermissionsPage
+from wright_telemetry.gui.pages.permissions import PermissionsPage
+from wright_telemetry.gui.pages.discovery import DiscoveryPage
+from wright_telemetry.gui.pages.overview import OverviewPage
 from wright_telemetry.gui.security_panel import SecurityPanel
 from wright_telemetry.gui.sidebar import Sidebar
 
