@@ -147,6 +147,7 @@ class _FirmwareToggle(QWidget):
         super().__init__(parent)
         self.key = key
         self.setStyleSheet("background: transparent;")
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -155,7 +156,6 @@ class _FirmwareToggle(QWidget):
         self.toggle = ToggleSwitch(checked=checked)
         row.addWidget(self.toggle)
         row.addWidget(_lbl(label, 12, 500, T.TEXT_PRIMARY))
-        row.addStretch()
 
     def isChecked(self) -> bool:
         return self.toggle.isChecked()
@@ -267,21 +267,22 @@ class _ProgressEntryCard(QWidget):
         fw_and_warn.setSpacing(20)
         fw_and_warn.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        fw_col = QVBoxLayout()
-        fw_col.setSpacing(10)
-        fw_col.setAlignment(Qt.AlignmentFlag.AlignTop)
+        fw_row_widget = QWidget()
+        fw_row_widget.setStyleSheet("background: transparent;")
+        fw_row_widget.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
+        )
+        fw_row = QHBoxLayout(fw_row_widget)
+        fw_row.setContentsMargins(0, 0, 0, 0)
+        fw_row.setSpacing(28)
         for key, label in self.FIRMWARE_OPTIONS:
             checked = key in active_types or not active_types
             toggle = _FirmwareToggle(key, label, checked)
             toggle.toggle.toggled.connect(self._on_firmware_changed)
             self._fw_toggles[key] = toggle
-            fw_col.addWidget(toggle)
+            fw_row.addWidget(toggle)
 
-        fw_col_widget = QWidget()
-        fw_col_widget.setStyleSheet("background: transparent;")
-        fw_col_widget.setLayout(fw_col)
-        fw_col_widget.setFixedWidth(160)   # keeps column from bleeding into warning space
-        fw_and_warn.addWidget(fw_col_widget)
+        fw_and_warn.addWidget(fw_row_widget)
 
         self._warning = _WarningCard()
         self._warning.setVisible(False)
