@@ -7,15 +7,14 @@ from typing import TYPE_CHECKING, Optional
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -23,35 +22,49 @@ from PyQt6.QtWidgets import (
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
 from wright_telemetry.gui.scan_manager import SubnetScanResult
+from wright_telemetry.gui.widgets import ToggleSwitch
 
 if TYPE_CHECKING:
     from wright_telemetry.gui.engine import ScanningEngine
 
 
+# ── Shared column widths (header + rows must match exactly) ───────────────────
+
+_W_STATUS   = 108
+_W_MINERS   =  56
+_W_FW       = 168
+_W_CHECKED  =  86
+_W_ACTIONS  =  34
+_W_GAP      =  12   # spacing between fixed cols
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _lbl(text: str, size: int, weight: int, color: str, wrap: bool = False) -> QLabel:
+def _lbl(text: str, size: int, weight: int, color: str,
+         wrap: bool = False, fixed_w: int = 0) -> QLabel:
     l = QLabel(text)
     l.setFont(make_font(size, weight))
     l.setStyleSheet(f"color: {color}; background: transparent;")
     if wrap:
         l.setWordWrap(True)
+    if fixed_w:
+        l.setFixedWidth(fixed_w)
     return l
 
 
-def _hdivider() -> QFrame:
-    line = QFrame()
-    line.setFrameShape(QFrame.Shape.HLine)
-    line.setFixedHeight(1)
-    line.setStyleSheet(f"background: {T.BORDER_DEFAULT}; border: none;")
-    return line
+def _hdiv() -> QFrame:
+    f = QFrame()
+    f.setFrameShape(QFrame.Shape.HLine)
+    f.setFixedHeight(1)
+    f.setStyleSheet(f"background: {T.BORDER_DEFAULT}; border: none;")
+    return f
 
 
 def _time_ago(ts: Optional[float]) -> str:
     if ts is None:
         return "—"
     secs = int(time.time() - ts)
-    if secs < 10:
+    if secs < 15:
         return "Just now"
     if secs < 60:
         return f"{secs}s ago"
@@ -62,189 +75,89 @@ def _time_ago(ts: Optional[float]) -> str:
     return f"{secs // 86400}d ago"
 
 
-def _firmware_summary(breakdown: dict[str, int]) -> str:
+def _fw_summary(breakdown: dict) -> str:
     if not breakdown:
         return "—"
     return "  ".join(f"{fw}:{n}" for fw, n in sorted(breakdown.items()))
 
 
-# ── Alert card ────────────────────────────────────────────────────────────────
+# ── Warning card (inline with heading — no side stripe) ───────────────────────
 
-class _AlertCard(QWidget):
+class _WarningCard(QWidget):
+    """Checklist of things to verify when no miners are found.
+
+    Uses a full border + amber background tint. No side-stripe accent.
+    """
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setObjectName("alert")
+        self.setObjectName("warn_card")
         self.setStyleSheet("""
-            QWidget#alert {
-                background: #FFF8F8;
-                border: 1px solid #FECACA;
-                border-left: 3px solid """ + T.ACCENT_RED + """;
+            QWidget#warn_card {
+                background: #FFFBEB;
+                border: 1px solid #FDE68A;
                 border-radius: 8px;
             }
         """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(8)
 
+        # Title
         title_row = QHBoxLayout()
-        title_row.setSpacing(10)
-        title_row.addWidget(_lbl("⚠", 16, 600, T.ACCENT_RED))
-        title_row.addWidget(_lbl("No miners detected", 14, 600, T.TEXT_PRIMARY))
+        title_row.setSpacing(8)
+        title_row.addWidget(_lbl("⚠", 13, 600, T.ACCENT_ORANGE))
+        title_row.addWidget(_lbl("No miners detected — check these first:", 13, 600, T.TEXT_PRIMARY))
         title_row.addStretch()
         layout.addLayout(title_row)
 
-        desc = _lbl(
-            "The scan completed but found no compatible miners. "
-            "Check network connectivity, firmware selection, and that "
-            "miners are on the same subnet as this host.",
-            12, 400, T.TEXT_SECONDARY, wrap=True,
-        )
-        desc.setContentsMargins(32, 0, 0, 0)
-        layout.addWidget(desc)
+        checks = [
+            "Miners are on the same subnet as this host.",
+            "No firewall is blocking port 4028.",
+            "You have selected the correct firmware types below.",
+            "Miners are powered on and running.",
+        ]
+        for item in checks:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            row.setContentsMargins(4, 0, 0, 0)
+            dot = _lbl("◦", 12, 400, T.ACCENT_ORANGE)
+            dot.setFixedWidth(14)
+            row.addWidget(dot)
+            row.addWidget(_lbl(item, 12, 400, T.TEXT_SECONDARY, wrap=True))
+            row.addStretch()
+            layout.addLayout(row)
 
 
-# ── Progress card ─────────────────────────────────────────────────────────────
+# ── Firmware toggle row ───────────────────────────────────────────────────────
 
-class _ProgressCard(QWidget):
-    def __init__(self, engine: Optional["ScanningEngine"], parent=None):
+class _FirmwareToggle(QWidget):
+    """Single firmware type toggle: [switch] [label] — matches permissions style."""
+
+    def __init__(self, key: str, label: str, checked: bool, parent=None):
         super().__init__(parent)
-        self._engine = engine
-        self._scanning = False
+        self.key = key
+        self.setStyleSheet("background: transparent;")
 
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setObjectName("prog_card")
-        self.setStyleSheet(f"""
-            QWidget#prog_card {{
-                background: {T.BG_CARD};
-                border: 1px solid {T.BORDER_DEFAULT};
-                border-radius: 8px;
-            }}
-        """)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(10)
+        self.toggle = ToggleSwitch(checked=checked)
+        row.addWidget(self.toggle)
+        row.addWidget(_lbl(label, 12, 500, T.TEXT_PRIMARY))
+        row.addStretch()
 
-        # Header row
-        hdr = QHBoxLayout()
-        self._title_lbl = _lbl("SCAN PROGRESS", 11, 700, T.TEXT_MUTED)
-        hdr.addWidget(self._title_lbl)
-        hdr.addStretch()
-
-        self._pct_lbl = _lbl("—", 12, 700, T.TEXT_PRIMARY)
-        hdr.addWidget(self._pct_lbl)
-
-        self._action_btn = QPushButton("▷  START SCAN")
-        self._action_btn.setFont(make_font(11, 600))
-        self._action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._action_btn.setFixedHeight(30)
-        self._action_btn.clicked.connect(self._on_action)
-        self._style_btn_start()
-        hdr.addSpacing(10)
-        hdr.addWidget(self._action_btn)
-        layout.addLayout(hdr)
-
-        # Progress bar
-        self._bar = QProgressBar()
-        self._bar.setValue(0)
-        self._bar.setTextVisible(False)
-        self._bar.setFixedHeight(8)
-        self._bar.setStyleSheet(f"""
-            QProgressBar {{
-                background: {T.BORDER_DEFAULT};
-                border-radius: 4px;
-                border: none;
-            }}
-            QProgressBar::chunk {{
-                background: {T.TEXT_PRIMARY};
-                border-radius: 4px;
-            }}
-        """)
-        layout.addWidget(self._bar)
-
-        # Footer row
-        ftr = QHBoxLayout()
-        self._status_lbl = _lbl("No scan running", 12, 400, T.TEXT_SECONDARY)
-        ftr.addWidget(self._status_lbl)
-        ftr.addStretch()
-        self._counts_lbl = _lbl("", 12, 400, T.TEXT_MUTED)
-        ftr.addWidget(self._counts_lbl)
-        layout.addLayout(ftr)
-
-    # ── Slots ────────────────────────────────────────────────────────────────
-
-    def set_scanning(self, subnet: str, total: int) -> None:
-        self._scanning = True
-        self._title_lbl.setText("SCANNING")
-        self._status_lbl.setText(f"Scanning: {subnet}")
-        self._counts_lbl.setText(f"0 / {total} hosts")
-        self._bar.setMaximum(total)
-        self._bar.setValue(0)
-        self._pct_lbl.setText("0%")
-        self._style_btn_cancel()
-
-    def update_progress(self, subnet: str, scanned: int, total: int) -> None:
-        pct = int(scanned / total * 100) if total else 0
-        self._bar.setMaximum(total)
-        self._bar.setValue(scanned)
-        self._pct_lbl.setText(f"{pct}%")
-        self._counts_lbl.setText(f"{scanned} / {total} hosts")
-
-    def set_idle(self, last_scan_ts: Optional[float] = None) -> None:
-        self._scanning = False
-        self._title_lbl.setText("SCAN PROGRESS")
-        checked = _time_ago(last_scan_ts)
-        self._status_lbl.setText(f"Last scan: {checked}")
-        self._counts_lbl.setText("")
-        self._bar.setValue(0)
-        self._pct_lbl.setText("—")
-        self._style_btn_start()
-
-    def set_cancelled(self, subnet: str) -> None:
-        self.set_idle()
-        self._status_lbl.setText(f"Cancelled: {subnet}")
-
-    # ── Button helpers ────────────────────────────────────────────────────────
-
-    def _style_btn_start(self) -> None:
-        self._action_btn.setText("▷  START SCAN")
-        self._action_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {T.TEXT_PRIMARY};
-                color: #FFFFFF;
-                border: none;
-                border-radius: 6px;
-                padding: 4px 14px;
-            }}
-            QPushButton:hover {{ background: #2A2D35; }}
-        """)
-
-    def _style_btn_cancel(self) -> None:
-        self._action_btn.setText("⊗  CANCEL")
-        self._action_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {T.ACCENT_RED};
-                color: #FFFFFF;
-                border: none;
-                border-radius: 6px;
-                padding: 4px 14px;
-            }}
-            QPushButton:hover {{ background: #DC2626; }}
-        """)
-
-    def _on_action(self) -> None:
-        if self._engine is None:
-            return
-        if self._scanning:
-            self._engine.cancel_scan()
-        else:
-            self._engine.start_scan()
+    def isChecked(self) -> bool:
+        return self.toggle.isChecked()
 
 
-# ── Subnet entry card ─────────────────────────────────────────────────────────
+# ── Combined progress + subnet entry card ─────────────────────────────────────
 
-class _SubnetEntryCard(QWidget):
+class _ProgressEntryCard(QWidget):
+    """Scan progress bar (top) and subnet entry form (bottom) in one card."""
+
     FIRMWARE_OPTIONS = [
         ("braiins", "Braiins OS"),
         ("luxos",   "LuxOS"),
@@ -255,232 +168,371 @@ class _SubnetEntryCard(QWidget):
     def __init__(self, engine: Optional["ScanningEngine"], parent=None):
         super().__init__(parent)
         self._engine = engine
+        self._scanning = False
+        self._fw_toggles: dict[str, _FirmwareToggle] = {}
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setObjectName("subnet_card")
+        self.setObjectName("pe_card")
         self.setStyleSheet(f"""
-            QWidget#subnet_card {{
+            QWidget#pe_card {{
                 background: {T.BG_CARD};
                 border: 1px solid {T.BORDER_DEFAULT};
                 border-radius: 8px;
             }}
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        layout.addWidget(_lbl("Manual Subnet Entry", 15, 700, T.TEXT_PRIMARY))
+        # ── Scan progress section ─────────────────────────────────────────────
+        progress_widget = QWidget()
+        progress_widget.setStyleSheet("background: transparent;")
+        prog = QVBoxLayout(progress_widget)
+        prog.setContentsMargins(22, 18, 22, 18)
+        prog.setSpacing(10)
 
-        # ── Firmware checkboxes ───────────────────────────────────────────────
-        layout.addWidget(_lbl("FIRMWARE TYPES", 11, 600, T.TEXT_MUTED))
+        hdr = QHBoxLayout()
+        self._prog_title = _lbl("SCAN PROGRESS", 11, 700, T.TEXT_MUTED)
+        hdr.addWidget(self._prog_title)
+        hdr.addStretch()
+        self._pct_lbl = _lbl("—", 12, 700, T.TEXT_PRIMARY)
+        hdr.addWidget(self._pct_lbl)
+        hdr.addSpacing(12)
+
+        self._action_btn = QPushButton("▷  START SCAN")
+        self._action_btn.setFont(make_font(11, 600))
+        self._action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._action_btn.setFixedHeight(32)
+        self._action_btn.clicked.connect(self._on_action)
+        self._style_start()
+        hdr.addWidget(self._action_btn)
+        prog.addLayout(hdr)
+
+        self._bar = QProgressBar()
+        self._bar.setValue(0)
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(6)
+        self._bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: {T.BORDER_DEFAULT};
+                border-radius: 3px;
+                border: none;
+            }}
+            QProgressBar::chunk {{
+                background: {T.TEXT_PRIMARY};
+                border-radius: 3px;
+            }}
+        """)
+        prog.addWidget(self._bar)
+
+        ftr = QHBoxLayout()
+        self._status_lbl = _lbl("No scan running", 12, 400, T.TEXT_SECONDARY)
+        ftr.addWidget(self._status_lbl)
+        ftr.addStretch()
+        self._counts_lbl = _lbl("", 12, 400, T.TEXT_MUTED)
+        ftr.addWidget(self._counts_lbl)
+        prog.addLayout(ftr)
+
+        outer.addWidget(progress_widget)
+        outer.addWidget(_hdiv())
+
+        # ── Subnet entry section ──────────────────────────────────────────────
+        entry_widget = QWidget()
+        entry_widget.setStyleSheet("background: transparent;")
+        entry = QVBoxLayout(entry_widget)
+        entry.setContentsMargins(22, 18, 22, 18)
+        entry.setSpacing(14)
+
+        entry.addWidget(_lbl("ADD SUBNET", 11, 700, T.TEXT_MUTED))
+
+        # Firmware toggles in 2-col grid
+        entry.addWidget(_lbl("FIRMWARE TYPES", 10, 600, T.TEXT_MUTED))
 
         active_types: list[str] = []
         if engine is not None:
             active_types = engine._cfg.get("collector_types") or []
 
-        self._fw_checks: dict[str, QCheckBox] = {}
-        grid_row1 = QHBoxLayout()
-        grid_row2 = QHBoxLayout()
+        grid_rows = [QHBoxLayout(), QHBoxLayout()]
         for i, (key, label) in enumerate(self.FIRMWARE_OPTIONS):
-            chk = QCheckBox(label)
-            chk.setFont(make_font(12, 400))
-            chk.setChecked(key in active_types or not active_types)
-            chk.setStyleSheet(f"color: {T.TEXT_SECONDARY}; background: transparent;")
-            chk.toggled.connect(self._on_firmware_changed)
-            self._fw_checks[key] = chk
-            (grid_row1 if i < 2 else grid_row2).addWidget(chk)
+            checked = key in active_types or not active_types
+            toggle = _FirmwareToggle(key, label, checked)
+            toggle.toggle.toggled.connect(self._on_firmware_changed)
+            self._fw_toggles[key] = toggle
+            grid_rows[i // 2].addWidget(toggle, 1)
 
-        grid_row1.addStretch()
-        grid_row2.addStretch()
-        layout.addLayout(grid_row1)
-        layout.addLayout(grid_row2)
+        for gr in grid_rows:
+            entry.addLayout(gr)
 
-        layout.addSpacing(4)
-
-        # ── CIDR input ────────────────────────────────────────────────────────
-        layout.addWidget(_lbl("CIDR RANGE", 11, 600, T.TEXT_MUTED))
-        self.cidr_input = QTextEdit()
-        self.cidr_input.setPlaceholderText("192.168.1.0/24")
-        self.cidr_input.setFixedHeight(70)
-        self.cidr_input.setFont(make_font(12, 400))
-        self.cidr_input.setStyleSheet(f"""
-            QTextEdit {{
+        # CIDR input
+        entry.addSpacing(2)
+        entry.addWidget(_lbl("CIDR RANGE", 10, 600, T.TEXT_MUTED))
+        self._cidr_input = QLineEdit()
+        self._cidr_input.setPlaceholderText("192.168.1.0/24")
+        self._cidr_input.setFont(make_font(12, 400))
+        self._cidr_input.setFixedHeight(36)
+        self._cidr_input.setStyleSheet(f"""
+            QLineEdit {{
                 background: {T.BG_WINDOW};
                 border: 1px solid {T.BORDER_DEFAULT};
                 border-radius: 6px;
-                padding: 8px;
+                padding: 0 10px;
                 color: {T.TEXT_PRIMARY};
             }}
+            QLineEdit:focus {{
+                border-color: {T.ACCENT_BLUE};
+            }}
         """)
-        layout.addWidget(self.cidr_input)
+        self._cidr_input.returnPressed.connect(self._on_add)
+        entry.addWidget(self._cidr_input)
 
         add_btn = QPushButton("ADD TO QUEUE")
-        add_btn.setFont(make_font(12, 700))
+        add_btn.setFont(make_font(12, 600))
         add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_btn.setFixedHeight(38)
         add_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {T.TEXT_PRIMARY};
                 color: #FFFFFF;
                 border: none;
                 border-radius: 6px;
-                padding: 11px;
-                letter-spacing: 0.5px;
+                letter-spacing: 0.4px;
             }}
             QPushButton:hover {{ background: #2A2D35; }}
         """)
         add_btn.clicked.connect(self._on_add)
-        layout.addWidget(add_btn)
+        entry.addWidget(add_btn)
 
-        layout.addStretch()
+        # Subnet guidance — simple, no card chrome
+        entry.addSpacing(4)
+        guidance_title = QHBoxLayout()
+        guidance_title.setSpacing(6)
+        guidance_title.addWidget(_lbl("ⓘ", 12, 400, T.TEXT_MUTED))
+        guidance_title.addWidget(_lbl("What is a subnet?", 12, 600, T.TEXT_SECONDARY))
+        guidance_title.addStretch()
+        entry.addLayout(guidance_title)
 
-        # ── Guidance box ──────────────────────────────────────────────────────
-        guidance = QWidget()
-        guidance.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        guidance.setObjectName("guidance")
-        guidance.setStyleSheet(f"""
-            QWidget#guidance {{
-                background: {T.BG_SIDEBAR};
-                border: 1px solid {T.BORDER_DEFAULT};
+        guidance_body = _lbl(
+            "A subnet is the network range your devices share — "
+            "like a street address prefix (e.g. 192.168.1.0/24). "
+            "To find yours: check the IP label on your router or switch, "
+            "or open your network manager (Unifi, Sophos, Cisco) and look "
+            "for VLAN or LAN settings.",
+            11, 400, T.TEXT_MUTED, wrap=True,
+        )
+        entry.addWidget(guidance_body)
+
+        outer.addWidget(entry_widget)
+
+    # ── Progress slots ────────────────────────────────────────────────────────
+
+    def set_scanning(self, subnet: str, total: int) -> None:
+        self._scanning = True
+        self._prog_title.setText("SCANNING")
+        self._status_lbl.setText(f"Scanning: {subnet}")
+        self._counts_lbl.setText(f"0 / {total} hosts")
+        self._bar.setMaximum(max(total, 1))
+        self._bar.setValue(0)
+        self._pct_lbl.setText("0%")
+        self._style_cancel()
+
+    def update_progress(self, subnet: str, scanned: int, total: int) -> None:
+        pct = int(scanned / total * 100) if total else 0
+        self._bar.setMaximum(max(total, 1))
+        self._bar.setValue(scanned)
+        self._pct_lbl.setText(f"{pct}%")
+        self._counts_lbl.setText(f"{scanned} / {total} hosts")
+
+    def set_idle(self, last_scan_ts: Optional[float] = None) -> None:
+        self._scanning = False
+        self._prog_title.setText("SCAN PROGRESS")
+        self._status_lbl.setText(f"Last scan: {_time_ago(last_scan_ts)}")
+        self._counts_lbl.setText("")
+        self._bar.setValue(0)
+        self._pct_lbl.setText("—")
+        self._style_start()
+
+    def set_cancelled(self, subnet: str) -> None:
+        self.set_idle()
+        self._status_lbl.setText(f"Cancelled: {subnet}")
+
+    # ── Button styles ─────────────────────────────────────────────────────────
+
+    def _style_start(self) -> None:
+        self._action_btn.setText("▷  START SCAN")
+        self._action_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {T.TEXT_PRIMARY};
+                color: #FFFFFF;
+                border: none;
                 border-radius: 6px;
+                padding: 0 16px;
             }}
+            QPushButton:hover {{ background: #2A2D35; }}
         """)
-        g = QVBoxLayout(guidance)
-        g.setContentsMargins(14, 12, 14, 12)
-        g.setSpacing(4)
-        g_hdr = QHBoxLayout()
-        g_hdr.setSpacing(6)
-        g_hdr.addWidget(_lbl("ⓘ", 13, 400, T.TEXT_MUTED))
-        g_hdr.addWidget(_lbl("Subnet Guidance", 12, 600, T.TEXT_PRIMARY))
-        g_hdr.addStretch()
-        g.addLayout(g_hdr)
-        g.addWidget(_lbl(
-            "Enter a CIDR block (e.g. 192.168.1.0/24), an IP range "
-            "(10.0.0.1-10.0.0.50), or a single IP.",
-            12, 400, T.TEXT_SECONDARY, wrap=True,
-        ))
-        layout.addWidget(guidance)
+
+    def _style_cancel(self) -> None:
+        self._action_btn.setText("⊗  CANCEL")
+        self._action_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {T.ACCENT_RED};
+                color: #FFFFFF;
+                border: none;
+                border-radius: 6px;
+                padding: 0 16px;
+            }}
+            QPushButton:hover {{ background: #DC2626; }}
+        """)
+
+    # ── Firmware / add handlers ───────────────────────────────────────────────
 
     def _on_firmware_changed(self) -> None:
         if self._engine is None:
             return
-        selected = [k for k, chk in self._fw_checks.items() if chk.isChecked()]
+        selected = [k for k, t in self._fw_toggles.items() if t.isChecked()]
         self._engine.update_firmware_types(selected)
 
     def _on_add(self) -> None:
         if self._engine is None:
             return
-        raw = self.cidr_input.toPlainText().strip()
+        raw = self._cidr_input.text().strip()
         if not raw:
             return
         for cidr in (c.strip() for c in raw.split(",") if c.strip()):
             self._engine.enqueue_subnet(cidr)
-        self.cidr_input.clear()
+        self._cidr_input.clear()
+
+    def _on_action(self) -> None:
+        if self._engine is None:
+            return
+        if self._scanning:
+            self._engine.cancel_scan()
+        else:
+            self._engine.start_scan()
 
 
 # ── Scan row ──────────────────────────────────────────────────────────────────
 
 class _ScanRow(QWidget):
-    """One live-updatable row in the Active Network Scans table."""
+    """One live-updatable row. Column widths match _ActiveScansCard header."""
 
-    _STATUS_STYLES = {
-        "queued":    ("⊙ Queued",    T.ACCENT_ORANGE),
-        "scanning":  ("↻ Scanning",  T.ACCENT_GREEN),
-        "complete":  ("✓ Complete",  T.TEXT_MUTED),
-        "cancelled": ("⊗ Cancelled", T.ACCENT_RED),
+    _STATUS_CFG = {
+        "queued":    ("⊙  Queued",    T.ACCENT_ORANGE),
+        "scanning":  ("↻  Scanning",  T.ACCENT_GREEN),
+        "complete":  ("✓  Complete",  T.TEXT_MUTED),
+        "cancelled": ("⊗  Cancelled", T.ACCENT_RED),
     }
 
-    def __init__(self, result: SubnetScanResult, engine: Optional["ScanningEngine"],
-                 parent=None):
+    def __init__(self, result: SubnetScanResult,
+                 engine: Optional["ScanningEngine"], parent=None):
         super().__init__(parent)
         self._engine = engine
         self.subnet = result.subnet
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet("background: transparent;")
+        self.setFixedHeight(40)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(20, 10, 20, 10)
+        row.setContentsMargins(20, 0, 20, 0)
         row.setSpacing(0)
 
-        self._status_lbl = _lbl("", 12, 500, T.TEXT_MUTED)
-        self._status_lbl.setFixedWidth(110)
+        self._status_lbl = _lbl("", 12, 500, T.TEXT_MUTED, fixed_w=_W_STATUS)
         row.addWidget(self._status_lbl)
 
         self._cidr_lbl = _lbl(result.subnet, 12, 400, T.TEXT_PRIMARY)
-        row.addWidget(self._cidr_lbl, 2)
+        self._cidr_lbl.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        row.addWidget(self._cidr_lbl, 1)
 
-        self._miners_lbl = _lbl("—", 12, 400, T.TEXT_SECONDARY)
-        self._miners_lbl.setFixedWidth(55)
-        self._miners_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row.addSpacing(_W_GAP)
+
+        self._miners_lbl = _lbl("—", 12, 400, T.TEXT_SECONDARY, fixed_w=_W_MINERS)
+        self._miners_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         row.addWidget(self._miners_lbl)
 
-        row.addSpacing(16)
+        row.addSpacing(_W_GAP)
 
-        self._fw_lbl = _lbl("—", 11, 400, T.TEXT_MUTED)
-        row.addWidget(self._fw_lbl, 3)
+        self._fw_lbl = _lbl("—", 11, 400, T.TEXT_MUTED, fixed_w=_W_FW)
+        row.addWidget(self._fw_lbl)
 
-        self._time_lbl = _lbl("—", 11, 400, T.TEXT_MUTED)
-        self._time_lbl.setFixedWidth(72)
-        self._time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row.addSpacing(_W_GAP)
+
+        self._time_lbl = _lbl("—", 11, 400, T.TEXT_MUTED, fixed_w=_W_CHECKED)
+        self._time_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         row.addWidget(self._time_lbl)
 
-        row.addSpacing(8)
+        row.addSpacing(_W_GAP)
 
-        self._action_btn = QPushButton("↺")
-        self._action_btn.setFixedSize(30, 30)
-        self._action_btn.setFont(make_font(14, 400))
-        self._action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._action_btn.setStyleSheet(f"""
+        self._btn = QPushButton("↺")
+        self._btn.setFixedSize(_W_ACTIONS, _W_ACTIONS)
+        self._btn.setFont(make_font(13, 400))
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn.setStyleSheet(f"""
             QPushButton {{
-                background: transparent; color: {T.TEXT_MUTED};
-                border: none; border-radius: 4px;
+                background: transparent;
+                color: {T.TEXT_MUTED};
+                border: none;
+                border-radius: 4px;
             }}
             QPushButton:hover {{
-                background: {T.BG_SIDEBAR}; color: {T.TEXT_PRIMARY};
+                background: {T.BG_SIDEBAR};
+                color: {T.TEXT_PRIMARY};
             }}
         """)
-        self._action_btn.clicked.connect(self._on_action)
-        row.addWidget(self._action_btn)
+        self._btn.clicked.connect(self._on_action)
+        row.addWidget(self._btn)
 
         self.update(result)
 
     def update(self, result: SubnetScanResult) -> None:  # type: ignore[override]
-        label, color = self._STATUS_STYLES.get(result.status, ("—", T.TEXT_MUTED))
+        label, color = self._STATUS_CFG.get(result.status, ("—", T.TEXT_MUTED))
         self._status_lbl.setText(label)
-        self._status_lbl.setStyleSheet(f"color: {color}; background: transparent;")
+        self._status_lbl.setStyleSheet(
+            f"color: {color}; background: transparent;"
+        )
 
-        cidr_color = T.TEXT_PRIMARY if result.status != "complete" else T.TEXT_MUTED
-        self._cidr_lbl.setStyleSheet(f"color: {cidr_color}; background: transparent;")
+        cidr_alpha = T.TEXT_PRIMARY if result.status in ("queued", "scanning") else T.TEXT_MUTED
+        self._cidr_lbl.setStyleSheet(f"color: {cidr_alpha}; background: transparent;")
 
-        if result.status in ("queued", "cancelled"):
+        if result.status == "queued":
             self._miners_lbl.setText("—")
             self._fw_lbl.setText("—")
+            self._btn.setText("🗑")
+            self._btn.setToolTip("Remove from queue")
         elif result.status == "scanning":
-            pct = int(result.scanned_hosts / result.total_hosts * 100) if result.total_hosts else 0
+            pct = (
+                int(result.scanned_hosts / result.total_hosts * 100)
+                if result.total_hosts else 0
+            )
             self._miners_lbl.setText(f"{pct}%")
             self._fw_lbl.setText("scanning…")
+            self._btn.setText("⊗")
+            self._btn.setToolTip("Cancel scan")
+        elif result.status == "cancelled":
+            self._miners_lbl.setText("—")
+            self._fw_lbl.setText("—")
+            self._btn.setText("↺")
+            self._btn.setToolTip("Retry scan")
         else:  # complete
             self._miners_lbl.setText(str(result.miners_found))
-            self._fw_lbl.setText(_firmware_summary(result.firmware_breakdown))
+            self._fw_lbl.setText(_fw_summary(result.firmware_breakdown))
+            self._btn.setText("↺")
+            self._btn.setToolTip("Rescan subnet")
 
         self._time_lbl.setText(_time_ago(result.last_scanned))
-
-        # Action button
-        if result.status == "scanning":
-            self._action_btn.setText("⊗")
-            self._action_btn.setToolTip("Cancel scan")
-        elif result.status == "queued":
-            self._action_btn.setText("—")
-        else:
-            self._action_btn.setText("↺")
-            self._action_btn.setToolTip("Rescan subnet")
 
     def _on_action(self) -> None:
         if self._engine is None:
             return
-        if self._action_btn.text() == "⊗":
+        btn = self._btn.text()
+        if btn == "⊗":
             self._engine.cancel_scan()
-        elif self._action_btn.text() == "↺":
+        else:
             self._engine.scan_manager.enqueue([self.subnet])
 
 
@@ -506,61 +558,72 @@ class _ActiveScansCard(QWidget):
         self._outer.setContentsMargins(0, 0, 0, 0)
         self._outer.setSpacing(0)
 
-        # ── Header ─────────────────────────────────────────────────────────────
-        hdr = QWidget()
-        hdr.setStyleSheet("background: transparent;")
-        hdr_layout = QHBoxLayout(hdr)
-        hdr_layout.setContentsMargins(20, 16, 20, 12)
-        hdr_layout.addWidget(_lbl("Active Network Scans", 15, 700, T.TEXT_PRIMARY))
-        hdr_layout.addStretch()
+        # ── Card header ───────────────────────────────────────────────────────
+        hdr_w = QWidget()
+        hdr_w.setStyleSheet("background: transparent;")
+        hdr = QHBoxLayout(hdr_w)
+        hdr.setContentsMargins(20, 16, 20, 12)
+        hdr.addWidget(_lbl("Active Network Scans", 14, 700, T.TEXT_PRIMARY))
+        hdr.addStretch()
 
-        self._badge_lbl = QLabel("0 ACTIVE")
-        self._badge_lbl.setFont(make_font(11, 700))
+        self._badge_count = QLabel("0 ACTIVE")
+        self._badge_count.setFont(make_font(11, 700))
+        self._badge_count.setStyleSheet(
+            f"color: {T.ACCENT_GREEN}; background: transparent;"
+        )
         badge_wrap = QWidget()
         badge_wrap.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         badge_wrap.setObjectName("badge")
-        badge_wrap.setStyleSheet("QWidget#badge { background: #DCFCE7; border-radius: 10px; }")
-        b = QHBoxLayout(badge_wrap)
-        b.setContentsMargins(10, 4, 10, 4)
-        b.setSpacing(5)
-        b.addWidget(_lbl("●", 8, 400, T.ACCENT_GREEN))
-        self._badge_lbl.setStyleSheet(f"color: {T.ACCENT_GREEN}; background: transparent;")
-        b.addWidget(self._badge_lbl)
-        hdr_layout.addWidget(badge_wrap)
-        self._outer.addWidget(hdr)
-        self._outer.addWidget(_hdivider())
+        badge_wrap.setStyleSheet(
+            "QWidget#badge { background: #DCFCE7; border-radius: 10px; }"
+        )
+        bw = QHBoxLayout(badge_wrap)
+        bw.setContentsMargins(10, 4, 10, 4)
+        bw.setSpacing(5)
+        bw.addWidget(_lbl("●", 8, 400, T.ACCENT_GREEN))
+        bw.addWidget(self._badge_count)
+        hdr.addWidget(badge_wrap)
+        self._outer.addWidget(hdr_w)
+        self._outer.addWidget(_hdiv())
 
-        # ── Column headers ─────────────────────────────────────────────────────
-        col_hdr = QWidget()
-        col_hdr.setStyleSheet("background: transparent;")
-        ch = QHBoxLayout(col_hdr)
-        ch.setContentsMargins(20, 8, 20, 8)
+        # ── Column headers (widths match _ScanRow exactly) ────────────────────
+        col_hdr_w = QWidget()
+        col_hdr_w.setStyleSheet("background: transparent;")
+        ch = QHBoxLayout(col_hdr_w)
+        ch.setContentsMargins(20, 7, 20, 7)
         ch.setSpacing(0)
 
-        for text, width, stretch, align_right in [
-            ("STATUS",          110, 0, False),
-            ("SUBNET CIDR",     0,   2, False),
-            ("MINERS",          55,  0, True),
-            ("",                16,  0, False),   # spacer
-            ("FIRMWARES FOUND", 0,   3, False),
-            ("LAST CHECKED",    72,  0, True),
-            ("",                38,  0, False),   # actions spacer
-        ]:
-            lbl = _lbl(text, 11, 600, T.TEXT_MUTED)
-            if width:
-                lbl.setFixedWidth(width)
-            if align_right:
-                lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            ch.addWidget(lbl, stretch)
+        def _ch_lbl(text: str, w: int = 0, stretch: int = 0,
+                    right: bool = False) -> QLabel:
+            l = _lbl(text, 11, 600, T.TEXT_MUTED)
+            if w:
+                l.setFixedWidth(w)
+            if right:
+                l.setAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+            return l
 
-        self._outer.addWidget(col_hdr)
-        self._outer.addWidget(_hdivider())
+        ch.addWidget(_ch_lbl("STATUS",          _W_STATUS))
+        ch.addWidget(_ch_lbl("SUBNET CIDR",      0, stretch=1))
+        ch.addSpacing(_W_GAP)
+        ch.addWidget(_ch_lbl("MINERS",           _W_MINERS, right=True))
+        ch.addSpacing(_W_GAP)
+        ch.addWidget(_ch_lbl("FIRMWARES FOUND",  _W_FW))
+        ch.addSpacing(_W_GAP)
+        ch.addWidget(_ch_lbl("LAST CHECKED",     _W_CHECKED, right=True))
+        ch.addSpacing(_W_GAP)
+        ch.addWidget(_ch_lbl("",                 _W_ACTIONS))  # actions col
 
-        # ── Scrollable row area ────────────────────────────────────────────────
+        self._outer.addWidget(col_hdr_w)
+        self._outer.addWidget(_hdiv())
+
+        # ── Scrollable rows ───────────────────────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setStyleSheet("background: transparent;")
+        scroll.setMinimumHeight(120)
 
         self._rows_widget = QWidget()
         self._rows_widget.setStyleSheet("background: transparent;")
@@ -578,18 +641,17 @@ class _ActiveScansCard(QWidget):
         else:
             row = _ScanRow(result, self._engine)
             self._rows[result.subnet] = row
-            # Insert before the trailing stretch
-            insert_at = self._rows_layout.count() - 1
-            self._rows_layout.insertWidget(insert_at, row)
-            self._rows_layout.insertWidget(insert_at + 1, _hdivider())
+            idx = self._rows_layout.count() - 1   # before stretch
+            self._rows_layout.insertWidget(idx, _hdiv())
+            self._rows_layout.insertWidget(idx, row)
         self._refresh_badge()
 
     def _refresh_badge(self) -> None:
         active = sum(
             1 for r in self._rows.values()
-            if r._status_lbl.text().startswith("↻")
+            if "Scanning" in (r._status_lbl.text() or "")
         )
-        self._badge_lbl.setText(f"{active} ACTIVE")
+        self._badge_count.setText(f"{active} ACTIVE")
 
 
 # ── Page ──────────────────────────────────────────────────────────────────────
@@ -600,7 +662,7 @@ class DiscoveryPage(QWidget):
     def __init__(self, engine: Optional["ScanningEngine"] = None, parent=None):
         super().__init__(parent)
         self._engine = engine
-        self._scan_completed = False   # tracks if any scan has ever finished
+        self._scan_completed = False
         self._total_miners = 0
         self._last_scan_ts: Optional[float] = None
 
@@ -616,44 +678,48 @@ class DiscoveryPage(QWidget):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(T.CONTENT_PADDING, T.CONTENT_PADDING,
                                   T.CONTENT_PADDING, T.CONTENT_PADDING)
-        layout.setSpacing(16)
+        layout.setSpacing(20)
 
-        # ── Heading ───────────────────────────────────────────────────────────
-        layout.addWidget(_lbl("Discover Miners", 22, 700, T.TEXT_PRIMARY))
+        # ── Heading row: title + warning card side by side ────────────────────
+        heading_row = QHBoxLayout()
+        heading_row.setSpacing(24)
+        heading_row.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(8)
+        title_col.setAlignment(Qt.AlignmentFlag.AlignTop)
+        title_col.addWidget(_lbl("Discover Miners", 22, 700, T.TEXT_PRIMARY))
 
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
         self._status_dot = _lbl("●", 10, 400, T.ACCENT_ORANGE)
+        self._status_lbl = _lbl("Scanning local network…", 13, 400, T.TEXT_SECONDARY)
         status_row.addWidget(self._status_dot)
-        self._status_lbl = _lbl(
-            "Scanning local network…", 13, 400, T.TEXT_SECONDARY
-        )
         status_row.addWidget(self._status_lbl)
         status_row.addStretch()
-        layout.addLayout(status_row)
+        title_col.addLayout(status_row)
 
-        # ── Alert card (hidden until a scan completes with 0 miners) ──────────
-        self._alert = _AlertCard()
-        self._alert.setVisible(False)
-        layout.addWidget(self._alert)
+        title_widget = QWidget()
+        title_widget.setStyleSheet("background: transparent;")
+        title_widget.setLayout(title_col)
+        title_widget.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
+        )
+        heading_row.addWidget(title_widget)
 
-        # ── Progress card ─────────────────────────────────────────────────────
-        self._progress = _ProgressCard(engine)
-        layout.addWidget(self._progress)
+        self._warning = _WarningCard()
+        self._warning.setVisible(False)
+        heading_row.addWidget(self._warning, 1)
 
-        # ── Two-column layout ─────────────────────────────────────────────────
-        two_col = QHBoxLayout()
-        two_col.setSpacing(16)
+        layout.addLayout(heading_row)
 
-        self._entry = _SubnetEntryCard(engine)
-        self._entry.setFixedWidth(310)
-        two_col.addWidget(self._entry)
+        # ── Combined progress + subnet entry card ─────────────────────────────
+        self._progress_entry = _ProgressEntryCard(engine)
+        layout.addWidget(self._progress_entry)
 
+        # ── Active scans table ────────────────────────────────────────────────
         self._scans_card = _ActiveScansCard(engine)
-        two_col.addWidget(self._scans_card, 1)
-
-        layout.addLayout(two_col)
-        layout.addStretch()
+        layout.addWidget(self._scans_card, 1)
 
         scroll.setWidget(content)
         outer = QVBoxLayout(self)
@@ -666,26 +732,26 @@ class DiscoveryPage(QWidget):
                 self._scans_card.add_or_update_row(result)
                 if result.status == "complete":
                     self._scan_completed = True
-                    if result.last_scanned:
-                        if self._last_scan_ts is None or result.last_scanned > self._last_scan_ts:
-                            self._last_scan_ts = result.last_scanned
+                    if result.last_scanned and (
+                        self._last_scan_ts is None
+                        or result.last_scanned > self._last_scan_ts
+                    ):
+                        self._last_scan_ts = result.last_scanned
 
             if engine.scan_manager.is_scanning():
-                self._status_dot.setStyleSheet(f"color: {T.ACCENT_ORANGE}; background: transparent;")
-                self._status_lbl.setText("Scan in progress…")
+                self._set_status_scanning()
             else:
-                self._status_dot.setStyleSheet(f"color: {T.TEXT_MUTED}; background: transparent;")
-                self._status_lbl.setText("No active scan")
+                self._set_status_idle()
 
             self._connect_signals(engine)
 
-        # ── Refresh "last checked" timestamps every 30s ───────────────────────
+        # ── Timestamp refresh every 30s ───────────────────────────────────────
         self._ts_timer = QTimer(self)
         self._ts_timer.setInterval(30_000)
         self._ts_timer.timeout.connect(self._refresh_timestamps)
         self._ts_timer.start()
 
-    # ── Signal connections ────────────────────────────────────────────────────
+    # ── Signal wiring ────────────────────────────────────────────────────────
 
     def _connect_signals(self, engine: "ScanningEngine") -> None:
         engine.signals.scan_queued.connect(self._on_scan_queued)
@@ -696,72 +762,83 @@ class DiscoveryPage(QWidget):
         engine.signals.scan_queue_empty.connect(self._on_queue_empty)
         engine.signals.discovery_total_changed.connect(self._on_total_changed)
 
-    # ── Signal slots ──────────────────────────────────────────────────────────
+    # ── Slots ─────────────────────────────────────────────────────────────────
 
     def _on_scan_queued(self, subnet: str) -> None:
-        from wright_telemetry.gui.scan_manager import SubnetScanResult
-        result = SubnetScanResult(subnet=subnet, status="queued")
-        self._scans_card.add_or_update_row(result)
-        self._status_dot.setStyleSheet(f"color: {T.ACCENT_ORANGE}; background: transparent;")
-        self._status_lbl.setText("Scan queued…")
+        self._scans_card.add_or_update_row(
+            SubnetScanResult(subnet=subnet, status="queued")
+        )
+        self._set_status_scanning()
 
     def _on_scan_started(self, subnet: str, total: int) -> None:
-        from wright_telemetry.gui.scan_manager import SubnetScanResult
-        result = SubnetScanResult(subnet=subnet, status="scanning", total_hosts=total)
-        self._scans_card.add_or_update_row(result)
-        self._progress.set_scanning(subnet, total)
-        self._status_dot.setStyleSheet(f"color: {T.ACCENT_ORANGE}; background: transparent;")
-        self._status_lbl.setText(f"Scanning {subnet}…")
+        self._scans_card.add_or_update_row(
+            SubnetScanResult(subnet=subnet, status="scanning", total_hosts=total)
+        )
+        self._progress_entry.set_scanning(subnet, total)
+        self._set_status_scanning()
 
     def _on_scan_progress(self, subnet: str, scanned: int, total: int) -> None:
-        self._progress.update_progress(subnet, scanned, total)
-        from wright_telemetry.gui.scan_manager import SubnetScanResult
-        result = SubnetScanResult(
+        self._progress_entry.update_progress(subnet, scanned, total)
+        self._scans_card.add_or_update_row(SubnetScanResult(
             subnet=subnet, status="scanning",
             total_hosts=total, scanned_hosts=scanned,
-        )
-        self._scans_card.add_or_update_row(result)
+        ))
 
-    def _on_scan_complete(self, subnet: str, miners_found: int, firmware_breakdown: object) -> None:
+    def _on_scan_complete(self, subnet: str, miners_found: int,
+                          firmware_breakdown: object) -> None:
         self._scan_completed = True
-        now = __import__("time").time()
+        now = time.time()
         self._last_scan_ts = now
-        from wright_telemetry.gui.scan_manager import SubnetScanResult
-        result = SubnetScanResult(
+        self._scans_card.add_or_update_row(SubnetScanResult(
             subnet=subnet, status="complete",
             miners_found=miners_found,
             firmware_breakdown=firmware_breakdown,  # type: ignore[arg-type]
             last_scanned=now,
-        )
-        self._scans_card.add_or_update_row(result)
+        ))
 
     def _on_scan_cancelled(self, subnet: str) -> None:
-        from wright_telemetry.gui.scan_manager import SubnetScanResult
-        result = SubnetScanResult(subnet=subnet, status="cancelled")
-        self._scans_card.add_or_update_row(result)
-        self._progress.set_cancelled(subnet)
+        self._scans_card.add_or_update_row(
+            SubnetScanResult(subnet=subnet, status="cancelled")
+        )
+        self._progress_entry.set_cancelled(subnet)
 
     def _on_queue_empty(self) -> None:
-        self._progress.set_idle(self._last_scan_ts)
-        self._status_dot.setStyleSheet(f"color: {T.ACCENT_GREEN}; background: transparent;")
-        miners = self._total_miners
-        self._status_lbl.setText(
-            f"{miners} miner{'s' if miners != 1 else ''} found" if miners
-            else "Scan complete — no miners found"
-        )
+        self._progress_entry.set_idle(self._last_scan_ts)
+        self._set_status_idle()
 
     def _on_total_changed(self, total: int) -> None:
         self._total_miners = total
-        self._alert.setVisible(self._scan_completed and total == 0)
+        self._warning.setVisible(self._scan_completed and total == 0)
         if total > 0:
+            n = len(self._scans_card._rows)
+            s = "s" if total != 1 else ""
             self._status_lbl.setText(
-                f"{total} miner{'s' if total != 1 else ''} found across "
-                f"{len(self._scans_card._rows)} subnet(s)"
+                f"{total} miner{s} found across {n} subnet{'s' if n != 1 else ''}"
             )
-            self._status_dot.setStyleSheet(f"color: {T.ACCENT_GREEN}; background: transparent;")
+            self._status_dot.setStyleSheet(
+                f"color: {T.ACCENT_GREEN}; background: transparent;"
+            )
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _set_status_scanning(self) -> None:
+        self._status_dot.setStyleSheet(
+            f"color: {T.ACCENT_ORANGE}; background: transparent;"
+        )
+        if "found" not in self._status_lbl.text():
+            self._status_lbl.setText("Scan in progress…")
+
+    def _set_status_idle(self) -> None:
+        if self._total_miners > 0:
+            return   # keep the "N miners found" text
+        color = T.TEXT_MUTED if not self._scan_completed else T.TEXT_SECONDARY
+        self._status_dot.setStyleSheet(f"color: {color}; background: transparent;")
+        self._status_lbl.setText(
+            "Scan complete — no miners found"
+            if self._scan_completed else "No active scan"
+        )
 
     def _refresh_timestamps(self) -> None:
-        """Refresh 'last checked' labels on all rows."""
         if self._engine is None:
             return
         for result in self._engine.scan_manager.get_all_results():
