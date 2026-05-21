@@ -17,6 +17,50 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 10  # seconds
 
 
+def redeem_access_key(
+    api_url: str,
+    access_key: str,
+    callback: Any,
+) -> None:
+    """Exchange an access key for an api_key + facility_id.
+
+    Calls POST /api/v2/provision/redeem and invokes *callback* with a dict:
+      {"success": True, "apiKey": "...", "facilityId": "..."}
+      {"success": False, "error": "..."}
+
+    Runs on a daemon thread so the Qt main thread never blocks.
+    """
+
+    def _run() -> None:
+        base = api_url.rstrip("/")
+        # Strip trailing /api so we don't double it
+        if base.endswith("/api"):
+            base = base[: -len("/api")]
+        url = f"{base}/api/v2/provision/redeem"
+        print(f"[WRIGHT] POST {url}")
+        try:
+            r = requests.post(
+                url,
+                json={"accessKey": access_key},
+                timeout=_TIMEOUT,
+            )
+            payload = r.json()
+            print(f"[WRIGHT] POST {url} → {r.status_code}")
+            if r.status_code == 200 and payload.get("success"):
+                callback({"success": True, "apiKey": payload["apiKey"], "facilityId": payload["facilityId"]})
+            else:
+                err = payload.get("error") or f"HTTP {r.status_code}"
+                logger.warning("access-key redeem failed: %s", err)
+                callback({"success": False, "error": err})
+        except Exception as exc:
+            print(f"[WRIGHT] POST {url} → ERROR: {exc}")
+            logger.warning("access-key redeem exception: %s", exc)
+            callback({"success": False, "error": str(exc)})
+
+    t = threading.Thread(target=_run, daemon=True, name="wright-provision-redeem")
+    t.start()
+
+
 def fetch_agent_info(
     api_url: str,
     api_key: str,
