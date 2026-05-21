@@ -2,9 +2,67 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
+
+
+class IdentityResolutionError(ValueError):
+    """Raised when a miner cannot be assigned a stable identifier.
+
+    The scheduler catches this and skips the miner for the current cycle
+    rather than shipping a payload that the server would reject to DLQ.
+    """
+
+
+_MAC_RE = re.compile(r"^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$")
+_MAX_UID_LEN = 128
+
+
+def resolve_uid(
+    facility_id: str,
+    candidate_uid: Optional[str],
+    serial_number: Optional[str],
+    mac_address: Optional[str],
+    hostname: Optional[str],
+) -> Optional[str]:
+    """Pick a stable, non-blank miner uid.
+
+    Priority:
+      1. ``candidate_uid`` if non-blank and not obviously bogus.
+      2. ``serial_number`` (same rules).
+      3. Derived ``"<facility>:<lower-mac>"`` if ``mac_address`` parses as a MAC.
+      4. ``hostname`` (weakest tier — hostnames are user-editable and may change).
+
+    Returns ``None`` if nothing usable is found; caller should skip the miner.
+
+    Must produce the same canonical format the worker's MinerUidResolver
+    derives, so that agent-produced and server-derived uids converge to the
+    same value for the same physical miner.
+    """
+    for v in (candidate_uid, serial_number):
+        if v and v.strip() and _looks_reasonable(v.strip()):
+            return v.strip()
+    if mac_address and mac_address.strip():
+        mac = mac_address.strip().lower()
+        if _MAC_RE.match(mac):
+            return f"{facility_id}:{mac}"
+    if hostname and hostname.strip() and _looks_reasonable(hostname.strip()):
+        return hostname.strip()
+    return None
+
+
+def _looks_reasonable(value: str) -> bool:
+    if len(value) > _MAX_UID_LEN:
+        return False
+    if "." in value:
+        # hostnames / FQDNs are accepted only at the hostname tier (so this
+        # filter rejects hostname-shaped values masquerading as uids/serials)
+        return False
+    if value.lower() in {"unknown", "n/a", "none", "null"}:
+        return False
+    return True
 
 
 @dataclass

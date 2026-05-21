@@ -31,7 +31,12 @@ from wright_telemetry.discovery import (
     firmware_types_for_collector,
     merge_miners,
 )
-from wright_telemetry.models import MinerIdentity, TelemetryPayload
+from wright_telemetry.models import (
+    IdentityResolutionError,
+    MinerIdentity,
+    TelemetryPayload,
+    resolve_uid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +157,18 @@ def _authenticate_all(collectors: list[tuple[dict[str, Any], MinerCollector]]) -
 
 def _fetch_identities(
     collectors: list[tuple[dict[str, Any], MinerCollector]],
+    facility_id: str,
 ) -> dict[str, MinerIdentity]:
     """Fetch and cache miner identities keyed by miner URL.
 
-    Also back-propagates the discovered MAC address into the miner config dict
-    so that subsequent re-discovery cycles can use it for deduplication.
+    Each collector's reported uid is passed through :func:`resolve_uid` so
+    that a miner without a firmware-exposed uid still gets a stable identifier
+    (derived from facility_id + MAC). Miners that cannot be identified at all
+    are skipped — the prior behavior of fabricating ``uid='unknown'`` produced
+    ghost rows on the server and is no longer done.
+
+    Also back-propagates discovered MAC address into the miner config dict so
+    subsequent re-discovery cycles can use it for deduplication.
     """
     identities: dict[str, MinerIdentity] = {}
     for miner_cfg, collector in collectors:
@@ -167,6 +179,25 @@ def _fetch_identities(
         try:
             identity = collector.fetch_identity()
             identity.ip_address = ip
+
+            # Apply the canonical uid resolver. Mirrors the worker's
+            # MinerUidResolver so the agent and server converge on the same
+            # uid for the same physical miner.
+            resolved = resolve_uid(
+                facility_id=facility_id,
+                candidate_uid=identity.uid,
+                serial_number=identity.serial_number,
+                mac_address=identity.mac_address,
+                hostname=identity.hostname,
+            )
+            if resolved is None:
+                raise IdentityResolutionError(
+                    f"no usable identifier (uid={identity.uid!r}, "
+                    f"serial={identity.serial_number!r}, mac={identity.mac_address!r}, "
+                    f"hostname={identity.hostname!r})"
+                )
+            identity.uid = resolved
+
             # Back-propagate identity fields into miner_cfg for in-process use
             # (e.g. MAC-based deduplication in the re-discovery loop)
             for field, value in [
@@ -185,14 +216,16 @@ def _fetch_identities(
                 name, identity.uid, identity.serial_number,
                 identity.mac_address, ip, identity.firmware,
             )
+        except IdentityResolutionError as exc:
+            # Skip this miner for the cycle. Do NOT fabricate a uid — that
+            # would silently re-create the ghost-row problem we are fixing.
+            logger.warning(
+                "Skipping miner '%s' at %s — %s", name, url, exc
+            )
         except Exception as exc:
             logger.warning("Could not fetch identity for '%s': %s", name, exc)
-            identities[url] = MinerIdentity(
-                uid="unknown", serial_number="unknown",
-                hostname=name, mac_address="unknown",
-                ip_address=ip,
-                firmware=miner_cfg.get("firmware"),
-            )
+            # Collector itself failed (network, auth, parse). Skip rather than
+            # synthesize — same reasoning as above.
     return identities
 
 
@@ -339,7 +372,7 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
     try:
         collectors = _build_collectors(all_miners, default_collector_type)
         _authenticate_all(collectors)
-        identities = _fetch_identities(collectors)
+        identities = _fetch_identities(collectors, facility_id)
         _report_miners_to_api(api_client, facility_id, identities)
     except KeyboardInterrupt:
         print("\n[BASELINE] Skipped.")
@@ -675,7 +708,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
         try:
             collectors = _build_collectors(all_miners, default_collector_type)
             _authenticate_all(collectors)
-            identities = _fetch_identities(collectors)
+            identities = _fetch_identities(collectors, facility_id)
             _report_miners_to_api(api_client, facility_id, identities)
 
             consecutive_crashes = 0
@@ -773,7 +806,7 @@ def _run_ws_fan_detection(
 
     collectors = _build_collectors(miners, default_collector_type)
     _authenticate_all(collectors)
-    identities = _fetch_identities(collectors)
+    identities = _fetch_identities(collectors, facility_id)
     _report_miners_to_api(api_client, facility_id, identities)
 
     controller.push_event({
@@ -891,7 +924,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 continue
 
             _authenticate_all(collectors)
-            identities = _fetch_identities(collectors)
+            identities = _fetch_identities(collectors, facility_id)
             _report_miners_to_api(api_client, facility_id, identities)
 
             consecutive_crashes = 0
@@ -961,7 +994,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     if new_miner_cfgs:
                         new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
                         _authenticate_all(new_collectors)
-                        new_ids = _fetch_identities(new_collectors)
+                        new_ids = _fetch_identities(new_collectors, facility_id)
                         _report_miners_to_api(api_client, facility_id, new_ids)
 
                         collectors.extend(new_collectors)
