@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
+from wright_telemetry.gui.pages.access_key import AccessKeyPage
 from wright_telemetry.gui.pages.permissions import PermissionsPage
 from wright_telemetry.gui.pages.discovery import DiscoveryPage
 from wright_telemetry.gui.pages.overview import OverviewPage
@@ -27,13 +28,24 @@ if TYPE_CHECKING:
 
 
 class MainWindow(QWidget):
-    """Top-level window: title bar label + three-column body."""
+    """Top-level window: title bar label + three-column body.
+
+    Pass ``needs_provisioning=True`` to show the access-key page first.
+    The engine is not started until provisioning completes (or immediately
+    if credentials already exist).
+    """
 
     PAGE_KEYS = ["permissions", "discovery", "overview"]
 
-    def __init__(self, version: str = "0.7.3", engine: "ScanningEngine | None" = None):
+    def __init__(
+        self,
+        version: str = "0.7.3",
+        engine: "ScanningEngine | None" = None,
+        needs_provisioning: bool = False,
+    ):
         super().__init__()
         self._engine = engine
+        self._needs_provisioning = needs_provisioning
         self.setWindowTitle("Wright Telemetry Collector — Local Agent")
         self.resize(T.WINDOW_W, T.WINDOW_H)
         self.setMinimumSize(T.WINDOW_MIN_W, T.WINDOW_MIN_H)
@@ -77,6 +89,12 @@ class MainWindow(QWidget):
         }
         for key in self.PAGE_KEYS:
             self.stack.addWidget(self.pages[key])
+
+        # Access-key provisioning page (shown before the normal pages)
+        self._access_key_page = AccessKeyPage()
+        self.stack.addWidget(self._access_key_page)
+        self._access_key_page.provisioned.connect(self._on_provisioned)
+
         body.addWidget(self.stack, 1)
 
         # Security panel
@@ -94,10 +112,43 @@ class MainWindow(QWidget):
             lambda: self._switch_page("discovery")
         )
 
+        # Show access-key page first if credentials are missing
+        if needs_provisioning:
+            self.stack.setCurrentWidget(self._access_key_page)
+            self.sidebar.setVisible(False)
+            self.security.setVisible(False)
+
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._engine is not None:
             self._engine.stop()
         event.accept()
+
+    def _on_provisioned(self) -> None:
+        """Called when the access-key page successfully redeems credentials.
+
+        Re-reads the freshly saved config, builds and starts the engine,
+        then transitions to the normal permissions page.
+        """
+        from wright_telemetry.config import load_config
+        from wright_telemetry.gui.engine import ScanningEngine
+
+        cfg = load_config() or {}
+        self._engine = ScanningEngine(cfg)
+
+        # Wire up engine signals now that we have one
+        self._engine.signals.ws_status_changed.connect(self.sidebar.set_ws_status)
+
+        # Give the engine reference to the existing pages that need it
+        self.pages["permissions"]._engine = self._engine
+        self.pages["discovery"]._engine = self._engine
+        self.pages["overview"]._engine = self._engine
+
+        self._engine.start()
+
+        # Reveal the sidebar and switch to the permissions page
+        self.sidebar.setVisible(True)
+        self.security.setVisible(True)
+        self._switch_page("permissions")
 
     def _switch_page(self, key: str) -> None:
         if key in self.pages:
