@@ -1,4 +1,0 @@
-# Placeholder — releases are handled directly by the build workflows.
-# Each of build-linux.yml, build-macos.yml, and build-windows.yml triggers
-# on tags matching "v*" and uploads its binary to the GitHub Release via
-# softprops/action-gh-release.
