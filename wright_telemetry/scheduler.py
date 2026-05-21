@@ -279,6 +279,12 @@ def _poll_cycle(
     for miner_cfg, collector in collectors:
         name = miner_cfg.get("name", miner_cfg["url"])
         identity = identities.get(miner_cfg["url"])
+        if identity is None:
+            # Miner had no usable identity this discovery pass — skip the whole
+            # cycle rather than ship payloads with miner_identity=None (which
+            # would fail serialization in api_client.send).
+            logger.debug("Skipping telemetry for '%s' — no identity resolved", name)
+            continue
 
         cooling_data_obj = None
         for metric in metrics:
@@ -396,6 +402,9 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
                     continue
                 name = miner_cfg.get("name", url)
                 identity = identities.get(url)
+                if identity is None:
+                    logger.debug("Skipping baseline for '%s' — no identity resolved", name)
+                    continue
                 fan_fetcher = collector.get_fetcher("cooling")
                 if fan_fetcher is None:
                     baselined.add(url)
@@ -728,6 +737,11 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                 for miner_cfg, collector in collectors:
                     name = miner_cfg.get("name", miner_cfg["url"])
                     identity = identities.get(miner_cfg["url"])
+                    if identity is None:
+                        logger.debug(
+                            "Skipping fan-dip detection for '%s' — no identity resolved", name
+                        )
+                        continue
                     fan_fetcher = collector.get_fetcher("cooling")
                     if fan_fetcher is None:
                         continue
@@ -841,6 +855,11 @@ def _run_ws_fan_detection(
         for miner_cfg, collector in collectors:
             name = miner_cfg.get("name", miner_cfg["url"])
             identity = identities.get(miner_cfg["url"])
+            if identity is None:
+                logger.debug(
+                    "Skipping ws fan-switch detection for '%s' — no identity resolved", name
+                )
+                continue
             fan_fetcher = collector.get_fetcher("cooling")
             if fan_fetcher is None:
                 continue
