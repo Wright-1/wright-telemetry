@@ -25,6 +25,21 @@ from wright_telemetry.gui import theme as T
 from wright_telemetry.gui.widgets import PrimaryButton
 
 
+_ERROR_MAP = {
+    "Invalid access key":    "That access key wasn’t found. Double-check it and try again.",
+    "Access key not found":  "That access key wasn’t found. Double-check it and try again.",
+    "invalid access key":    "That access key wasn’t found. Double-check it and try again.",
+    "Failed to redeem provision token": "Server error — please try again in a moment.",
+}
+
+
+def _friendly_error(raw: str) -> str:
+    """Map a raw API error string to a user-facing message."""
+    if not raw:
+        return "Something went wrong — please try again."
+    return _ERROR_MAP.get(raw, raw)
+
+
 class AccessKeyPage(QWidget):
     """Step 0: enter access key to provision api_key + facility_id."""
 
@@ -199,5 +214,6 @@ class AccessKeyPage(QWidget):
             QTimer.singleShot(600, self.provisioned.emit)
         else:
             self._set_loading(False)
-            error = result.get("error", "Unknown error — please try again.")
-            self._set_status(f"Error: {error}", T.ACCENT_RED)
+            raw_error = result.get("error", "")
+            error = _friendly_error(raw_error)
+            self._set_status(error, T.ACCENT_RED)

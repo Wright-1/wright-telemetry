@@ -33,10 +33,7 @@ def redeem_access_key(
 
     def _run() -> None:
         base = api_url.rstrip("/")
-        # Strip trailing /api so we don't double it
-        if base.endswith("/api"):
-            base = base[: -len("/api")]
-        url = f"{base}/api/v2/provision/redeem"
+        url = f"{base}/api/provision/redeem"
         print(f"[WRIGHT] POST {url}")
         try:
             r = requests.post(
@@ -47,9 +44,10 @@ def redeem_access_key(
             payload = r.json()
             print(f"[WRIGHT] POST {url} → {r.status_code}")
             if r.status_code == 200 and payload.get("success"):
-                callback({"success": True, "apiKey": payload["apiKey"], "facilityId": payload["facilityId"]})
+                data = payload.get("data", {})
+                callback({"success": True, "apiKey": data["apiKey"], "facilityId": data["facilityId"]})
             else:
-                err = payload.get("error") or f"HTTP {r.status_code}"
+                err = payload.get("error") or payload.get("message") or f"HTTP {r.status_code}"
                 logger.warning("access-key redeem failed: %s", err)
                 callback({"success": False, "error": err})
         except Exception as exc:

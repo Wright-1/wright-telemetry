@@ -150,7 +150,7 @@ def prompt_config_location(force: bool = False) -> None:
 
 SENSITIVE_MASK = "********"
 
-_DEFAULT_WRIGHT_API_URL = "https://api.wrightfan.com/api"
+_DEFAULT_WRIGHT_API_URL = "http://localhost:3001"
 _DEFAULT_POLL_INTERVAL = 30
 _DEFAULT_COLLECTOR_TYPES = ["braiins"]
 _DEFAULT_SCAN_INTERVAL = 30   # seconds between runtime re-scans
