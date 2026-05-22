@@ -261,9 +261,6 @@ class WebSocketClient:
             cons.update(payload["consent"])
             cfg["consent"] = cons
 
-        if "miners" in payload and isinstance(payload["miners"], list):
-            cfg["miners"] = payload["miners"]
-
         save_config(cfg)
         logger.info("Configuration updated remotely and saved to disk")
         self.controller.request_config_reload()
