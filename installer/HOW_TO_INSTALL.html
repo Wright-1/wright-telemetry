@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Installing Wright Telemetry on Mac</title>
+  <style>
+    /* ── Reset & base ───────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #0d0f14;
+      --surface:      #161a22;
+      --surface-2:    #1e2330;
+      --border:       #2a3040;
+      --accent:       #4ea8f7;
+      --accent-dim:   #1d3b5c;
+      --green:        #3ddc97;
+      --green-dim:    #1a3d2e;
+      --yellow:       #f7c94e;
+      --yellow-dim:   #3d3010;
+      --text:         #e4e8f0;
+      --text-muted:   #6b7a96;
+      --text-secondary: #9aa5bc;
+      --radius:       12px;
+      --radius-sm:    8px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+                   "Helvetica Neue", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.65;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ─────────────────────────────────────────────────────────── */
+    .page {
+      max-width: 740px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    .header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .logo-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      margin-bottom: 20px;
+    }
+
+    .logo-mark svg { width: 32px; height: 32px; }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 15px;
+    }
+
+    /* ── Callout boxes ───────────────────────────────────────────────────── */
+    .callout {
+      display: flex;
+      gap: 14px;
+      padding: 16px 18px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 32px;
+      border: 1px solid transparent;
+    }
+
+    .callout-info {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+    }
+
+    .callout-warn {
+      background: var(--yellow-dim);
+      border-color: var(--yellow);
+    }
+
+    .callout-icon {
+      font-size: 20px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .callout-body { flex: 1; }
+    .callout-title {
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.3px;
+      margin-bottom: 4px;
+    }
+
+    .callout-info  .callout-title { color: var(--accent); }
+    .callout-warn  .callout-title { color: var(--yellow); }
+    .callout-body p { font-size: 14px; color: var(--text-secondary); line-height: 1.6; }
+
+    /* ── Section heading ─────────────────────────────────────────────────── */
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+
+    /* ── Steps ───────────────────────────────────────────────────────────── */
+    .steps { display: flex; flex-direction: column; gap: 16px; margin-bottom: 40px; }
+
+    .step {
+      display: flex;
+      gap: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      transition: border-color 0.15s;
+    }
+
+    .step:hover { border-color: var(--accent); }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-top: 2px;
+    }
+
+    .step-body { flex: 1; }
+
+    .step-title {
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .step-desc {
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    /* inline UI labels (key names, menu items) */
+    kbd {
+      display: inline-block;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 7px;
+      font-family: "SF Mono", "Menlo", "Monaco", monospace;
+      font-size: 12.5px;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    code {
+      font-family: "SF Mono", "Menlo", "Monaco", monospace;
+      font-size: 13px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: var(--green);
+    }
+
+    /* ── Screenshot placeholder ──────────────────────────────────────────── */
+    .screen-mock {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px 18px;
+      margin: 10px 0 4px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .screen-mock .icon { font-size: 20px; }
+
+    /* ── Divider ─────────────────────────────────────────────────────────── */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 36px 0;
+    }
+
+    /* ── Alternative method block ────────────────────────────────────────── */
+    .alt-method {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      margin-bottom: 16px;
+    }
+
+    .alt-method-title {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      padding: 2px 8px;
+      border-radius: 20px;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+
+    .badge-easy { background: var(--green-dim); border-color: var(--green); color: var(--green); }
+    .badge-tech { background: var(--yellow-dim); border-color: var(--yellow); color: var(--yellow); }
+
+    .terminal {
+      background: #0a0c10;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      font-family: "SF Mono", "Menlo", "Monaco", monospace;
+      font-size: 13px;
+      color: var(--green);
+      margin-top: 10px;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+
+    .terminal .prompt { color: var(--text-muted); user-select: none; }
+
+    /* ── Why section ─────────────────────────────────────────────────────── */
+    .why-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 40px;
+    }
+
+    @media (max-width: 520px) { .why-grid { grid-template-columns: 1fr; } }
+
+    .why-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+    }
+
+    .why-card-icon { font-size: 22px; margin-bottom: 10px; }
+    .why-card-title { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+    .why-card-body  { font-size: 13px; color: var(--text-secondary); line-height: 1.55; }
+
+    /* ── Footer ─────────────────────────────────────────────────────────── */
+    .footer {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+      margin-top: 48px;
+    }
+
+    .footer a { color: var(--accent); text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <div class="header">
+    <div class="logo-mark">
+      <!-- simple lightning-bolt SVG as stand-in for the Wright icon -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="#4ea8f7" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+      </svg>
+    </div>
+    <h1>Installing Wright Telemetry</h1>
+    <p class="subtitle">macOS installation guide &nbsp;·&nbsp; v0.7.3</p>
+  </div>
+
+  <!-- ── Why the warning appears ───────────────────────────────────────── -->
+  <div class="callout callout-info">
+    <div class="callout-icon">🔒</div>
+    <div class="callout-body">
+      <div class="callout-title">Why does macOS block it?</div>
+      <p>Apple requires all distributed software to be signed and notarised
+         through their Developer Program ($99/year). Wright Telemetry is free,
+         open-source software. The <em>app itself is safe</em> — macOS is just
+         letting you know it hasn't paid Apple's fee. The steps below let you
+         approve it yourself in about 30 seconds.</p>
+    </div>
+  </div>
+
+  <!-- ── Step 1: Copy to Applications ──────────────────────────────────── -->
+  <div class="section-label">Installation steps</div>
+  <div class="steps">
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <div class="step-title">Open this DMG and drag the app to Applications</div>
+        <div class="step-desc">
+          Drag <strong>Wright Telemetry.app</strong> onto the
+          <strong>Applications</strong> shortcut inside this window.
+          Wait for the copy to finish before continuing.
+        </div>
+        <div class="screen-mock">
+          <span class="icon">📂</span>
+          <span><strong>Wright Telemetry.app</strong> &nbsp;→&nbsp; <strong>Applications /</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <div class="step-title">Right-click the app and choose Open</div>
+        <div class="step-desc">
+          In <strong>Finder → Applications</strong>, find
+          <strong>Wright Telemetry</strong>.
+          <em>Do not double-click yet.</em> Instead,
+          <strong>right-click</strong> (or Control-click) the icon and select
+          <kbd>Open</kbd> from the menu that appears.
+        </div>
+        <div class="screen-mock">
+          <span class="icon">🖱️</span>
+          <span>Right-click → <kbd>Open</kbd></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <div class="step-title">Click "Open" in the security dialog</div>
+        <div class="step-desc">
+          macOS will show a warning that says
+          <em>"Wright Telemetry can't be opened because it is from an
+          unidentified developer."</em>
+          Click the <kbd>Open</kbd> button in that dialog to approve the app.
+          This is a <strong>one-time step</strong> — after this, you can
+          double-click it normally.
+        </div>
+        <div class="screen-mock">
+          <span class="icon">⚠️</span>
+          <span>Security dialog → click <kbd>Open</kbd></span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Alternative methods ────────────────────────────────────────────── -->
+  <hr />
+  <div class="section-label">If the dialog didn't appear</div>
+
+  <!-- Method A: System Settings -->
+  <div class="alt-method">
+    <div class="alt-method-title">
+      <span>⚙️</span>
+      System Settings &nbsp;<span class="badge badge-easy">EASIEST</span>
+    </div>
+    <div class="step-desc">
+      If macOS blocked the app without giving you an <kbd>Open</kbd> option,
+      open <strong>Apple menu → System Settings → Privacy &amp; Security</strong>.
+      Scroll down to the <em>Security</em> section and you'll see:
+    </div>
+    <div class="screen-mock" style="margin-top:10px;">
+      <span class="icon">🛡️</span>
+      <span><em>"Wright Telemetry was blocked from use because it is not from an
+      identified developer."</em> &nbsp;→&nbsp; <kbd>Open Anyway</kbd></span>
+    </div>
+    <div class="step-desc" style="margin-top:8px;">
+      Click <kbd>Open Anyway</kbd>, enter your Mac password when prompted,
+      then launch the app.
+    </div>
+  </div>
+
+  <!-- Method B: Terminal -->
+  <div class="alt-method">
+    <div class="alt-method-title">
+      <span>💻</span>
+      Terminal (one command) &nbsp;<span class="badge badge-tech">ADVANCED</span>
+    </div>
+    <div class="step-desc">
+      Open <strong>Terminal</strong> (search Spotlight: <kbd>⌘ Space</kbd> →
+      type <em>Terminal</em>) and run:
+    </div>
+    <div class="terminal">
+      <span class="prompt">$ </span>xattr -dr com.apple.quarantine "/Applications/Wright Telemetry.app"
+    </div>
+    <div class="step-desc" style="margin-top:8px;">
+      This strips the quarantine flag that macOS adds to downloaded files.
+      The app will open normally from then on.
+    </div>
+  </div>
+
+  <!-- ── Why it's safe ──────────────────────────────────────────────────── -->
+  <hr />
+  <div class="section-label">Why Wright Telemetry is safe to run</div>
+  <div class="why-grid">
+    <div class="why-card">
+      <div class="why-card-icon">📖</div>
+      <div class="why-card-title">Fully open source</div>
+      <div class="why-card-body">
+        Every line of code is public on GitHub. You can read, build, and
+        verify it yourself before running anything.
+      </div>
+    </div>
+    <div class="why-card">
+      <div class="why-card-icon">🔑</div>
+      <div class="why-card-title">No password exfiltration</div>
+      <div class="why-card-body">
+        Miner credentials are stored locally, encrypted with AES-256-GCM.
+        They never leave your machine.
+      </div>
+    </div>
+    <div class="why-card">
+      <div class="why-card-icon">👁️</div>
+      <div class="why-card-title">Read-only access</div>
+      <div class="why-card-body">
+        The agent reads miner metrics only. It cannot change firmware settings,
+        reboot rigs, or issue any write commands.
+      </div>
+    </div>
+    <div class="why-card">
+      <div class="why-card-icon">✅</div>
+      <div class="why-card-title">Your data, your choice</div>
+      <div class="why-card-body">
+        Every metric is <em>off by default</em>. The setup wizard explains
+        each one before you enable it. Change your mind at any time.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Warning callout ───────────────────────────────────────────────── -->
+  <div class="callout callout-warn">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-body">
+      <div class="callout-title">macOS Ventura (13) and later</div>
+      <p>On macOS 13+, Apple moved the <em>Open Anyway</em> button to
+         <strong>System Settings → Privacy &amp; Security</strong>. The
+         right-click → <kbd>Open</kbd> trick also still works on all versions.</p>
+    </div>
+  </div>
+
+  <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+  <div class="footer">
+    <p>
+      Wright Telemetry is open-source software distributed under the
+      Apache 2.0 license.<br />
+      Questions? Visit
+      <a href="https://github.com/Wright-1/wright-telemetry" target="_blank">
+        github.com/Wright-1/wright-telemetry
+      </a>
+    </p>
+  </div>
+
+</div><!-- .page -->
+</body>
+</html>
