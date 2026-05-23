@@ -107,7 +107,7 @@ METRICS: dict[str, dict[str, str]] = {
     },
 }
 
-DEFAULT_CONSENT: dict[str, bool] = {key: False for key in METRICS}
+DEFAULT_CONSENT: dict[str, bool] = {key: True for key in METRICS}
 
 
 def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, bool]:
@@ -126,7 +126,7 @@ def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, boo
     ))
     console.print(
         "\nWright Telemetry collects data from your miner to power your\n"
-        "dashboard.  Every category below is [bold]OFF[/] by default.  We'll\n"
+        "dashboard.  Every category below is [bold]ON[/] by default.  We'll\n"
         "explain exactly what each one does so you can decide.\n"
     )
 
@@ -151,7 +151,7 @@ def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, boo
         result = questionary.select(
             f"Enable {info['label']}?",
             choices=choices,
-            default="Yes" if current else "No",
+            default="Yes" if current else "No",  # current defaults to True now
             style=_WIZARD_STYLE,
         ).ask()
 

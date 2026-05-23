@@ -17,93 +17,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from wright_telemetry.consent import DEFAULT_CONSENT, METRICS
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
 from wright_telemetry.gui.widgets import PermissionRow, PrimaryButton, SecondaryButton
 
 if TYPE_CHECKING:
     from wright_telemetry.gui.engine import ScanningEngine
-
-# Permission data — mirrors consent.py METRICS
-PERMISSIONS = [
-    {
-        "key": "cooling",
-        "icon": T.CATEGORY_ICONS["cooling"],
-        "title": "Temperature & Fan RPM",
-        "subtitle": "Reads sensors to predict lifespan.",
-        "detail": (
-            "Detailed access required for monitoring temperature & fan RPM. "
-            "This permission allows the local agent to query specific endpoints "
-            "on your mining hardware."
-        ),
-    },
-    {
-        "key": "hashrate",
-        "icon": T.CATEGORY_ICONS["hashrate"],
-        "title": "Hashrate & Power Stats",
-        "subtitle": "Monitors efficiency and savings.",
-        "detail": (
-            "Reads your miner's hashrate, pool stats, and power consumption. "
-            "Wright uses this to show how fans are saving you money by keeping "
-            "your miner running at peak efficiency."
-        ),
-    },
-    {
-        "key": "uptime",
-        "icon": T.CATEGORY_ICONS["uptime"],
-        "title": "Uptime & Firmware Info",
-        "subtitle": "Tracks reliability metrics.",
-        "detail": (
-            "Reads how long your miner has been running and its firmware version. "
-            "Wright uses this to show how modular design increases uptime "
-            "compared to stock fans."
-        ),
-    },
-    {
-        "key": "hashboards",
-        "icon": T.CATEGORY_ICONS["hashboards"],
-        "title": "Per-Hashboard Chip Temps",
-        "subtitle": "Detailed hardware diagnostics.",
-        "detail": (
-            "Reads temperature and status for each hashboard in your miner. "
-            "Wright uses this for granular degradation detection, spotting "
-            "hot-spots before they cause downtime."
-        ),
-    },
-    {
-        "key": "errors",
-        "icon": T.CATEGORY_ICONS["errors"],
-        "title": "Miner Errors",
-        "subtitle": "Automatically files support reports.",
-        "detail": (
-            "Reads the error log from your miner (timestamps, error codes, "
-            "affected components). Wright uses this to notify you of fan "
-            "failures and automatically file support reports on your behalf."
-        ),
-    },
-    {
-        "key": "auto_update",
-        "icon": T.CATEGORY_ICONS["auto_update"],
-        "title": "Automatic Updates",
-        "subtitle": "Keeps the agent secure.",
-        "detail": (
-            "Allows Wright One to automatically download and apply new versions "
-            "of this agent in the background. Checks run hourly and require no "
-            "action on your part."
-        ),
-    },
-    {
-        "key": "remote_config",
-        "icon": T.CATEGORY_ICONS["remote_config"],
-        "title": "Remote Configuration",
-        "subtitle": "Adjust settings remotely from your dashboard.",
-        "detail": (
-            "Allows Wright One support and your customer portal to view and "
-            "update this agent's configuration remotely. Passwords are never "
-            "transmitted; they are always masked before leaving your machine."
-        ),
-    },
-]
 
 
 class PermissionsPage(QWidget):
@@ -114,6 +34,13 @@ class PermissionsPage(QWidget):
     def __init__(self, engine: "ScanningEngine | None" = None, parent: QWidget | None = None):
         super().__init__(parent)
         self._engine = engine
+
+        # Load saved consent so existing preferences survive restarts.
+        # Falls back to DEFAULT_CONSENT (all off) for first-run.
+        from wright_telemetry.config import load_config
+        saved_consent: dict[str, bool] = (
+            load_config() or {}
+        ).get("consent", DEFAULT_CONSENT)
 
         # Debounce: wait 300ms after the last toggle before saving
         self._debounce = QTimer()
@@ -158,16 +85,20 @@ class PermissionsPage(QWidget):
         scroll_layout.setSpacing(8)
 
         self.rows: list[PermissionRow] = []
-        for perm in PERMISSIONS:
-            color = T.CATEGORY_COLORS.get(perm["key"], T.ACCENT_BLUE)
+        for key, info in METRICS.items():
+            # Build detail text: full description + the API endpoint it calls.
+            detail = info["description"] + f"\n\nAPI call: {info['endpoint']}"
+            # First sentence of description becomes the subtitle.
+            subtitle = info["description"].split("\n")[0].rstrip(".")
+            color = T.CATEGORY_COLORS.get(key, T.ACCENT_BLUE)
             row = PermissionRow(
-                key=perm["key"],
-                icon=perm["icon"],
-                title=perm["title"],
-                subtitle=perm["subtitle"],
-                detail=perm["detail"],
+                key=key,
+                icon=T.CATEGORY_ICONS.get(key, "●"),
+                title=info["label"],
+                subtitle=subtitle,
+                detail=detail,
                 category_color=color,
-                checked=True,
+                checked=saved_consent.get(key, False),
             )
             scroll_layout.addWidget(row)
             row.toggle.toggled.connect(self._on_toggle_changed)
