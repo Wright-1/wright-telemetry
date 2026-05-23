@@ -214,6 +214,8 @@ class AccessKeyPage(QWidget):
             # connects to the same environment after provisioning.
             cfg["wright_api_url"] = cfg.get("wright_api_url") or API_URL
             save_config(cfg)
+            from wright_telemetry.config import CONFIG_FILE
+            print(f"[WRIGHT] Config written → {CONFIG_FILE}")
 
             self._set_status("✓ Activated successfully!", T.ACCENT_GREEN)
             # Brief pause so the user sees the success state
