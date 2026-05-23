@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build_mac.sh — Build Wright Telemetry macOS app bundle + distributable DMG
+# build_mac.sh — Build WrightData macOS app bundle + distributable DMG
 #
 # No Homebrew required. Uses only:
 #   • pyinstaller  (pip install pyinstaller)
@@ -16,9 +16,9 @@
 set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
-APP_NAME="Wright Telemetry"
-APP_BUNDLE="Wright Telemetry.app"
-DMG_BASENAME="WrightTelemetry-Installer"
+APP_NAME="WrightData"
+APP_BUNDLE="WrightData.app"
+DMG_BASENAME="WrightData-Installer"
 VERSION="0.7.3"
 SPEC_FILE="wright-telemetry.spec"
 DIST_DIR="dist"
@@ -88,21 +88,24 @@ if $BUILD_APP; then
   ok "App bundle ready: ${APP_PATH}"
 fi
 
-# ── 2. Generate DMG background image ─────────────────────────────────────────
-if $BUILD_DMG; then
-  if [[ ! -f "assets/dmg-background.png" ]]; then
-    info "Generating DMG background image…"
-    "${PYTHON}" assets/make_dmg_background.py
-    ok "Background image generated: assets/dmg-background.png"
-  else
-    ok "Background image already exists: assets/dmg-background.png"
-  fi
+# ── 2. Generate app icon (.icns) if missing ─────────────────────────────────
+if [[ ! -f "assets/wright-telemetry.icns" ]]; then
+  info "Generating app icon…"
+  "${PYTHON}" assets/make_app_icon.py
+  ok "App icon ready: assets/wright-telemetry.icns"
+else
+  ok "App icon already exists: assets/wright-telemetry.icns"
 fi
 
-# ── 3. Optional: warn about missing app icon ──────────────────────────────────
-if [[ ! -f "assets/wright-telemetry.icns" ]]; then
-  warn "No icon at assets/wright-telemetry.icns — app will use the default Python icon."
-  warn "See assets/README.md for how to convert a PNG to .icns."
+# ── 3. Generate DMG background image ─────────────────────────────────────────
+if $BUILD_DMG; then
+  if [[ ! -f "assets/dmg-background.tiff" ]]; then
+    info "Generating DMG background image…"
+    "${PYTHON}" assets/make_dmg_background.py
+    ok "Background image generated: assets/dmg-background.tiff"
+  else
+    ok "Background image already exists: assets/dmg-background.tiff"
+  fi
 fi
 
 # ── 4. Build the pretty DMG with dmgbuild ────────────────────────────────────
@@ -137,12 +140,12 @@ if $BUILD_DMG; then
   echo "  The DMG contains:"
   printf '    \033[32m•\033[0m  %-32s  ← drag to Applications\n' "${APP_BUNDLE}"
   printf '    \033[32m•\033[0m  %-32s  ← shortcut for easy install\n' "Applications/"
-  printf '    \033[32m•\033[0m  %-32s  ← Gatekeeper bypass guide\n' "HOW TO INSTALL.html"
+  printf '    \033[32m•\033[0m  %s\n' "Gatekeeper bypass instructions baked into background"
 fi
 echo ""
 hr
 echo ""
 printf '  \033[33m⚠️\033[0m   This build is UNSIGNED. Users will see a macOS security warning\n'
-printf '      on first launch. The HOW TO INSTALL.html guide inside the DMG\n'
-printf '      walks them through it in 30 seconds.\n'
+printf '      on first launch. Bypass instructions are shown directly in the DMG\n'
+printf '      window — no extra files needed.\n'
 echo ""
