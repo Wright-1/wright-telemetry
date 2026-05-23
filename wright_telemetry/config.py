@@ -651,39 +651,56 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     cfg: dict[str, Any] = dict(existing) if existing else {}
 
     console.print()
+    from wright_telemetry.settings import API_URL
+    from wright_telemetry.portal_client import redeem_access_key_sync
+
     console.print(Panel(
         "[bold]WRIGHT TELEMETRY COLLECTOR — SETUP[/]\n\n"
         "This wizard will walk you through connecting your miners\n"
         "to your Wright Fan dashboard.  You'll need:\n\n"
-        "  [bold]1.[/] Your Wright Fan API key   [dim](from the customer portal)[/]\n"
-        "  [bold]2.[/] Your Facility ID          [dim](from the customer portal)[/]",
+        "  [bold]1.[/] Your access key  [dim](from the Wright One customer portal)[/]\n\n"
+        f"  [dim]API endpoint: [cyan]{API_URL}[/]\n"
+        "  To use a different environment set [cyan]WRIGHT_API_URL[/] before running.[/]",
         style="cyan",
         expand=False,
     ))
     console.print()
-    console.rule("[bold]Wright Fan API Credentials[/]")
+    console.rule("[bold]Activate with Access Key[/]")
     console.print()
 
-    # -- Wright Fan API credentials --
-    cfg["wright_api_key"] = _ask(
-        "Wright Fan API Key",
-        default=cfg.get("wright_api_key", ""),
-        validate=_require_nonempty,
-    )
-    console.print()
-    console.print("  Wright Fan API URL: use the API base from the portal")
-    console.print("  e.g. [cyan]https://api.wrightfan.com/api[/] or [cyan]https://api.dev.wrightfan.com/api[/]")
-    console.print("  [dim]Telemetry/WebSocket use /v2/... by default (data pipeline).[/]")
-    cfg["wright_api_url"] = _ask(
-        "Wright Fan API URL",
-        default=cfg.get("wright_api_url", _DEFAULT_WRIGHT_API_URL),
-        validate=_require_nonempty,
-    )
-    cfg["facility_id"] = _ask(
-        "Facility ID",
-        default=cfg.get("facility_id", ""),
-        validate=_require_nonempty,
-    )
+    # -- Redeem access key → api_key + facility_id --------------------------------
+    # Loop until the user supplies a valid key or cancels (Ctrl-C / empty).
+    while True:
+        # If the config already has credentials, offer to skip re-provisioning.
+        if cfg.get("wright_api_key") and cfg.get("facility_id"):
+            console.print("  [dim]Credentials already present in config.[/]")
+            if _confirm("Re-provision with a new access key?", default=False):
+                cfg.pop("wright_api_key", None)
+                cfg.pop("facility_id", None)
+            else:
+                break
+
+        access_key = _ask(
+            "Access Key",
+            default="",
+            validate=_require_nonempty,
+        )
+        console.print("  [dim]Contacting Wright One…[/]")
+        result = redeem_access_key_sync(api_url=API_URL, access_key=access_key)
+
+        if result["success"]:
+            cfg["wright_api_key"] = result["apiKey"]
+            cfg["facility_id"]    = result["facilityId"]
+            cfg["wright_api_url"] = API_URL
+            console.print()
+            console.print(f"  [green]✓[/] Activated — Facility ID: [cyan]{result['facilityId']}[/]")
+            console.print()
+            break
+        else:
+            raw_err = result.get("error", "Unknown error")
+            console.print(f"\n  [red]✗[/] {raw_err}\n")
+            if not _confirm("Try a different access key?", default=True):
+                sys.exit(0)
     cfg["poll_interval_seconds"] = cfg.get("poll_interval_seconds", _DEFAULT_POLL_INTERVAL)
     # Backwards-compat: old configs stored a single string in collector_type
     existing_types: list[str] = (

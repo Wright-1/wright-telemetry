@@ -47,6 +47,10 @@ class AccessKeyPage(QWidget):
     # has been reloaded.  Listeners should navigate to the next page.
     provisioned = pyqtSignal()
 
+    # Internal signal used to marshal the background-thread redeem result
+    # back onto the Qt main thread safely.  Carries a plain dict payload.
+    _redeem_done = pyqtSignal(object)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setStyleSheet(f"background: {T.BG_WINDOW};")
@@ -122,6 +126,7 @@ class AccessKeyPage(QWidget):
             }}
         """)
         self._key_input.returnPressed.connect(self._on_activate)
+        self._redeem_done.connect(self._handle_result)
         card_layout.addWidget(self._key_input)
         card_layout.addSpacing(8)
 
@@ -196,12 +201,16 @@ class AccessKeyPage(QWidget):
         api_url = cfg.get("wright_api_url") or API_URL
 
         def _on_result(result: dict) -> None:
-            # Called from a background thread — schedule back on Qt main thread
-            QTimer.singleShot(0, lambda: self._handle_result(result, cfg))
+            # Called from the background redeem thread.  Emit a signal so Qt
+            # delivers _handle_result on the main thread — QTimer.singleShot
+            # without a receiver context is unreliable from non-Qt threads.
+            self._redeem_done.emit({"result": result, "cfg": cfg})
 
         redeem_access_key(api_url=api_url, access_key=raw_key, callback=_on_result)
 
-    def _handle_result(self, result: dict, cfg: dict) -> None:
+    def _handle_result(self, payload: dict) -> None:
+        result: dict = payload["result"]
+        cfg: dict    = payload["cfg"]
         from wright_telemetry.config import load_config, save_config
 
         if result.get("success"):
