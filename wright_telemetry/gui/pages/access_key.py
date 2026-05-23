@@ -187,10 +187,13 @@ class AccessKeyPage(QWidget):
         self._set_status("Connecting to Wright One…")
 
         from wright_telemetry.portal_client import redeem_access_key
-        from wright_telemetry.config import load_config, _DEFAULT_WRIGHT_API_URL
+        from wright_telemetry.config import load_config
+        from wright_telemetry.settings import API_URL
 
         cfg = load_config() or {}
-        api_url = cfg.get("wright_api_url", _DEFAULT_WRIGHT_API_URL)
+        # Prefer an already-saved URL (e.g. from a previous partial setup),
+        # then fall back to the env-var-backed default.
+        api_url = cfg.get("wright_api_url") or API_URL
 
         def _on_result(result: dict) -> None:
             # Called from a background thread — schedule back on Qt main thread
@@ -199,14 +202,17 @@ class AccessKeyPage(QWidget):
         redeem_access_key(api_url=api_url, access_key=raw_key, callback=_on_result)
 
     def _handle_result(self, result: dict, cfg: dict) -> None:
-        from wright_telemetry.config import load_config, save_config, _DEFAULT_WRIGHT_API_URL
+        from wright_telemetry.config import load_config, save_config
 
         if result.get("success"):
             # Persist credentials — the engine will be started fresh after this
             cfg = load_config() or cfg
+            from wright_telemetry.settings import API_URL
             cfg["wright_api_key"] = result["apiKey"]
             cfg["facility_id"] = result["facilityId"]
-            cfg.setdefault("wright_api_url", _DEFAULT_WRIGHT_API_URL)
+            # Always record the URL that was actually used so the agent
+            # connects to the same environment after provisioning.
+            cfg["wright_api_url"] = cfg.get("wright_api_url") or API_URL
             save_config(cfg)
 
             self._set_status("✓ Activated successfully!", T.ACCENT_GREEN)
