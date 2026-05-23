@@ -20,10 +20,16 @@ from __future__ import annotations
 import os
 
 # ---------------------------------------------------------------------------
-# API base URL
+# Portal / provisioning API  (access-key redeem, agent-info, agent-config)
 # ---------------------------------------------------------------------------
-# The provisioning page POSTs to  {API_URL}/internal/provision/redeem
-# The telemetry agent connects to {API_URL}/v2/...
-#
-# Override in dev:   export WRIGHT_API_URL=http://localhost:3001
 API_URL: str = os.environ.get("WRIGHT_API_URL", "https://api.wrightfan.com/api").rstrip("/")
+
+# ---------------------------------------------------------------------------
+# Ingest gateway  (POST /api/v2/telemetry)
+# ---------------------------------------------------------------------------
+INGEST_URL: str = os.environ.get("WRIGHT_INGEST_URL", "https://api.wrightfan.com/api").rstrip("/")
+
+# ---------------------------------------------------------------------------
+# WebSocket gateway  (ws[s]://.../api/v2/ws/agent)
+# ---------------------------------------------------------------------------
+WS_URL: str = os.environ.get("WRIGHT_WS_URL", "https://api.wrightfan.com/api").rstrip("/")
