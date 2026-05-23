@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPainterPath
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -50,7 +50,7 @@ class ToggleSwitch(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        track_color = QColor(T.TEXT_PRIMARY) if self._checked else QColor("#D1D5DB")
+        track_color = QColor(T.ACCENT_BLUE) if self._checked else QColor("#D1D5DB")
         path = QPainterPath()
         r = self.TRACK_H / 2
         path.addRoundedRect(0, 0, self.TRACK_W, self.TRACK_H, r, r)
@@ -64,6 +64,18 @@ class ToggleSwitch(QWidget):
             int(thumb_x - self.THUMB_R), int(thumb_y - self.THUMB_R),
             self.THUMB_R * 2, self.THUMB_R * 2,
         )
+
+        # Checkmark inside the thumb when on
+        if self._checked:
+            pen = QPen(QColor(T.ACCENT_BLUE))
+            pen.setWidth(2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            p.setPen(pen)
+            cx, cy = int(thumb_x), int(thumb_y)
+            p.drawLine(cx - 3, cy, cx - 1, cy + 2)
+            p.drawLine(cx - 1, cy + 2, cx + 3, cy - 2)
+
         p.end()
 
 
@@ -92,12 +104,35 @@ class ChevronLabel(QLabel):
 # ── Permission Row ────────────────────────────────────────────────────────────
 
 
-class PermissionRow(QWidget):
-    """Colored left-border card: icon + title + subtitle + toggle + chevron.
+# Light tint backgrounds for icon circles (hex, no alpha tricks needed)
+_ICON_BG: dict[str, str] = {
+    "cooling":      "#EBF5FF",
+    "hashrate":     "#FFFBEB",
+    "uptime":       "#F0FDF4",
+    "hashboards":   "#F5F3FF",
+    "errors":       "#FEF2F2",
+    "auto_update":  "#FFF7ED",
+    "remote_config":"#EBF5FF",
+}
 
-    The left border is rendered by letting the outer container's background
-    color (the category color) show through a 3 px gap on the left side of
-    the white inner content widget.
+
+# Light tint backgrounds for the icon circles in PermissionRow
+_ICON_BG: dict[str, str] = {
+    "cooling":       "#EBF5FF",
+    "hashrate":      "#FFFBEB",
+    "uptime":        "#F0FDF4",
+    "hashboards":    "#F5F3FF",
+    "errors":        "#FEF2F2",
+    "auto_update":   "#FFF7ED",
+    "remote_config": "#EBF5FF",
+}
+
+
+class PermissionRow(QWidget):
+    """Flat permission row: icon circle + title/subtitle + toggle + chevron.
+
+    Designed to sit inside a shared card with separator lines between rows.
+    No per-row border or side-stripe accent.
     """
 
     def __init__(
@@ -115,95 +150,76 @@ class PermissionRow(QWidget):
         self.key = key
         self._expanded = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(f"background: {T.BG_CARD};")
 
-        # Outer shell — category color acts as the left border
-        self.setObjectName(f"prow_{key}")
-        self.setStyleSheet(f"""
-            QWidget#prow_{key} {{
-                background: {category_color};
-                border-radius: 6px;
-            }}
-        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 0, 16, 0)
+        root.setSpacing(0)
 
-        outer_layout = QHBoxLayout(self)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.setSpacing(0)
-
-        # 3 px transparent strip — the outer background shows through here
-        strip = QWidget()
-        strip.setFixedWidth(T.PERM_ROW_BORDER_W)
-        strip.setStyleSheet("background: transparent;")
-        outer_layout.addWidget(strip)
-
-        # White content area (right ¾ of the card)
-        content = QWidget()
-        content.setObjectName(f"prow_c_{key}")
-        content.setStyleSheet(f"""
-            QWidget#prow_c_{key} {{
-                background: {T.BG_CARD};
-                border-top: 1px solid {T.BORDER_DEFAULT};
-                border-right: 1px solid {T.BORDER_DEFAULT};
-                border-bottom: 1px solid {T.BORDER_DEFAULT};
-                border-left: none;
-                border-top-right-radius: 6px;
-                border-bottom-right-radius: 6px;
-            }}
-        """)
-        outer_layout.addWidget(content, 1)
-
-        inner = QVBoxLayout(content)
-        inner.setContentsMargins(14, 11, 14, 11)
-        inner.setSpacing(0)
-
-        # ── Header row ────────────────────────────────────────────────────────
+        # Header row
         header = QHBoxLayout()
+        header.setContentsMargins(0, 12, 0, 12)
         header.setSpacing(12)
 
-        icon_lbl = QLabel(icon)
-        icon_lbl.setFixedSize(22, 22)
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_lbl.setStyleSheet(
-            f"color: {category_color}; font-size: 15px; border: none;"
+        # Icon in a tinted rounded square
+        icon_bg = _ICON_BG.get(key, "#F3F4F6")
+        icon_container = QWidget()
+        icon_container.setFixedSize(36, 36)
+        icon_container.setStyleSheet(
+            f"QWidget {{ background: {icon_bg}; border-radius: 8px; border: none; }}"
         )
-        header.addWidget(icon_lbl)
+        icon_lbl = QLabel(icon, icon_container)
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_lbl.setGeometry(0, 0, 36, 36)
+        icon_lbl.setStyleSheet(
+            f"color: {category_color}; font-size: 16px; background: transparent; border: none;"
+        )
+        header.addWidget(icon_container)
 
+        # Title + one-line subtitle
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
-
         title_lbl = QLabel(title)
         title_lbl.setFont(make_font(*T.FONT_PERM_TITLE))
-        title_lbl.setStyleSheet(f"color: {T.TEXT_PRIMARY}; border: none;")
+        title_lbl.setStyleSheet(
+            f"color: {T.TEXT_PRIMARY}; background: transparent; border: none;"
+        )
         text_col.addWidget(title_lbl)
-
         sub_lbl = QLabel(subtitle)
         sub_lbl.setFont(make_font(*T.FONT_PERM_DESC))
-        sub_lbl.setStyleSheet(f"color: {T.TEXT_SECONDARY}; border: none;")
+        sub_lbl.setStyleSheet(
+            f"color: {T.TEXT_SECONDARY}; background: transparent; border: none;"
+        )
+        sub_lbl.setSizePolicy(
+            sub_lbl.sizePolicy().horizontalPolicy(),
+            sub_lbl.sizePolicy().verticalPolicy(),
+        )
         text_col.addWidget(sub_lbl)
-
         header.addLayout(text_col, 1)
 
-        # Toggle — intercept click so it doesn't also trigger row expand
+        # Toggle
         self.toggle = ToggleSwitch(checked=checked)
         self.toggle.mousePressEvent = self._on_toggle_click
         header.addWidget(self.toggle)
 
+        # Chevron
         self.chevron = ChevronLabel(expanded=False)
         header.addWidget(self.chevron)
 
-        inner.addLayout(header)
+        root.addLayout(header)
 
-        # ── Expandable detail ─────────────────────────────────────────────────
+        # Expandable detail
         self.detail_label = QLabel(detail)
         self.detail_label.setFont(make_font(*T.FONT_PERM_DESC))
         self.detail_label.setStyleSheet(
-            f"color: {T.TEXT_SECONDARY}; border: none; padding: 8px 0 0 34px;"
+            f"color: {T.TEXT_SECONDARY}; background: transparent; "
+            f"border: none; padding: 0 0 12px 48px;"
         )
         self.detail_label.setWordWrap(True)
         self.detail_label.setVisible(False)
-        inner.addWidget(self.detail_label)
+        root.addWidget(self.detail_label)
 
     def _on_toggle_click(self, ev) -> None:
-        """Flip toggle state without propagating the click to expand the row."""
         self.toggle._checked = not self.toggle._checked
         self.toggle.toggled.emit(self.toggle._checked)
         self.toggle.update()
@@ -215,10 +231,6 @@ class PermissionRow(QWidget):
 
     def sizeHint(self) -> QSize:
         return super().sizeHint()
-
-
-# ── Navigation Item ───────────────────────────────────────────────────────────
-
 
 class NavItem(QWidget):
     """Sidebar navigation row: icon + label."""

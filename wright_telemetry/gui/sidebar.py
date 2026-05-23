@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -72,6 +74,11 @@ class Sidebar(QWidget):
             item.clicked.connect(self._on_clicked)
             inner_layout.addWidget(item)
             self._items[key] = item
+
+        # ── Portal signup card (shown when no portal account detected) ────────
+        self._signup_card = self._make_signup_card()
+        inner_layout.addSpacing(8)
+        inner_layout.addWidget(self._signup_card)
 
         inner_layout.addStretch(1)
 
@@ -163,6 +170,61 @@ class Sidebar(QWidget):
             f"color: {label_color}; background: transparent;"
         )
         self._ws_label.setText(label_text)
+
+    def set_portal_connected(self, connected: bool) -> None:
+        """Show/hide the Overview nav item based on portal account status.
+
+        When ``connected`` is False (no portal account detected) the Overview
+        nav item is hidden and the signup card is shown in its place.
+        """
+        self._items["overview"].setVisible(connected)
+        self._signup_card.setVisible(not connected)
+
+    def _make_signup_card(self) -> QWidget:
+        """Sidebar card: label + full-width button + tagline."""
+        card = QWidget()
+        card.setContentsMargins(T.SIDEBAR_PADDING, 0, T.SIDEBAR_PADDING, 0)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        label = QLabel("CREATE AN ACCOUNT")
+        label.setFont(make_font(10, 600))
+        label.setStyleSheet(
+            f"color: {T.TEXT_MUTED}; background: transparent; letter-spacing: 0.8px;"
+        )
+        layout.addWidget(label)
+
+        btn = QPushButton("Create Account")
+        btn.setFont(make_font(13, 600))
+        btn.setFixedHeight(36)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {T.ACCENT_BLUE};
+                color: white;
+                border: none;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background: {T.ACCENT_BLUE_HOVER};
+            }}
+        """)
+        btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://portal.wrightfan.com"))
+        )
+        layout.addWidget(btn)
+
+        tagline = QLabel("Save money by replacing your fans before they fail.")
+        tagline.setFont(make_font(11, 400))
+        tagline.setStyleSheet(
+            f"color: {T.TEXT_MUTED}; background: transparent;"
+        )
+        tagline.setWordWrap(True)
+        layout.addWidget(tagline)
+
+        return card
 
     def set_active(self, key: str) -> None:
         for k, item in self._items.items():

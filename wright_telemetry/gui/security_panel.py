@@ -1,4 +1,4 @@
-"""Right-side security panel: dark security-profile card + white GitHub card."""
+"""Right-side security panel: dark security-profile card + GitHub card + Discord card."""
 
 from __future__ import annotations
 
@@ -49,12 +49,10 @@ def _dark_card(parent: QWidget | None = None) -> QWidget:
     layout.addLayout(header_row)
 
     # Description
-    desc = QLabel(
-        "Data never leaves your network without\npermission. AES-256 encrypted."
-    )
+    desc = QLabel("AES-256 encrypted. Nothing leaves your network without your permission.")
     desc.setFont(make_font(*T.FONT_BODY_SMALL))
     desc.setStyleSheet(
-        f"color: {T.TEXT_ON_DARK_MUTED}; border: none; background: transparent;"
+        f"color: {T.TEXT_ON_DARK}; border: none; background: transparent;"
     )
     desc.setWordWrap(True)
     layout.addWidget(desc)
@@ -165,6 +163,80 @@ def _github_card(parent: QWidget | None = None) -> QWidget:
     return card
 
 
+def _discord_card(parent: QWidget | None = None) -> QWidget:
+    """Return the Discord community card."""
+    card = QWidget(parent)
+    card.setStyleSheet(f"""
+        QWidget {{
+            background: {T.BG_CARD};
+            border-radius: 8px;
+            border: 1px solid {T.BORDER_DEFAULT};
+        }}
+    """)
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(16, 14, 16, 14)
+    layout.setSpacing(8)
+
+    # Icon area
+    img_area = QWidget()
+    img_area.setFixedHeight(72)
+    img_area.setStyleSheet(f"""
+        QWidget {{
+            background: #5865F2;
+            border-radius: 6px;
+            border: none;
+        }}
+    """)
+    img_layout = QVBoxLayout(img_area)
+    ph_icon = QLabel("#")
+    ph_icon.setFont(make_font(24, 700))
+    ph_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    ph_icon.setStyleSheet(
+        "color: white; border: none; background: transparent;"
+    )
+    img_layout.addWidget(ph_icon)
+    layout.addWidget(img_area)
+
+    # Title
+    title = QLabel("Discord Community")
+    title.setFont(make_font(13, 600))
+    title.setStyleSheet(
+        f"color: {T.TEXT_PRIMARY}; border: none; background: transparent;"
+    )
+    layout.addWidget(title)
+
+    # Description
+    desc = QLabel("Get help, share feedback, and talk to the Wright One team.")
+    desc.setFont(make_font(*T.FONT_BODY_SMALL))
+    desc.setStyleSheet(
+        f"color: {T.TEXT_SECONDARY}; border: none; background: transparent;"
+    )
+    desc.setWordWrap(True)
+    layout.addWidget(desc)
+
+    layout.addSpacing(2)
+
+    # Join button
+    join_btn = QPushButton("Join Discord")
+    join_btn.setFont(make_font(*T.FONT_BUTTON))
+    join_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    join_btn.setStyleSheet(f"""
+        QPushButton {{
+            background: transparent;
+            color: {T.TEXT_PRIMARY};
+            border: 1px solid {T.BORDER_DEFAULT};
+            border-radius: 6px;
+            padding: 7px 14px;
+        }}
+        QPushButton:hover {{
+            background: {T.BG_SIDEBAR};
+        }}
+    """)
+    layout.addWidget(join_btn)
+
+    return card
+
+
 class SecurityPanel(QWidget):
     """Fixed-width right panel: light background, dark security card on top,
     white GitHub card below."""
@@ -183,4 +255,5 @@ class SecurityPanel(QWidget):
 
         layout.addWidget(_dark_card())
         layout.addWidget(_github_card())
+        layout.addWidget(_discord_card())
         layout.addStretch(1)
