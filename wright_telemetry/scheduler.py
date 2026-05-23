@@ -63,8 +63,8 @@ def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     Miners in ``cfg["miners"]`` are always included for backwards compatibility —
     users who ran an older setup wizard may have miners written there.  Discovered
     miners are merged in-memory only; nothing is ever written back to the config
-    file.  Posting miners to the API (``mark_miner``) is handled separately by
-    :func:`_report_miners_to_api` after identities are fetched.
+    file.  The server upserts the miners table automatically from the
+    ``miner_identity`` field present on every telemetry payload.
     """
     # Backwards compat: miners explicitly listed in the config file.
     config_miners: list[dict[str, Any]] = list(cfg.get("miners", []))
@@ -86,36 +86,6 @@ def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
 
     # Merge in-memory only — config file is never touched.
     return merge_miners(config_miners, discovered_cfgs)
-
-
-def _report_miners_to_api(
-    api_client: WrightAPIClient,
-    facility_id: str,
-    identities: dict[str, MinerIdentity],
-) -> None:
-    """POST every known miner to the API with ``metric_type='mark_miner'``.
-
-    Called once on startup and again whenever new miners are discovered at
-    runtime.  Never called on every poll cycle — this is registration, not
-    telemetry.
-    """
-    for _url, identity in identities.items():
-        try:
-            api_client.send(TelemetryPayload(
-                metric_type="mark_miner",
-                facility_id=facility_id,
-                miner_identity=identity,
-                data={
-                    "ip": identity.ip_address,
-                    "firmware": identity.firmware,
-                    "hostname": identity.hostname,
-                    "mac_address": identity.mac_address,
-                },
-            ))
-        except Exception as exc:
-            logger.warning(
-                "Failed to report miner '%s' to API: %s", identity.uid, exc
-            )
 
 
 def _build_collectors(
@@ -197,22 +167,7 @@ def _fetch_identities(
 
 
 
-def _mark_miner_wright_fans(
-    api_client: WrightAPIClient,
-    facility_id: str,
-    identity: MinerIdentity,
-    wright_fans: bool,
-) -> None:
-    """Send metric_type='mark_miner' to set wright_fans on the miner record in the DB."""
-    try:
-        api_client.send(TelemetryPayload(
-            metric_type="mark_miner",
-            facility_id=facility_id,
-            miner_identity=identity,
-            data={"wright_fans": wright_fans},
-        ))
-    except Exception as exc:
-        logger.warning("Failed to mark wright fans for miner '%s': %s", identity.uid, exc)
+
 
 
 def _print_baseline_dashboard(name: str, baseline: Any) -> None:
@@ -340,7 +295,6 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
         collectors = _build_collectors(all_miners, default_collector_type)
         _authenticate_all(collectors)
         identities = _fetch_identities(collectors)
-        _report_miners_to_api(api_client, facility_id, identities)
     except KeyboardInterrupt:
         print("\n[BASELINE] Skipped.")
         for _, c in collectors:
@@ -402,9 +356,6 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
                     ]
                     print(f"[BASELINE] Baseline established for '{name}' — marking as stock fans")
                     logger.info("Baseline established for '%s' (mac=%s): %s", name, mac, fan_baselines)
-                    identity_obj = identities.get(url)
-                    if identity_obj:
-                        _mark_miner_wright_fans(api_client, facility_id, identity_obj, False)
                     baselined.add(url)
 
             time.sleep(_FAN_DETECTION_POLL_INTERVAL)
@@ -575,8 +526,6 @@ def _emit_ws_fan_switch_events(
             "transition_type": ev["transition_type"],
         })
         if ev["transition_type"] == "on":
-            if identity:
-                _mark_miner_wright_fans(api_client, facility_id, identity, True)
             controller.push_event({
                 "event": "wright_fan_detected",
                 "miner": name,
@@ -604,8 +553,6 @@ def _handle_wright_fan_dip_detection(
         name,
         dipped,
     )
-    if identity:
-        _mark_miner_wright_fans(api_client, facility_id, identity, True)
     print(
         f"[WRIGHT FAN] All fans dipped on '{name}' "
         f"(positions {dipped}) — marking as Wright fans"
@@ -676,7 +623,6 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
             collectors = _build_collectors(all_miners, default_collector_type)
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
-            _report_miners_to_api(api_client, facility_id, identities)
 
             consecutive_crashes = 0
             fan_rpm_history: dict[tuple[str, int], deque] = {}
@@ -774,7 +720,6 @@ def _run_ws_fan_detection(
     collectors = _build_collectors(miners, default_collector_type)
     _authenticate_all(collectors)
     identities = _fetch_identities(collectors)
-    _report_miners_to_api(api_client, facility_id, identities)
 
     controller.push_event({
         "event": "fan_detection_started",
@@ -892,7 +837,6 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
-            _report_miners_to_api(api_client, facility_id, identities)
 
             if controller:
                 controller.push_gui_event({
@@ -968,7 +912,6 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
                         _authenticate_all(new_collectors)
                         new_ids = _fetch_identities(new_collectors)
-                        _report_miners_to_api(api_client, facility_id, new_ids)
 
                         collectors.extend(new_collectors)
                         identities.update(new_ids)

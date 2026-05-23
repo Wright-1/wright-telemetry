@@ -198,10 +198,8 @@ def main() -> None:
 
     if args.subnets_file:
         from wright_telemetry.discovery import (
-            discovered_to_miner_cfgs,
             firmware_types_for_collector,
             load_subnets_file,
-            merge_miners,
             run_interactive_discovery,
         )
         from wright_telemetry.config import save_config
@@ -231,14 +229,8 @@ def main() -> None:
                 mac = f"  mac: {m.mac_address}" if m.mac_address else ""
                 print(f"  {m.ip:<16} {m.firmware:<10}{host}{mac}")
 
-            # Persist discovered miners so baseline can reach them
-            disc_cfg = cfg.get("discovery", {})
-            default_user = disc_cfg.get("default_username", "root")
-            default_pw_b64 = disc_cfg.get("default_password_b64", "")
-            manual = [m for m in cfg.get("miners", []) if not m.get("discovered")]
-            discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
-            cfg["miners"] = merge_miners(manual, discovered_cfgs)
-            save_config(cfg)
+        # Miners are not persisted to config — discovery loads them into memory
+        # at runtime and the server upserts from telemetry payloads.
 
         configure_logging(facility_id=cfg.get("facility_id", "unknown"))
         from wright_telemetry.scheduler import run_baseline_collection
