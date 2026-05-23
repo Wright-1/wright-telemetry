@@ -204,7 +204,6 @@ class ScanningEngine:
     def _fetch_agent_info(self) -> None:
         from wright_telemetry.portal_client import fetch_agent_info
         fetch_agent_info(
-            api_url=self._cfg.get("wright_api_url", ""),
             api_key=self._cfg.get("wright_api_key", ""),
             push_gui_event=self.controller.push_gui_event,
         )

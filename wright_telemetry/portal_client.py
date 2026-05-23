@@ -1,7 +1,12 @@
 """Lightweight HTTP client for agent-facing portal endpoints.
 
-All network calls are made on a daemon thread; results are pushed into
-the GUI event queue so the Qt main thread never blocks.
+All portal routes are unauthenticated or use per-request auth headers —
+they do not go through WrightAPIClient's session.  URLs are built via
+build_url(..., pipeline=False) from api_client so the base URL is always
+read from settings in one place.
+
+Network calls that serve the GUI run on a daemon thread so the Qt main
+thread never blocks.
 """
 
 from __future__ import annotations
@@ -12,20 +17,16 @@ from typing import Any
 
 import requests
 
+from wright_telemetry.api_client import build_url
+
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 10  # seconds
 
 
-def redeem_access_key_sync(api_url: str, access_key: str) -> dict:
-    """Synchronous version of redeem_access_key for TUI/CLI use.
-
-    Returns the same shape as the async callback:
-      {"success": True,  "apiKey": "...", "facilityId": "..."}
-      {"success": False, "error": "..."}
-    """
-    base = api_url.rstrip("/")
-    url = f"{base}/api/internal/provision/redeem"
+def _redeem(access_key: str) -> dict:
+    """Core redeem logic shared by the sync and async variants."""
+    url = build_url("internal/provision/redeem", pipeline=False)
     print(f"[WRIGHT] POST {url}")
     try:
         r = requests.post(url, json={"accessKey": access_key}, timeout=_TIMEOUT)
@@ -44,74 +45,44 @@ def redeem_access_key_sync(api_url: str, access_key: str) -> dict:
         return {"success": False, "error": str(exc)}
 
 
-def redeem_access_key(
-    api_url: str,
-    access_key: str,
-    callback: Any,
-) -> None:
-    """Exchange an access key for an api_key + facility_id.
+def redeem_access_key_sync(access_key: str) -> dict:
+    """Synchronous access-key redeem for TUI/CLI use.
 
-    Calls POST /api/internal/provision/redeem and invokes *callback* with a dict:
-      {"success": True, "apiKey": "...", "facilityId": "..."}
+    Returns:
+      {"success": True,  "apiKey": "...", "facilityId": "..."}
       {"success": False, "error": "..."}
-
-    Runs on a daemon thread so the Qt main thread never blocks.
     """
+    return _redeem(access_key)
 
-    def _run() -> None:
-        base = api_url.rstrip("/")
-        url = f"{base}/api/internal/provision/redeem"
-        print(f"[WRIGHT] POST {url}")
-        try:
-            r = requests.post(
-                url,
-                json={"accessKey": access_key},
-                timeout=_TIMEOUT,
-            )
-            payload = r.json()
-            print(f"[WRIGHT] POST {url} → {r.status_code}")
-            if r.status_code == 200 and payload.get("success"):
-                data = payload.get("data", {})
-                print(f"[WRIGHT] Provisioned — facilityId: {data['facilityId']}  apiKey: {data['apiKey']}")
-                callback({"success": True, "apiKey": data["apiKey"], "facilityId": data["facilityId"]})
-            else:
-                err = payload.get("error") or payload.get("message") or f"HTTP {r.status_code}"
-                logger.warning("access-key redeem failed: %s", err)
-                callback({"success": False, "error": err})
-        except Exception as exc:
-            print(f"[WRIGHT] POST {url} → ERROR: {exc}")
-            logger.warning("access-key redeem exception: %s", exc)
-            callback({"success": False, "error": str(exc)})
 
-    t = threading.Thread(target=_run, daemon=True, name="wright-provision-redeem")
+def redeem_access_key(access_key: str, callback: Any) -> None:
+    """Async access-key redeem for GUI use.
+
+    Runs on a daemon thread and invokes *callback* with the same dict
+    shape as redeem_access_key_sync.  The callback is responsible for
+    marshalling back to the Qt main thread (use a pyqtSignal).
+    """
+    t = threading.Thread(
+        target=lambda: callback(_redeem(access_key)),
+        daemon=True,
+        name="wright-provision-redeem",
+    )
     t.start()
 
 
-def fetch_agent_info(
-    api_url: str,
-    api_key: str,
-    push_gui_event: Any,
-) -> None:
+def fetch_agent_info(api_key: str, push_gui_event: Any) -> None:
     """Fetch facility + customer info from GET /api/agent/info.
 
     Runs on a daemon thread.  Pushes one of:
-      {"event": "agent_info", "data": {...}}
+      {"event": "agent_info",       "data": {...}}
       {"event": "agent_info_error", "error": "..."}
     """
 
     def _run() -> None:
-        base = api_url.rstrip("/")
-        # Strip trailing /api if already present so we don't double it
-        if base.endswith("/api"):
-            base = base[: -len("/api")]
-        url = f"{base}/api/agent/info"
+        url = build_url("agent/info", pipeline=False)
         print(f"[WRIGHT] GET {url}")
         try:
-            r = requests.get(
-                url,
-                headers={"x-api-key": api_key},
-                timeout=_TIMEOUT,
-            )
+            r = requests.get(url, headers={"x-api-key": api_key}, timeout=_TIMEOUT)
             payload = r.json()
             print(f"[WRIGHT] GET {url} → {r.status_code}")
             if r.status_code == 200 and payload.get("success"):
@@ -125,5 +96,4 @@ def fetch_agent_info(
             logger.warning("agent-info fetch exception: %s", exc)
             push_gui_event({"event": "agent_info_error", "error": str(exc)})
 
-    t = threading.Thread(target=_run, daemon=True, name="wright-portal-info")
-    t.start()
+    threading.Thread(target=_run, daemon=True, name="wright-portal-info").start()

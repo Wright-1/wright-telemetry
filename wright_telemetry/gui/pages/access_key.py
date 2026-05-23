@@ -193,12 +193,8 @@ class AccessKeyPage(QWidget):
 
         from wright_telemetry.portal_client import redeem_access_key
         from wright_telemetry.config import load_config
-        from wright_telemetry.settings import API_URL
 
         cfg = load_config() or {}
-        # Prefer an already-saved URL (e.g. from a previous partial setup),
-        # then fall back to the env-var-backed default.
-        api_url = cfg.get("wright_api_url") or API_URL
 
         def _on_result(result: dict) -> None:
             # Called from the background redeem thread.  Emit a signal so Qt
@@ -206,7 +202,7 @@ class AccessKeyPage(QWidget):
             # without a receiver context is unreliable from non-Qt threads.
             self._redeem_done.emit({"result": result, "cfg": cfg})
 
-        redeem_access_key(api_url=api_url, access_key=raw_key, callback=_on_result)
+        redeem_access_key(access_key=raw_key, callback=_on_result)
 
     def _handle_result(self, payload: dict) -> None:
         result: dict = payload["result"]

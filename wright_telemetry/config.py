@@ -686,7 +686,7 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
             validate=_require_nonempty,
         )
         console.print("  [dim]Contacting Wright One…[/]")
-        result = redeem_access_key_sync(api_url=API_URL, access_key=access_key)
+        result = redeem_access_key_sync(access_key=access_key)
 
         if result["success"]:
             cfg["wright_api_key"] = result["apiKey"]
