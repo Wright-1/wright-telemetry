@@ -186,7 +186,7 @@ class AccessKeyPage(QWidget):
         self._set_loading(True)
         self._set_status("Connecting to Wright One…")
 
-        from wright_telemetry.gui.portal_client import redeem_access_key
+        from wright_telemetry.portal_client import redeem_access_key
         from wright_telemetry.config import load_config, _DEFAULT_WRIGHT_API_URL
 
         cfg = load_config() or {}

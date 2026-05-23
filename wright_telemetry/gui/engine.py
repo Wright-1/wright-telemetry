@@ -202,7 +202,7 @@ class ScanningEngine:
     # ── Internal helpers ─────────────────────────────────────────────────────
 
     def _fetch_agent_info(self) -> None:
-        from wright_telemetry.gui.portal_client import fetch_agent_info
+        from wright_telemetry.portal_client import fetch_agent_info
         fetch_agent_info(
             api_url=self._cfg.get("wright_api_url", ""),
             api_key=self._cfg.get("wright_api_key", ""),
