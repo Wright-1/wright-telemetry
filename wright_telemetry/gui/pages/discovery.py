@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Optional
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
 from wright_telemetry.gui.scan_manager import SubnetScanResult
-from wright_telemetry.gui.widgets import ToggleSwitch
+from wright_telemetry.gui.widgets import PrimaryButton, ToggleSwitch
 
 if TYPE_CHECKING:
     from wright_telemetry.gui.engine import ScanningEngine
@@ -682,11 +682,11 @@ class _ActiveScansCard(QWidget):
         self._outer.addWidget(_hdiv())
 
         # ── Scrollable rows ───────────────────────────────────────────────────
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setStyleSheet("background: transparent;")
-        scroll.setMinimumHeight(120)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._scroll.setStyleSheet("background: transparent;")
+        self._scroll.setMinimumHeight(120)
 
         self._rows_widget = QWidget()
         self._rows_widget.setStyleSheet("background: transparent;")
@@ -695,8 +695,8 @@ class _ActiveScansCard(QWidget):
         self._rows_layout.setSpacing(0)
         self._rows_layout.addStretch()
 
-        scroll.setWidget(self._rows_widget)
-        self._outer.addWidget(scroll, 1)
+        self._scroll.setWidget(self._rows_widget)
+        self._outer.addWidget(self._scroll, 1)
 
     def add_or_update_row(self, result: SubnetScanResult) -> None:
         if result.subnet in self._rows:
@@ -737,6 +737,8 @@ class _ActiveScansCard(QWidget):
 class DiscoveryPage(QWidget):
     """Discovery page with live subnet scan queue."""
 
+    next_clicked = pyqtSignal()
+
     def __init__(self, engine: Optional["ScanningEngine"] = None, parent=None):
         super().__init__(parent)
         self._engine = engine
@@ -744,23 +746,35 @@ class DiscoveryPage(QWidget):
         self._total_miners = 0
         self._last_scan_ts: Optional[float] = None
         self._had_cancel = False
+        self._failed_scan_count = 0  # warning shown only after 2 empty scans
 
         self.setStyleSheet(f"background: {T.BG_WINDOW};")
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setStyleSheet("background: transparent;")
-
-        content = QWidget()
-        content.setStyleSheet(f"background: {T.BG_WINDOW};")
-        layout = QVBoxLayout(content)
+        self._content = QWidget()
+        self._content.setStyleSheet(f"background: {T.BG_WINDOW};")
+        layout = QVBoxLayout(self._content)
         layout.setContentsMargins(T.CONTENT_PADDING, T.CONTENT_PADDING,
                                   T.CONTENT_PADDING, T.CONTENT_PADDING)
         layout.setSpacing(20)
 
         # ── Heading ───────────────────────────────────────────────────────────
-        layout.addWidget(_lbl("Discover Miners", 22, 700, T.TEXT_PRIMARY))
+        heading = QLabel("Discover Miners")
+        heading.setFont(make_font(*T.FONT_PAGE_HEADING))
+        heading.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
+        layout.addWidget(heading)
+
+        layout.addSpacing(8)
+
+        desc = QLabel(
+            "Every facility is wired differently. Tell the agent which subnets "
+            "your miners are on so it knows where to look."
+        )
+        desc.setFont(make_font(*T.FONT_PAGE_DESC))
+        desc.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        layout.addSpacing(20)
 
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
@@ -784,10 +798,14 @@ class DiscoveryPage(QWidget):
         self._scans_card = _ActiveScansCard(engine)
         layout.addWidget(self._scans_card, 1)
 
-        scroll.setWidget(content)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll)
+        self._page_scroll = QScrollArea()
+        self._page_scroll.setWidgetResizable(True)
+        self._page_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._page_scroll.setStyleSheet("background: transparent;")
+        self._page_scroll.setWidget(self._content)
+        self._page_outer = QVBoxLayout(self)
+        self._page_outer.setContentsMargins(0, 0, 0, 0)
+        self._page_outer.addWidget(self._page_scroll)
 
         # ── Populate from existing scan state ─────────────────────────────────
         if engine is not None:
@@ -823,6 +841,13 @@ class DiscoveryPage(QWidget):
         self._ts_timer.start()
 
     # ── Signal wiring ────────────────────────────────────────────────────────
+
+    def wire_engine(self, engine: "ScanningEngine") -> None:
+        """Attach a freshly created engine after provisioning."""
+        self._engine = engine
+        self._progress_entry._engine = engine
+        self._scans_card._engine = engine
+        self._connect_signals(engine)
 
     def _connect_signals(self, engine: "ScanningEngine") -> None:
         engine.signals.scan_queued.connect(self._on_scan_queued)
@@ -885,14 +910,16 @@ class DiscoveryPage(QWidget):
     def _on_queue_empty(self) -> None:
         self._progress_entry.set_idle(self._last_scan_ts)
         self._set_status_idle()
-        # Only show warning when queue fully completes with no cancels and no miners
-        show = self._scan_completed and self._total_miners == 0 and not self._had_cancel
+        # Increment failure counter when scan completes with 0 miners
+        if self._scan_completed and self._total_miners == 0 and not self._had_cancel:
+            self._failed_scan_count += 1
+        # Show warning only after two consecutive empty scans
+        show = self._failed_scan_count >= 2
         self._warning.setVisible(show)
         self._had_cancel = False   # reset for next scan session
 
     def _on_total_changed(self, total: int) -> None:
         self._total_miners = total
-        # Warning visibility is controlled by _on_queue_empty, not here
         self._warning.setVisible(False)
         if total > 0:
             n = len(self._scans_card._rows)

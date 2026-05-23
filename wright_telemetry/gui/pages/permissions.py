@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QScrollArea,
@@ -20,7 +21,7 @@ from PyQt6.QtWidgets import (
 from wright_telemetry.consent import DEFAULT_CONSENT, METRICS
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
-from wright_telemetry.gui.widgets import PermissionRow, PrimaryButton, SecondaryButton
+from wright_telemetry.gui.widgets import PermissionRow
 
 if TYPE_CHECKING:
     from wright_telemetry.gui.engine import ScanningEngine
@@ -82,51 +83,69 @@ class PermissionsPage(QWidget):
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
         scroll_layout.setContentsMargins(0, 0, 0, 0)
-        scroll_layout.setSpacing(8)
+        scroll_layout.setSpacing(0)
+
+        # All rows sit inside one shared card
+        card = QWidget()
+        card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        card.setObjectName("perm_card")
+        card.setStyleSheet(f"""
+            QWidget#perm_card {{
+                background: {T.BG_CARD};
+                border: 1px solid {T.BORDER_DEFAULT};
+                border-radius: 8px;
+            }}
+        """)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(0)
+
+        # Concise one-line subtitles — the full description is in the expanded detail.
+        _SUBTITLES: dict[str, str] = {
+            "cooling":       "Temperature sensors and fan speeds from your miner",
+            "hashrate":      "Hashrate, pool stats, and power consumption",
+            "uptime":        "Miner uptime and current firmware version",
+            "hashboards":    "Temperature and status for each hashboard",
+            "errors":        "Error log: timestamps, error codes, and affected components",
+            "auto_update":   "Auto-download and apply new agent versions in the background",
+            "remote_config": "View and update agent config remotely from your dashboard",
+        }
 
         self.rows: list[PermissionRow] = []
-        for key, info in METRICS.items():
-            # Build detail text: full description + the API endpoint it calls.
-            detail = info["description"] + f"\n\nAPI call: {info['endpoint']}"
-            # First sentence of description becomes the subtitle.
-            subtitle = info["description"].split("\n")[0].rstrip(".")
+        items = list(METRICS.items())
+        for i, (key, info) in enumerate(items):
+            endpoint = info["endpoint"]
+            detail = info["description"] + f"\n\nAPI call: {endpoint}"
+            subtitle = _SUBTITLES.get(key, info["description"].split("\n")[0].rstrip("."))
             color = T.CATEGORY_COLORS.get(key, T.ACCENT_BLUE)
             row = PermissionRow(
                 key=key,
-                icon=T.CATEGORY_ICONS.get(key, "●"),
+                icon=T.CATEGORY_ICONS.get(key, "*"),
                 title=info["label"],
                 subtitle=subtitle,
                 detail=detail,
                 category_color=color,
                 checked=saved_consent.get(key, False),
             )
-            scroll_layout.addWidget(row)
+            card_layout.addWidget(row)
             row.toggle.toggled.connect(self._on_toggle_changed)
             self.rows.append(row)
 
+            # Separator between rows (not after the last one)
+            if i < len(items) - 1:
+                sep = QFrame()
+                sep.setFrameShape(QFrame.Shape.HLine)
+                sep.setFixedHeight(1)
+                sep.setStyleSheet(
+                    f"background: {T.BORDER_SUBTLE}; border: none; "
+                    f"margin-left: 64px;"
+                )
+                card_layout.addWidget(sep)
+
+        scroll_layout.addWidget(card)
         scroll_layout.addStretch()
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll, 1)
-
-        # ── Bottom bar ────────────────────────────────────────────────────────
-        outer.addSpacing(12)
-        bottom = QHBoxLayout()
-        bottom.setContentsMargins(0, 12, 0, 16)
-
-        help_lbl = QLabel("ⓘ  Need help? <a style='color: " + T.ACCENT_BLUE + ";' href='#'>Security Guide.</a>")
-        help_lbl.setFont(make_font(*T.FONT_BODY_SMALL))
-        help_lbl.setStyleSheet(f"color: {T.TEXT_MUTED};")
-        help_lbl.setTextFormat(Qt.TextFormat.RichText)
-        bottom.addWidget(help_lbl)
-
-        bottom.addStretch()
-
-        next_btn = PrimaryButton("Next: Discover Miners  →")
-        next_btn.clicked.connect(self._on_next)
-        bottom.addWidget(next_btn)
-
-        outer.addLayout(bottom)
-
     def get_consent(self) -> dict[str, bool]:
         """Return current toggle states as a consent dict."""
         return {row.key: row.toggle.isChecked() for row in self.rows}
