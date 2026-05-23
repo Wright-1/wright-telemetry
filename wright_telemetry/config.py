@@ -171,6 +171,20 @@ _REQUIRED_FIELD_LABELS: dict[str, str] = {
     "consent":               "Data Sharing Preferences",
 }
 
+def ensure_config_file() -> dict[str, Any]:
+    """Shared bootstrap used by both the CLI and GUI.
+
+    Guarantees that ``~/.wright-telemetry/`` and ``config.json`` exist,
+    creating them when this is the first run.  Returns the loaded config
+    dict (empty ``{}`` if newly created, so callers never get ``None``).
+    """
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if not CONFIG_FILE.exists():
+        save_config({})
+        print(f"[WRIGHT] Created config at {CONFIG_FILE}")
+    return load_config() or {}
+
+
 def load_config() -> Optional[dict[str, Any]]:
     """Load config from disk. Returns None if the file doesn't exist."""
     if not CONFIG_FILE.exists():

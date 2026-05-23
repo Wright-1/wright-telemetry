@@ -45,6 +45,7 @@ def redeem_access_key(
             print(f"[WRIGHT] POST {url} → {r.status_code}")
             if r.status_code == 200 and payload.get("success"):
                 data = payload.get("data", {})
+                print(f"[WRIGHT] Provisioned — facilityId: {data['facilityId']}  apiKey: {data['apiKey']}")
                 callback({"success": True, "apiKey": data["apiKey"], "facilityId": data["facilityId"]})
             else:
                 err = payload.get("error") or payload.get("message") or f"HTTP {r.status_code}"

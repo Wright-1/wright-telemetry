@@ -7,7 +7,7 @@ import sys
 from PyQt6.QtWidgets import QApplication
 
 from wright_telemetry import __version__
-from wright_telemetry.config import load_config
+from wright_telemetry.config import ensure_config_file, is_config_complete
 from wright_telemetry.gui.engine import ScanningEngine
 from wright_telemetry.gui.main_window import MainWindow
 from wright_telemetry.logging_setup import configure_logging
@@ -19,16 +19,20 @@ def run_gui() -> None:
     app.setApplicationName("Wright Telemetry")
     app.setStyle("Fusion")
 
-    cfg = load_config() or {}
+    # Shared bootstrap: mirrors what the CLI does in __main__.py.
+    # Ensures ~/.wright-telemetry/config.json exists before anything else
+    # runs, then loads it (empty dict on first launch).
+    cfg = ensure_config_file()
     configure_logging(facility_id=cfg.get("facility_id", "unknown"))
 
-    # Determine whether we need to provision credentials first.
-    # If api_key or facility_id are missing the engine cannot connect,
-    # so we show the access-key page before starting anything.
-    needs_provisioning = not (
-        cfg.get("wright_api_key", "").strip()
-        and cfg.get("facility_id", "").strip()
-    )
+    # A config is considered ready when the two credentials the engine
+    # needs are present.  is_config_complete() uses the same rules as
+    # the CLI so the two paths stay in sync.
+    complete, missing = is_config_complete(cfg)
+    if not complete:
+        print(f"[WRIGHT] Config incomplete — missing: {', '.join(missing)}")
+
+    needs_provisioning = not complete
 
     if needs_provisioning:
         # Engine is created later by MainWindow._on_provisioned()

@@ -27,7 +27,7 @@ from wright_telemetry import __version__
 
 console = Console()
 from wright_telemetry.api_client import WrightAPIClient
-from wright_telemetry.config import CONFIG_DIR, is_config_complete, load_config, print_config_summary, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
+from wright_telemetry.config import CONFIG_DIR, ensure_config_file, is_config_complete, load_config, print_config_summary, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
 from wright_telemetry.updater import check_for_update
@@ -163,10 +163,9 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    # Ensure the data/log directory exists early so that launchd (macOS) can
-    # open its stdout/stderr log paths on the next reboot.  Running any
-    # subcommand with an updated binary is enough to heal existing installs.
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    # Ensure ~/.wright-telemetry/ and config.json exist before anything else.
+    # Uses the shared ensure_config_file() so CLI and GUI behave identically.
+    ensure_config_file()
 
     args = _parse_args()
 
@@ -255,7 +254,7 @@ def main() -> None:
     if sys.stdin.isatty() and (args.set_config or ("WRIGHT_CONFIG" not in os.environ)):
         prompt_config_location(force=args.set_config)
 
-    # Load or create config
+    # Load config (file is guaranteed to exist after ensure_config_file() above)
     cfg = load_config()
 
     # Backfill consent fields that were added after the initial release so
