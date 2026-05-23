@@ -24,7 +24,7 @@ def redeem_access_key(
 ) -> None:
     """Exchange an access key for an api_key + facility_id.
 
-    Calls POST /api/v2/provision/redeem and invokes *callback* with a dict:
+    Calls POST /api/internal/provision/redeem and invokes *callback* with a dict:
       {"success": True, "apiKey": "...", "facilityId": "..."}
       {"success": False, "error": "..."}
 
@@ -33,7 +33,7 @@ def redeem_access_key(
 
     def _run() -> None:
         base = api_url.rstrip("/")
-        url = f"{base}/api/provision/redeem"
+        url = f"{base}/api/internal/provision/redeem"
         print(f"[WRIGHT] POST {url}")
         try:
             r = requests.post(
