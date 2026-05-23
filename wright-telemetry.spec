@@ -4,7 +4,7 @@ PyInstaller spec for wright-telemetry.
 
 Produces two artefacts:
   1. wright-telemetry          — single-file CLI binary (console=True)
-  2. Wright Telemetry.app      — macOS double-clickable GUI bundle (windowed)
+  2. WrightData.app      — macOS double-clickable GUI bundle (windowed)
 
 Run with:
     pyinstaller wright-telemetry.spec
@@ -170,17 +170,17 @@ _icon_arg  = str(_icon_path) if _icon_path.exists() else None
 
 app = BUNDLE(
     gui_coll,
-    name="Wright Telemetry.app",
+    name="WrightData.app",
     icon=_icon_arg,
     bundle_identifier="com.wrightone.wright-telemetry",
     version="0.7.3",
     info_plist={
         # Human-readable name shown in Finder / Dock / menu bar
-        "CFBundleName":            "Wright Telemetry",
-        "CFBundleDisplayName":     "Wright Telemetry",
+        "CFBundleName":            "WrightData",
+        "CFBundleDisplayName":     "WrightData",
         "CFBundleVersion":         "0.7.3",
         "CFBundleShortVersionString": "0.7.3",
-        "CFBundleIdentifier":      "com.wrightone.wright-telemetry",
+        "CFBundleIdentifier":      "com.wrightone.wrightdata",
         "CFBundleExecutable":      "wright-telemetry-gui",
 
         # macOS category — shown in Launchpad / App Store searches
@@ -199,7 +199,7 @@ app = BUNDLE(
         # Microphone / camera / network — not used; listed to silence
         # macOS privacy prompts that can appear on first launch
         "NSLocalNetworkUsageDescription":
-            "Wright Telemetry scans your local network to discover miners.",
+            "WrightData scans your local network to discover miners.",
 
         # Allow the app to open immediately without Gatekeeper blocking
         # the whole process on first run (user still gets the one-time
