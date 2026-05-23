@@ -17,6 +17,33 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 10  # seconds
 
 
+def redeem_access_key_sync(api_url: str, access_key: str) -> dict:
+    """Synchronous version of redeem_access_key for TUI/CLI use.
+
+    Returns the same shape as the async callback:
+      {"success": True,  "apiKey": "...", "facilityId": "..."}
+      {"success": False, "error": "..."}
+    """
+    base = api_url.rstrip("/")
+    url = f"{base}/api/internal/provision/redeem"
+    print(f"[WRIGHT] POST {url}")
+    try:
+        r = requests.post(url, json={"accessKey": access_key}, timeout=_TIMEOUT)
+        payload = r.json()
+        print(f"[WRIGHT] POST {url} → {r.status_code}")
+        if r.status_code == 200 and payload.get("success"):
+            data = payload.get("data", {})
+            print(f"[WRIGHT] Provisioned — facilityId: {data['facilityId']}  apiKey: {data['apiKey']}")
+            return {"success": True, "apiKey": data["apiKey"], "facilityId": data["facilityId"]}
+        err = payload.get("error") or payload.get("message") or f"HTTP {r.status_code}"
+        logger.warning("access-key redeem failed: %s", err)
+        return {"success": False, "error": err}
+    except Exception as exc:
+        print(f"[WRIGHT] POST {url} → ERROR: {exc}")
+        logger.warning("access-key redeem exception: %s", exc)
+        return {"success": False, "error": str(exc)}
+
+
 def redeem_access_key(
     api_url: str,
     access_key: str,
