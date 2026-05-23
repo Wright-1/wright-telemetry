@@ -7,7 +7,7 @@ import sys
 from PyQt6.QtWidgets import QApplication
 
 from wright_telemetry import __version__
-from wright_telemetry.config import ensure_config_file, is_config_complete
+from wright_telemetry.config import ensure_config_file
 from wright_telemetry.gui.engine import ScanningEngine
 from wright_telemetry.gui.main_window import MainWindow
 from wright_telemetry.logging_setup import configure_logging
@@ -25,14 +25,17 @@ def run_gui() -> None:
     cfg = ensure_config_file()
     configure_logging(facility_id=cfg.get("facility_id", "unknown"))
 
-    # A config is considered ready when the two credentials the engine
-    # needs are present.  is_config_complete() uses the same rules as
-    # the CLI so the two paths stay in sync.
-    complete, missing = is_config_complete(cfg)
-    if not complete:
-        print(f"[WRIGHT] Config incomplete — missing: {', '.join(missing)}")
+    # Only gate on the two credentials the engine actually needs.
+    # Other missing fields (poll interval, consent, etc.) don't prevent
+    # the agent from running — they have sensible defaults in the scheduler.
+    has_credentials = bool(
+        cfg.get("wright_api_key", "").strip()
+        and cfg.get("facility_id", "").strip()
+    )
+    if not has_credentials:
+        print("[WRIGHT] No credentials found — showing activation page")
 
-    needs_provisioning = not complete
+    needs_provisioning = not has_credentials
 
     if needs_provisioning:
         # Engine is created later by MainWindow._on_provisioned()

@@ -211,13 +211,14 @@ class AccessKeyPage(QWidget):
 
         if result.get("success"):
             # Persist credentials — the engine will be started fresh after this
-            cfg = load_config() or cfg
+            from wright_telemetry.config import _DEFAULT_POLL_INTERVAL, _DEFAULT_COLLECTOR_TYPES
             from wright_telemetry.settings import API_URL
+            cfg = load_config() or cfg
             cfg["wright_api_key"] = result["apiKey"]
             cfg["facility_id"] = result["facilityId"]
-            # Always record the URL that was actually used so the agent
-            # connects to the same environment after provisioning.
-            cfg["wright_api_url"] = cfg.get("wright_api_url") or API_URL
+            cfg.setdefault("wright_api_url", API_URL)
+            cfg.setdefault("poll_interval_seconds", _DEFAULT_POLL_INTERVAL)
+            cfg.setdefault("collector_types", list(_DEFAULT_COLLECTOR_TYPES))
             save_config(cfg)
             from wright_telemetry.config import CONFIG_FILE
             print(f"[WRIGHT] Config written → {CONFIG_FILE}")
