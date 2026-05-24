@@ -307,20 +307,9 @@ class _ProgressEntryCard(QWidget):
         """)
         entry.addWidget(self._cidr_input)
 
-        add_btn = QPushButton("ADD SUBNETS")
-        add_btn.setFont(make_font(12, 600))
-        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        add_btn.setFixedHeight(38)
-        add_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {T.TEXT_PRIMARY};
-                color: #FFFFFF;
-                border: none;
-                border-radius: 6px;
-                letter-spacing: 0.4px;
-            }}
-            QPushButton:hover {{ background: #2A2D35; }}
-        """)
+        add_btn = PrimaryButton("ADD SUBNETS")
+        add_btn.setFont(make_font(13, 700))
+        add_btn.setFixedHeight(44)
         add_btn.clicked.connect(self._on_add)
         entry.addWidget(add_btn)
 

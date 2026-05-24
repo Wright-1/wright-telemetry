@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -72,7 +73,43 @@ class PermissionsPage(QWidget):
         desc.setWordWrap(True)
         outer.addWidget(desc)
 
-        outer.addSpacing(20)
+        outer.addSpacing(16)
+
+        # ── Legal banner ──────────────────────────────────────────────────────
+        legal_banner = QWidget()
+        legal_banner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        legal_banner.setObjectName("legal_banner")
+        legal_banner.setStyleSheet(f"""
+            QWidget#legal_banner {{
+                background: {T.BG_CARD};
+                border: 1px solid {T.BORDER_DEFAULT};
+                border-radius: 8px;
+            }}
+        """)
+        legal_layout = QHBoxLayout(legal_banner)
+        legal_layout.setContentsMargins(14, 10, 14, 10)
+        legal_layout.setSpacing(0)
+
+        legal_text = QLabel(
+            "By enabling data collection you agree to the "
+            f'<a href="https://placeholder.wrightone.io/privacy" '
+            f'style="color: {T.ACCENT_BLUE}; text-decoration: none;">Privacy Policy</a>'
+            " and "
+            f'<a href="https://placeholder.wrightone.io/terms" '
+            f'style="color: {T.ACCENT_BLUE}; text-decoration: none;">Terms of Service</a>.'
+            " Data never leaves your local network without your consent."
+        )
+        legal_text.setFont(make_font(12, 400))
+        legal_text.setStyleSheet(f"color: {T.TEXT_SECONDARY}; background: transparent;")
+        legal_text.setWordWrap(True)
+        legal_text.setOpenExternalLinks(False)
+        legal_text.linkActivated.connect(
+            lambda url: QDesktopServices.openUrl(QUrl(url))
+        )
+        legal_layout.addWidget(legal_text, 1)
+        outer.addWidget(legal_banner)
+
+        outer.addSpacing(14)
 
         # ── Scrollable permission list ────────────────────────────────────────
         scroll = QScrollArea()
