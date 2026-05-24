@@ -34,6 +34,27 @@ _POST_TIMEOUT = 20  # seconds
 # URL builder  (used by WrightAPIClient.endpoint and portal_client)
 # ---------------------------------------------------------------------------
 
+def wright_api_url(base: str, *path: str) -> str:
+    """Build a versioned API URL from an explicit base URL and path segments.
+
+    Normalises ``base`` so that whether or not it already ends in ``/api``
+    the result is always ``{scheme+host}/api/v2/{path}``.
+
+    Examples::
+
+        wright_api_url("https://api.wrightfan.com", "telemetry")
+        # → "https://api.wrightfan.com/api/v2/telemetry"
+
+        wright_api_url("https://api.wrightfan.com/api", "ws", "agent")
+        # → "https://api.wrightfan.com/api/v2/ws/agent"
+    """
+    base = base.rstrip("/")
+    if base.endswith("/api"):
+        base = base[:-4]  # strip trailing /api so we can re-add it cleanly
+    tail = "/".join(path)
+    return f"{base}/api/v2/{tail}"
+
+
 def build_url(*path: str, pipeline: bool = True) -> str:
     """Build a full URL from path segments using the configured base URLs.
 
