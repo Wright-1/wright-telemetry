@@ -15,7 +15,6 @@ import ssl
 import threading
 from typing import Any, Optional
 
-from wright_telemetry.api_client import wright_api_url
 from wright_telemetry.config import load_config, save_config, mask_config
 
 logger = logging.getLogger(__name__)
@@ -33,6 +32,7 @@ class AgentController:
         self._mode_changed = threading.Event()
         self._config_reload = threading.Event()
         self._event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._gui_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
 
     @property
     def mode(self) -> str:
@@ -70,9 +70,27 @@ class AgentController:
                 break
         return events
 
+    def push_gui_event(self, event: dict[str, Any]) -> None:
+        """Push an event destined for the GUI (separate from the portal queue)."""
+        self._gui_event_queue.put_nowait(event)
+
+    def pop_gui_events(self) -> list[dict[str, Any]]:
+        """Drain and return all pending GUI events."""
+        events: list[dict[str, Any]] = []
+        while True:
+            try:
+                events.append(self._gui_event_queue.get_nowait())
+            except queue.Empty:
+                return events
+
     def request_config_reload(self) -> None:
-        """Signal the scheduler to reload config from disk."""
+        """Signal the scheduler to reload config from disk.
+
+        Also sets _mode_changed so the scheduler wakes immediately from
+        wait_for_mode_change() instead of sleeping the full poll interval.
+        """
         self._config_reload.set()
+        self._mode_changed.set()  # wake the scheduler immediately
 
     def check_config_reload(self) -> bool:
         """Return True if a config reload was requested, clearing the flag."""
@@ -102,8 +120,11 @@ class WebSocketClient:
 
     @staticmethod
     def _build_ws_url(api_url: str) -> str:
-        """Map HTTP API base to ``ws(s)://`` ``/api/v2/ws/agent``."""
-        http_url = wright_api_url(api_url, "ws", "agent")
+        """Build the WebSocket URL from WS_URL setting."""
+        from wright_telemetry.settings import WS_URL
+        base = WS_URL.rstrip("/")
+        tail = "/api/v2/ws/agent" if not base.endswith("/api") else "/v2/ws/agent"
+        http_url = base + tail
         if http_url.startswith("https://"):
             return "wss://" + http_url[len("https://"):]
         if http_url.startswith("http://"):
@@ -284,6 +305,7 @@ class WebSocketClient:
 
         while True:
             try:
+                self.controller.push_gui_event({"event": "ws_status", "status": "connecting"})
                 logger.info("Connecting to portal WebSocket: %s", self._ws_url)
                 async with websockets.connect(self._ws_url, **connect_kw) as ws:
                     await self._send_json(ws, {
@@ -295,11 +317,13 @@ class WebSocketClient:
                     resp = json.loads(response)
                     if resp.get("error"):
                         logger.error("Portal auth failed: %s", resp["error"])
+                        self.controller.push_gui_event({"event": "ws_status", "status": "disconnected"})
                         await asyncio.sleep(30)
                         continue
 
                     logger.info("Connected to portal WebSocket")
                     consecutive_failures = 0
+                    self.controller.push_gui_event({"event": "ws_status", "status": "connected"})
 
                     forwarder = asyncio.create_task(self._event_forwarder(ws))
                     try:
@@ -314,6 +338,7 @@ class WebSocketClient:
                             self.controller.request_normal()
 
             except asyncio.CancelledError:
+                self.controller.push_gui_event({"event": "ws_status", "status": "disconnected"})
                 break
             except Exception as exc:
                 consecutive_failures += 1
@@ -322,6 +347,11 @@ class WebSocketClient:
                     "WebSocket connection failed (attempt #%d): %s. Retrying in %ds...",
                     consecutive_failures, exc, backoff,
                 )
+                self.controller.push_gui_event({
+                    "event": "ws_status",
+                    "status": "reconnecting",
+                    "backoff": backoff,
+                })
                 await asyncio.sleep(backoff)
 
     # ------------------------------------------------------------------
