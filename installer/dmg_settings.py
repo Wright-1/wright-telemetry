@@ -44,7 +44,7 @@ background = str(REPO / "assets" / "dmg-background.tiff")
 # ── Window layout ─────────────────────────────────────────────────────────────
 # ((x from left of screen, y from BOTTOM of screen), (width, height))
 # Width × Height MUST match W × H in make_dmg_background.py
-window_rect = ((200, 200), (800, 520))
+window_rect = ((200, 200), (800, 680))
 
 show_status_bar = False
 show_tab_view   = False
@@ -65,6 +65,6 @@ scroll_position = (0, 0)
 # Icon positions (x, y) inside the 800×520 window.
 # These MUST match APP_X / APPS_X / ICON_Y in make_dmg_background.py.
 icon_locations = {
-    "WrightData.app":  (175, 190),
-    "Applications":          (575, 190),
+    "WrightData.app":  (175, 160),
+    "Applications":    (575, 160),
 }

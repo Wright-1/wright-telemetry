@@ -33,7 +33,7 @@ app = QApplication.instance() or QApplication(sys.argv)
 # ─────────────────────────────────────────────────────────────────────────────
 # Logical dimensions  (= Finder window size in dmg_settings.py)
 # ─────────────────────────────────────────────────────────────────────────────
-LW, LH = 800, 520
+LW, LH = 800, 680
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Colours
@@ -93,14 +93,10 @@ def render(scale: int) -> QImage:
     p.drawLine(QPointF(0, HEADER_H), QPointF(LW, HEADER_H))
 
     # ── Drag zone (icons at y=185) ────────────────────────────────────────────
-    APP_X,  ICON_Y = 175, 185
+    APP_X,  ICON_Y = 175, 155
     APPS_X         = 575
     ZONE_R         = 54
 
-    p.setPen(QPen(ZONE_BORDER, 1.2))
-    p.setBrush(QBrush(ZONE_FILL))
-    p.drawEllipse(QRectF(APP_X  - ZONE_R, ICON_Y - ZONE_R, ZONE_R*2, ZONE_R*2))
-    p.drawEllipse(QRectF(APPS_X - ZONE_R, ICON_Y - ZONE_R, ZONE_R*2, ZONE_R*2))
     p.setBrush(Qt.BrushStyle.NoBrush)
 
     # Arrow
@@ -128,20 +124,20 @@ def render(scale: int) -> QImage:
                "Drag to install")
 
     # ── Divider ───────────────────────────────────────────────────────────────
-    BYPASS_TOP = 308
+    BYPASS_TOP = 272
     p.setPen(QPen(DIVIDER, 1))
     p.drawLine(QPointF(0, BYPASS_TOP), QPointF(LW, BYPASS_TOP))
 
     # ── Bypass section ────────────────────────────────────────────────────────
-    sec_f = QFont(".AppleSystemUIFont", 10, QFont.Weight.Medium)
+    sec_f = QFont(".AppleSystemUIFont", 11, QFont.Weight.Medium)
     p.setFont(sec_f)
-    p.setPen(QPen(TEXT_LIGHT))
-    p.drawText(QRectF(0, BYPASS_TOP + 10, LW, 20),
+    p.setPen(QPen(TEXT_MED))
+    p.drawText(QRectF(0, BYPASS_TOP + 10, LW, 22),
                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-               "If macOS blocks the app on first launch:")
+               "First launch blocked by macOS? Here’s how to open it:")
 
     CARD_Y = BYPASS_TOP + 38
-    CARD_H, CARD_W, GAP = 142, 346, 16
+    CARD_H, CARD_W, GAP = 168, 346, 16
     C1X = (LW - CARD_W * 2 - GAP) // 2
     C2X = C1X + CARD_W + GAP
     RADIUS = 10
@@ -179,26 +175,28 @@ def render(scale: int) -> QImage:
     p.setFont(cb_f); p.setPen(QPen(TEXT_MED))
     p.drawText(QRectF(C1X + 16, CARD_Y + 48, CARD_W - 32, CARD_H - 58),
                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
-               'In Finder → Applications, right-click "WrightData" and choose Open. '
-               'Click Open again in the security dialog. One-time only — works on all macOS versions.')
+               'Open your Applications folder, right-click WrightData, and choose “Open”. '
+               'When the security dialog appears, click “Open” again. '
+               'You only need to do this once.')
 
     p.setFont(ct_f); p.setPen(QPen(TEXT_DARK))
     p.drawText(QRectF(C2X + TX, CARD_Y + BY, CARD_W - TX - 12, 22),
                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-               "System Settings")
+               "Apple menu → System Settings")
     p.setFont(cb_f); p.setPen(QPen(TEXT_MED))
     p.drawText(QRectF(C2X + 16, CARD_Y + 48, CARD_W - 32, CARD_H - 58),
                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
-               'Apple menu → System Settings → Privacy & Security. '
-               'Scroll to Security and click "Open Anyway" next to WrightData.')
+               'Go to System Settings → Privacy & Security. '
+               'Scroll down to the Security section and click “Open Anyway” '
+               'next to WrightData.')
 
     # ── Footer ────────────────────────────────────────────────────────────────
     p.setPen(QPen(DIVIDER, 1))
-    p.drawLine(QPointF(0, LH - 24), QPointF(LW, LH - 24))
+    p.drawLine(QPointF(0, LH - 30), QPointF(LW, LH - 30))
     ff = QFont(".AppleSystemUIFont", 9)
     p.setFont(ff)
     p.setPen(QPen(QColor("#B0B0B5")))
-    p.drawText(QRectF(0, LH - 20, LW, 16),
+    p.drawText(QRectF(0, LH - 26, LW, 20),
                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
                "Open source  ·  Read-only  ·  Passwords never leave this machine  ·  wrightone.io")
 
