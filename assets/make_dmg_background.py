@@ -1,7 +1,7 @@
 """
 Generate the WrightData DMG background as a multi-resolution TIFF.
 
-A multi-res TIFF bundles a 1× (800×520) and 2× (1600×1040) image in one file.
+A multi-res TIFF bundles a 1× (800×680) and 2× (1600×1360) image in one file.
 macOS Finder picks the right resolution automatically — sharp on Retina,
 correctly laid out on standard displays.
 
@@ -214,11 +214,11 @@ TIFF_1X = ASSETS / "dmg-bg-1x.tiff"
 TIFF_2X = ASSETS / "dmg-bg-2x.tiff"
 OUT_TIFF = ASSETS / "dmg-background.tiff"
 
-print("  Rendering 1× (800×520)…")
+print("  Rendering 1× (800×680)…")
 img1x = render(1)
 img1x.save(str(PNG_1X))
 
-print("  Rendering 2× (1600×1040)…")
+print("  Rendering 2× (1600×1360)…")
 img2x = render(2)
 img2x.save(str(PNG_2X))
 
@@ -248,4 +248,4 @@ if r.returncode != 0:
 for f in (PNG_1X, PNG_2X, TIFF_1X, TIFF_2X):
     f.unlink(missing_ok=True)
 
-print(f"✔  Saved {OUT_TIFF}  (1× 800×520 + 2× 1600×1040)")
+print(f"✔  Saved {OUT_TIFF}  (1× 800×680 + 2× 1600×1360)")

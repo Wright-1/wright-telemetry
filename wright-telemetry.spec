@@ -19,9 +19,9 @@ import importlib
 from pathlib import Path
 import pyfiglet
 
-block_cipher = None
+# block_cipher was removed in PyInstaller 6 — do not use cipher= in PYZ/EXE.
 
-# ── shared data / hidden imports ───────────────────────────────────────────
+# ── shared data files ─────────────────────────────────────────────────────
 
 _pyfiglet_root = Path(importlib.import_module("pyfiglet").__file__).parent
 
@@ -29,13 +29,29 @@ _shared_datas = [
     (str(_pyfiglet_root / "fonts"), "pyfiglet/fonts"),
 ]
 
-_shared_hiddenimports = [
+# ── CLI-only hidden imports (no GUI) ──────────────────────────────────────
+
+_cli_hiddenimports = [
     "wright_telemetry",
     "wright_telemetry.collectors",
     "wright_telemetry.collectors.braiins",
     "wright_telemetry.collectors.bitmain",
     "wright_telemetry.collectors.luxos",
     "wright_telemetry.collectors.vnish",
+    "pyfiglet",
+    "pyfiglet.fonts",
+    "websockets",
+    "websockets.legacy",
+    "websockets.legacy.client",
+    "websockets.legacy.server",
+    "websockets.asyncio",
+    "websockets.asyncio.client",
+    "websockets.asyncio.server",
+]
+
+# ── GUI hidden imports (CLI imports + Qt + GUI submodules) ────────────────
+
+_gui_hiddenimports = _cli_hiddenimports + [
     "wright_telemetry.gui",
     "wright_telemetry.gui.app",
     "wright_telemetry.gui.engine",
@@ -46,15 +62,6 @@ _shared_hiddenimports = [
     "wright_telemetry.gui.fonts",
     "wright_telemetry.gui.security_panel",
     "wright_telemetry.gui.scan_manager",
-    "pyfiglet",
-    "pyfiglet.fonts",
-    "websockets",
-    "websockets.legacy",
-    "websockets.legacy.client",
-    "websockets.legacy.server",
-    "websockets.asyncio",
-    "websockets.asyncio.client",
-    "websockets.asyncio.server",
     "PyQt6",
     "PyQt6.QtCore",
     "PyQt6.QtGui",
@@ -79,18 +86,17 @@ cli_a = Analysis(
     pathex=[],
     binaries=[],
     datas=_shared_datas,
-    hiddenimports=_shared_hiddenimports,
+    hiddenimports=_cli_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=_shared_excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-cli_pyz = PYZ(cli_a.pure, cli_a.zipped_data, cipher=block_cipher)
+cli_pyz = PYZ(cli_a.pure, cli_a.zipped_data)
 
 cli_exe = EXE(
     cli_pyz,
@@ -121,18 +127,17 @@ gui_a = Analysis(
     pathex=[],
     binaries=[],
     datas=_shared_datas,
-    hiddenimports=_shared_hiddenimports,
+    hiddenimports=_gui_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=_shared_excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-gui_pyz = PYZ(gui_a.pure, gui_a.zipped_data, cipher=block_cipher)
+gui_pyz = PYZ(gui_a.pure, gui_a.zipped_data)
 
 # The inner Unix executable that lives inside the .app bundle
 gui_exe = EXE(
@@ -172,7 +177,7 @@ app = BUNDLE(
     gui_coll,
     name="WrightData.app",
     icon=_icon_arg,
-    bundle_identifier="com.wrightone.wright-telemetry",
+    bundle_identifier="com.wrightone.wrightdata",
     version="0.7.3",
     info_plist={
         # Human-readable name shown in Finder / Dock / menu bar

@@ -74,7 +74,17 @@ install_if_missing "pyinstaller"  "PyInstaller"
 install_if_missing "PyQt6"        "PyQt6"
 install_if_missing "dmgbuild"     "dmgbuild"
 
-# ── 1. PyInstaller build ──────────────────────────────────────────────────────
+# ── 1. Generate app icon (.icns) if missing ─────────────────────────────────
+# Must run before PyInstaller so the icon is embedded in WrightData.app.
+if [[ ! -f "assets/wright-telemetry.icns" ]]; then
+  info "Generating app icon…"
+  "${PYTHON}" assets/make_app_icon.py
+  ok "App icon ready: assets/wright-telemetry.icns"
+else
+  ok "App icon already exists: assets/wright-telemetry.icns"
+fi
+
+# ── 2. PyInstaller build ──────────────────────────────────────────────────────
 if $BUILD_APP; then
   info "Running PyInstaller (this takes a minute)…"
   rm -rf "${BUILD_DIR}" "${DIST_DIR}"
@@ -86,15 +96,6 @@ if $BUILD_APP; then
   APP_PATH="${DIST_DIR}/${APP_BUNDLE}"
   [[ -d "${APP_PATH}" ]] || die "Expected bundle not found: ${APP_PATH}"
   ok "App bundle ready: ${APP_PATH}"
-fi
-
-# ── 2. Generate app icon (.icns) if missing ─────────────────────────────────
-if [[ ! -f "assets/wright-telemetry.icns" ]]; then
-  info "Generating app icon…"
-  "${PYTHON}" assets/make_app_icon.py
-  ok "App icon ready: assets/wright-telemetry.icns"
-else
-  ok "App icon already exists: assets/wright-telemetry.icns"
 fi
 
 # ── 3. Generate DMG background image ─────────────────────────────────────────

@@ -18,6 +18,9 @@ DIST = REPO / "dist"
 
 version = defines.get("version", "0.7.3")  # noqa: F821  (injected by dmgbuild)
 
+# ── Volume name (shown in Finder title bar and Spotlight) ────────────────────
+volume_name = f"WrightData {version}"
+
 # ── Disk image settings ───────────────────────────────────────────────────────
 format          = "UDZO"     # gzip-compressed — widest compatibility
 filesystem      = "HFS+"     # use HFS+ for max macOS version support
@@ -62,7 +65,7 @@ text_size       = 13
 label_pos       = "bottom"
 scroll_position = (0, 0)
 
-# Icon positions (x, y) inside the 800×520 window.
+# Icon positions (x, y) inside the 800×680 window.
 # These MUST match APP_X / APPS_X / ICON_Y in make_dmg_background.py.
 icon_locations = {
     "WrightData.app":  (175, 160),
