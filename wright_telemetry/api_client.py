@@ -20,7 +20,6 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 import requests
-import urllib3
 
 from wright_telemetry.encryption import encrypt_payload
 from wright_telemetry.models import TelemetryPayload
@@ -33,26 +32,6 @@ _POST_TIMEOUT = 20  # seconds
 # ---------------------------------------------------------------------------
 # URL builder  (used by WrightAPIClient.endpoint and portal_client)
 # ---------------------------------------------------------------------------
-
-def wright_api_url(base: str, *path: str) -> str:
-    """Build a versioned API URL from an explicit base URL and path segments.
-
-    Normalises ``base`` so that whether or not it already ends in ``/api``
-    the result is always ``{scheme+host}/api/v2/{path}``.
-
-    Examples::
-
-        wright_api_url("https://api.wrightfan.com", "telemetry")
-        # → "https://api.wrightfan.com/api/v2/telemetry"
-
-        wright_api_url("https://api.wrightfan.com/api", "ws", "agent")
-        # → "https://api.wrightfan.com/api/v2/ws/agent"
-    """
-    base = base.rstrip("/")
-    if base.endswith("/api"):
-        base = base[:-4]  # strip trailing /api so we can re-add it cleanly
-    tail = "/".join(path)
-    return f"{base}/api/v2/{tail}"
 
 
 def build_url(*path: str, pipeline: bool = True) -> str:
@@ -112,16 +91,15 @@ class WrightAPIClient(ApiClient):
     """
 
     def __init__(self, api_url: str, api_key: str, facility_id: str) -> None:
-        # URLs are resolved from settings at instantiation time;
-        # api_url param is kept for backwards compatibility only.
-        _ = api_url  # noqa: F841
+        from wright_telemetry.settings import API_URL
+        # Use the provided api_url if non-empty; fall back to the env/default setting.
+        effective = api_url.rstrip("/") if api_url.strip() else API_URL.rstrip("/")
+        self._api_url    = effective
+        self._ingest_url = effective
         self.api_key     = api_key
         self.facility_id = facility_id
 
         self._session = requests.Session()
-        # TODO: re-enable TLS verification before shipping production builds
-        self._session.verify = False
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self._session.headers.update({
             "Content-Type":  "application/json",
             "X-API-Key":     self.api_key,
@@ -131,7 +109,11 @@ class WrightAPIClient(ApiClient):
     # ── ApiClient interface ──────────────────────────────────────────────────
 
     def endpoint(self, *path: str, pipeline: bool = True) -> str:
-        return build_url(*path, pipeline=pipeline)
+        base = (self._ingest_url if pipeline else self._api_url)
+        tail = "/".join(path)
+        if pipeline:
+            return f"{base}/v2/{tail}" if base.endswith("/api") else f"{base}/api/v2/{tail}"
+        return f"{base}/{tail}" if base.endswith("/api") else f"{base}/api/{tail}"
 
     # ── Public methods ───────────────────────────────────────────────────────
 

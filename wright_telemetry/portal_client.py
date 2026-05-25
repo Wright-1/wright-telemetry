@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 10  # seconds
 
 
-def _redeem(access_key: str) -> dict:
+def _redeem(access_key: str) -> dict[str, Any]:
     """Core redeem logic shared by the sync and async variants."""
     url = build_url("internal/provision/redeem", pipeline=False)
     print(f"[WRIGHT] POST {url}")
@@ -45,7 +45,7 @@ def _redeem(access_key: str) -> dict:
         return {"success": False, "error": str(exc)}
 
 
-def redeem_access_key_sync(access_key: str) -> dict:
+def redeem_access_key_sync(access_key: str) -> dict[str, Any]:
     """Synchronous access-key redeem for TUI/CLI use.
 
     Returns:

@@ -69,8 +69,8 @@ def _print_welcome_banner(cfg: dict, version: str) -> None:
     )
     consent_txt = (
         "[bold cyan]Your data, your choice[/]\n\n"
-        "Every metric is [bold]OFF by default[/]. "
-        "The setup wizard explains each one before you enable it. "
+        "Every metric is [bold]ON by default[/]. "
+        "The setup wizard lets you review and adjust each one before starting. "
         "Change your choices any time with [cyan]wright-telemetry --setup[/].\n\n"
         "[dim]\u2022 Passwords never leave this machine\n"
         "\u2022 AES-256-GCM encrypted before transit\n"
@@ -259,7 +259,8 @@ def main() -> None:
             _needs_save = True
         if "auto_update" not in cfg["consent"]:
             # Derive from the old top-level flag; default ON if flag was absent.
-            cfg["consent"]["auto_update"] = not cfg.get("disable_auto_update", True)
+            # disable_auto_update=False (or absent) → auto_update=True (ON).
+            cfg["consent"]["auto_update"] = not cfg.get("disable_auto_update", False)
             _needs_save = True
         if _needs_save:
             from wright_telemetry.config import save_config as _save

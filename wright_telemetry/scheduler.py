@@ -31,7 +31,7 @@ from wright_telemetry.discovery import (
     firmware_types_for_collector,
     merge_miners,
 )
-from wright_telemetry.models import MinerIdentity, TelemetryPayload
+from wright_telemetry.models import CoolingData, MinerIdentity, TelemetryPayload
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +328,6 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
                     logger.warning("Error fetching cooling from '%s': %s", name, exc)
                     continue
 
-                from wright_telemetry.models import CoolingData
                 if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
                     continue
 
@@ -389,7 +388,6 @@ def _detect_fan_dips(
 
     Returns the list of fan positions that triggered the detection, or [].
     """
-    from wright_telemetry.models import CoolingData
     if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
         return []
 
@@ -452,8 +450,6 @@ def _check_fan_rpm_changes(
     Shared implementation: only :func:`_run_ws_fan_detection` calls this. CLI Wright Fan
     mode uses :func:`_detect_fan_dips` instead.
     """
-    from wright_telemetry.models import CoolingData
-
     if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
         return []
 
@@ -559,7 +555,7 @@ def _handle_wright_fan_dip_detection(
     )
 
 
-def run_fan_detection(cfg: dict[str, Any]) -> None:
+def run_fan_detection(cfg: dict[str, Any]) -> bool:
     """Poll fan RPM on all configured miners, detecting Wright Fan dip signatures.
 
     Only ``cooling`` data is fetched locally — the only outbound API call is
@@ -636,7 +632,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                     print("  To re-enter detection mode: wright-telemetry --detect-wright-fans")
                     logger.info("Detection mode idle timeout (4 hours). Exiting.")
                     stop_event.set()
-                    return
+                    return True
 
                 for miner_cfg, collector in collectors:
                     name = miner_cfg.get("name", miner_cfg["url"])

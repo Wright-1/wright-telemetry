@@ -1,8 +1,8 @@
 """Per-metric consent management.
 
-Every data category is disabled by default. The setup wizard calls
+Every data category is enabled by default. The setup wizard calls
 ``run_consent_wizard`` to walk the user through each metric, explaining
-exactly what is collected and why.
+exactly what is collected and why, and lets them opt out of any category.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from rich.panel import Panel
 
 console = Console()
 
-_WIZARD_STYLE = questionary.Style([
+WIZARD_STYLE = questionary.Style([
     ("qmark",       "fg:#22d3ee bold"),
     ("question",    "bold"),
     ("answer",      "fg:#22d3ee"),
@@ -126,8 +126,9 @@ def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, boo
     ))
     console.print(
         "\nWright Telemetry collects data from your miner to power your\n"
-        "dashboard.  Every category below is [bold]ON[/] by default.  We'll\n"
-        "explain exactly what each one does so you can decide.\n"
+        "dashboard.  Every category below is [bold]ON by default[/].  We'll\n"
+        "explain exactly what each one does — disable anything you prefer\n"
+        "not to share.\n"
     )
 
     keys = list(METRICS.keys())
@@ -151,8 +152,8 @@ def run_consent_wizard(existing: dict[str, bool] | None = None) -> dict[str, boo
         result = questionary.select(
             f"Enable {info['label']}?",
             choices=choices,
-            default="Yes" if current else "No",  # current defaults to True now
-            style=_WIZARD_STYLE,
+            default="Yes" if current else "No",
+            style=WIZARD_STYLE,
         ).ask()
 
         if result is None:

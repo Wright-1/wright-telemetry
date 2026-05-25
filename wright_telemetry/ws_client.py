@@ -29,7 +29,11 @@ class AgentController:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._mode = "normal"
-        self._mode_changed = threading.Event()
+        # Use a Condition + generation counter instead of a bare Event so that
+        # rapid back-to-back signals are never silently dropped by a race
+        # between .wait() returning and .clear() executing.
+        self._wake = threading.Condition()
+        self._wake_seq: int = 0
         self._config_reload = threading.Event()
         self._event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self._gui_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
@@ -42,21 +46,30 @@ class AgentController:
     def request_fan_detection(self) -> None:
         with self._lock:
             self._mode = "fan_detection"
-        self._mode_changed.set()
+        with self._wake:
+            self._wake_seq += 1
+            self._wake.notify_all()
 
     def request_normal(self) -> None:
         with self._lock:
             self._mode = "normal"
-        self._mode_changed.set()
+        with self._wake:
+            self._wake_seq += 1
+            self._wake.notify_all()
 
     def wait_for_mode_change(self, timeout: Optional[float] = None) -> bool:
-        """Block until the mode changes or *timeout* elapses.
+        """Block until a wake signal is issued or *timeout* elapses.
 
-        Returns ``True`` if the mode changed, ``False`` on timeout.
+        Returns ``True`` if woken by a signal, ``False`` on timeout.
+
+        Uses a generation counter so every call to ``request_fan_detection``,
+        ``request_normal``, or ``request_config_reload`` is counted exactly
+        once — no signal is ever silently dropped by a race between
+        ``.wait()`` returning and a subsequent ``.clear()``.
         """
-        result = self._mode_changed.wait(timeout=timeout)
-        self._mode_changed.clear()
-        return result
+        with self._wake:
+            seq = self._wake_seq
+            return self._wake.wait_for(lambda: self._wake_seq != seq, timeout=timeout)
 
     def push_event(self, event: dict[str, Any]) -> None:
         self._event_queue.put_nowait(event)
@@ -86,11 +99,13 @@ class AgentController:
     def request_config_reload(self) -> None:
         """Signal the scheduler to reload config from disk.
 
-        Also sets _mode_changed so the scheduler wakes immediately from
-        wait_for_mode_change() instead of sleeping the full poll interval.
+        Also wakes the scheduler immediately from wait_for_mode_change()
+        instead of sleeping the full poll interval.
         """
         self._config_reload.set()
-        self._mode_changed.set()  # wake the scheduler immediately
+        with self._wake:
+            self._wake_seq += 1
+            self._wake.notify_all()
 
     def check_config_reload(self) -> bool:
         """Return True if a config reload was requested, clearing the flag."""
@@ -120,9 +135,13 @@ class WebSocketClient:
 
     @staticmethod
     def _build_ws_url(api_url: str) -> str:
-        """Build the WebSocket URL from WS_URL setting."""
+        """Convert an HTTP(S) api_url to its WebSocket equivalent.
+
+        Falls back to the ``WRIGHT_WS_URL`` environment setting when
+        *api_url* is empty.
+        """
         from wright_telemetry.settings import WS_URL
-        base = WS_URL.rstrip("/")
+        base = (api_url.rstrip("/") if api_url.strip() else WS_URL.rstrip("/"))
         tail = "/api/v2/ws/agent" if not base.endswith("/api") else "/v2/ws/agent"
         http_url = base + tail
         if http_url.startswith("https://"):
@@ -295,13 +314,9 @@ class WebSocketClient:
         import websockets
 
         consecutive_failures = 0
-        # TODO: Re-enable TLS verification before shipping production builds.
         connect_kw: dict[str, Any] = {}
         if self._ws_url.startswith("wss://"):
-            _ctx = ssl.create_default_context()
-            _ctx.check_hostname = False
-            _ctx.verify_mode = ssl.CERT_NONE
-            connect_kw["ssl"] = _ctx
+            connect_kw["ssl"] = ssl.create_default_context()
 
         while True:
             try:

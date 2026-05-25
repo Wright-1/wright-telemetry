@@ -25,7 +25,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-from wright_telemetry.consent import DEFAULT_CONSENT, _WIZARD_STYLE, run_consent_wizard
+from wright_telemetry.consent import DEFAULT_CONSENT, WIZARD_STYLE as _WIZARD_STYLE, run_consent_wizard
 from wright_telemetry.discovery import (
     DiscoveredMiner,
     default_subnet,
@@ -53,18 +53,30 @@ def _portable_config() -> Optional[Path]:
     return candidate if candidate.is_file() else None
 
 
-if "WRIGHT_CONFIG" in os.environ:
-    CONFIG_DIR = Path(os.environ["WRIGHT_CONFIG"]).parent
-    CONFIG_FILE = Path(os.environ["WRIGHT_CONFIG"])
-elif (portable := _portable_config()) is not None:
-    CONFIG_FILE = portable
-    CONFIG_DIR = portable.parent
-elif _CONFIG_POINTER.exists():
-    CONFIG_FILE = Path(_CONFIG_POINTER.read_text().strip())
-    CONFIG_DIR = CONFIG_FILE.parent
-else:
-    CONFIG_DIR = _DEFAULT_CONFIG_DIR
-    CONFIG_FILE = CONFIG_DIR / "config.json"
+def _resolve_config_paths() -> tuple[Path, Path]:
+    """Resolve the active config file and directory without raising.
+
+    Filesystem I/O (reading the pointer file) is isolated here so that
+    importing this module never crashes due to a missing or unreadable
+    pointer, and the rest of the module only works with in-memory values.
+    """
+    if "WRIGHT_CONFIG" in os.environ:
+        p = Path(os.environ["WRIGHT_CONFIG"])
+        return p.parent, p
+    if (portable := _portable_config()) is not None:
+        return portable.parent, portable
+    try:
+        if _CONFIG_POINTER.exists():
+            text = _CONFIG_POINTER.read_text().strip()
+            if text:
+                p = Path(text)
+                return p.parent, p
+    except OSError:
+        pass  # Treat a broken pointer as if it doesn't exist
+    return _DEFAULT_CONFIG_DIR, _DEFAULT_CONFIG_DIR / "config.json"
+
+
+CONFIG_DIR, CONFIG_FILE = _resolve_config_paths()
 
 
 console = Console()
@@ -186,11 +198,21 @@ def ensure_config_file() -> dict[str, Any]:
 
 
 def load_config() -> Optional[dict[str, Any]]:
-    """Load config from disk. Returns None if the file doesn't exist."""
+    """Load config from disk.  Returns None if the file is absent or unreadable."""
     if not CONFIG_FILE.exists():
         return None
-    with open(CONFIG_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError as exc:
+        console.print(
+            f"[red]Config file {CONFIG_FILE} contains invalid JSON: {exc}[/]\n"
+            "The file may be corrupted. Run [cyan bold]wright-telemetry --setup[/] to reconfigure."
+        )
+        return None
+    except OSError as exc:
+        console.print(f"[red]Could not read config file {CONFIG_FILE}: {exc}[/]")
+        return None
 
 
 def save_config(cfg: dict[str, Any]) -> None:
