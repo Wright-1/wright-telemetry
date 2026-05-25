@@ -34,6 +34,27 @@ _POST_TIMEOUT = 20  # seconds
 # ---------------------------------------------------------------------------
 
 
+def wright_api_url(base: str, *path: str) -> str:
+    """Build a Wright pipeline URL from an explicit base URL and path segments.
+
+    ``base`` may or may not already end in ``/api``; this function handles
+    both cases so callers never need to think about it.
+
+    Examples::
+
+        wright_api_url("https://api.wrightfan.com", "telemetry")
+        # → "https://api.wrightfan.com/api/v2/telemetry"
+
+        wright_api_url("https://api.wrightfan.com/api", "ws", "agent")
+        # → "https://api.wrightfan.com/api/v2/ws/agent"
+    """
+    base = base.rstrip("/")
+    tail = "/".join(path)
+    if base.endswith("/api"):
+        return f"{base}/v2/{tail}"
+    return f"{base}/api/v2/{tail}"
+
+
 def build_url(*path: str, pipeline: bool = True) -> str:
     """Build a full URL from path segments using the configured base URLs.
 
