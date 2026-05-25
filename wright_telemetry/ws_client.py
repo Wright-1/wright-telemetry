@@ -330,11 +330,24 @@ class WebSocketClient:
 
     def start(self) -> None:
         """Start the WebSocket client in a background daemon thread."""
+        self._loop: asyncio.AbstractEventLoop | None = None
+
         def _run() -> None:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            self._loop = loop
             loop.run_until_complete(self._connect_loop())
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
         logger.info("WebSocket client started (target: %s)", self._ws_url)
+
+    def stop(self) -> None:
+        """Signal the WebSocket event loop to stop.
+
+        Safe to call from any thread (including the Qt main thread).
+        The background daemon thread will exit on the next asyncio iteration.
+        """
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            logger.info("WebSocket client stop requested")

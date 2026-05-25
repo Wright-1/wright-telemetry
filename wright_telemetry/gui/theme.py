@@ -59,10 +59,6 @@ CATEGORY_ICONS: dict[str, str] = {
 
 # ── Typography ────────────────────────────────────────────────────────────────
 
-# Use system font — Roboto is not always installed
-# On macOS this resolves to SF Pro; on Windows to Segoe UI
-FONT_FAMILY = ".AppleSystemUIFont, Helvetica Neue, Arial"
-
 # (size_px, weight)  — weight uses QFont constants: 400=Normal, 500=Medium, 600=DemiBold, 700=Bold
 FONT_PAGE_HEADING = (22, 600)
 FONT_PAGE_DESC = (13, 400)

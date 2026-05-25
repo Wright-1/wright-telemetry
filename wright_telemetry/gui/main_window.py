@@ -312,14 +312,19 @@ class MainWindow(QWidget):
     def _switch_page(self, key: str) -> None:
         # Advance onboarding state to match wherever the user navigates.
         # Navigating past a step implies that step is done.
+        # Collect all state changes first, then call _update_onboarding_ui
+        # at most once to avoid redundant redraws.
+        state_changed = False
         if key in ("discovery", "overview"):
             if not self._ob_permissions:
                 self._ob_permissions = True
-                self._update_onboarding_ui()
+                state_changed = True
         if key == "overview":
             if not self._ob_discovery:
                 self._ob_discovery = True
-                self._update_onboarding_ui()
+                state_changed = True
+        if state_changed:
+            self._update_onboarding_ui()
 
         if key == "overview" and not self._ob_account:
             # Still onboarding -- show portal page instead of overview

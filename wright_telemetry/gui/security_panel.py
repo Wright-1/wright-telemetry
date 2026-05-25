@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -158,6 +159,9 @@ def _github_card(parent: QWidget | None = None) -> QWidget:
             background: {T.BG_SIDEBAR};
         }}
     """)
+    view_btn.clicked.connect(
+        lambda: QDesktopServices.openUrl(QUrl("https://github.com/Wright-1/wright-telemetry"))
+    )
     layout.addWidget(view_btn)
 
     return card
@@ -232,6 +236,9 @@ def _discord_card(parent: QWidget | None = None) -> QWidget:
             background: {T.BG_SIDEBAR};
         }}
     """)
+    join_btn.clicked.connect(
+        lambda: QDesktopServices.openUrl(QUrl("https://discord.gg/wrightone"))
+    )
     layout.addWidget(join_btn)
 
     return card

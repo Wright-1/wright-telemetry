@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -104,18 +104,6 @@ class ChevronLabel(QLabel):
 # ── Permission Row ────────────────────────────────────────────────────────────
 
 
-# Light tint backgrounds for icon circles (hex, no alpha tricks needed)
-_ICON_BG: dict[str, str] = {
-    "cooling":      "#EBF5FF",
-    "hashrate":     "#FFFBEB",
-    "uptime":       "#F0FDF4",
-    "hashboards":   "#F5F3FF",
-    "errors":       "#FEF2F2",
-    "auto_update":  "#FFF7ED",
-    "remote_config":"#EBF5FF",
-}
-
-
 # Light tint backgrounds for the icon circles in PermissionRow
 _ICON_BG: dict[str, str] = {
     "cooling":       "#EBF5FF",
@@ -197,9 +185,10 @@ class PermissionRow(QWidget):
         text_col.addWidget(sub_lbl)
         header.addLayout(text_col, 1)
 
-        # Toggle
+        # Toggle — use an event filter so toggle clicks are intercepted
+        # cleanly without monkey-patching the widget's mousePressEvent.
         self.toggle = ToggleSwitch(checked=checked)
-        self.toggle.mousePressEvent = self._on_toggle_click
+        self.toggle.installEventFilter(self)
         header.addWidget(self.toggle)
 
         # Chevron
@@ -219,18 +208,19 @@ class PermissionRow(QWidget):
         self.detail_label.setVisible(False)
         root.addWidget(self.detail_label)
 
-    def _on_toggle_click(self, ev) -> None:
-        self.toggle._checked = not self.toggle._checked
-        self.toggle.toggled.emit(self.toggle._checked)
-        self.toggle.update()
+    def eventFilter(self, obj: QObject, ev: QEvent) -> bool:  # noqa: N802
+        """Intercept mouse presses on the toggle so they don't bubble up
+        to this row's mousePressEvent (which would also expand/collapse)."""
+        if obj is self.toggle and ev.type() == QEvent.Type.MouseButtonPress:
+            self.toggle.setChecked(not self.toggle.isChecked())
+            self.toggle.toggled.emit(self.toggle.isChecked())
+            return True  # event consumed — do not propagate
+        return super().eventFilter(obj, ev)
 
     def mousePressEvent(self, ev):  # noqa: N802
         self._expanded = not self._expanded
         self.chevron.setExpanded(self._expanded)
         self.detail_label.setVisible(self._expanded)
-
-    def sizeHint(self) -> QSize:
-        return super().sizeHint()
 
 class NavItem(QWidget):
     """Sidebar navigation row: icon + label."""

@@ -147,10 +147,13 @@ class ScanManager:
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _ensure_worker(self) -> None:
+        # Keep the entire check-and-assign inside the lock so two concurrent
+        # callers cannot both see already_running=False and both spawn a thread.
         with self._lock:
-            already_running = self._worker is not None and self._worker.is_alive()
-            has_work = bool(self._queue)
-        if not already_running and has_work:
+            if self._worker is not None and self._worker.is_alive():
+                return
+            if not self._queue:
+                return
             self._cancel_event.clear()
             self._worker = threading.Thread(
                 target=self._run,
@@ -165,10 +168,17 @@ class ScanManager:
                 if not self._queue:
                     self._current_subnet = None
                     break
+                # Check for a pending cancel *before* clearing it, so a
+                # cancel() call that arrived between two scans is honoured.
+                if self._cancel_event.is_set():
+                    self._current_subnet = None
+                    break
                 subnet = self._queue.pop(0)
                 self._current_subnet = subnet
+                # Clear only after we've committed to this subnet, still
+                # inside the lock so cancel() cannot sneak in between.
+                self._cancel_event.clear()
 
-            self._cancel_event.clear()
             self._scan_subnet(subnet)
 
         self._controller.push_gui_event({"event": "scan_queue_empty"})
@@ -188,6 +198,11 @@ class ScanManager:
         logger.info("Scanning subnet %s (%d hosts, firmware=%s)", subnet, total, self._firmware_types)
 
         with self._lock:
+            # Guard against the subnet being removed while we were expanding
+            # the CIDR — remove() may have deleted it from _results.
+            if subnet not in self._results:
+                logger.debug("Subnet %s removed before scan could start", subnet)
+                return
             r = self._results[subnet]
             r.status = "scanning"
             r.total_hosts = total
@@ -236,6 +251,10 @@ class ScanManager:
 
         now = time.time()
         with self._lock:
+            # Guard against removal that arrived after scan_hosts() returned.
+            if subnet not in self._results:
+                logger.debug("Subnet %s removed before results could be recorded", subnet)
+                return
             r = self._results[subnet]
             r.status = "complete"
             r.miners_found = len(found)

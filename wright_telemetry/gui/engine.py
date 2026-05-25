@@ -121,8 +121,12 @@ class ScanningEngine:
         self._timer.start()
 
     def stop(self) -> None:
-        """Stop the drain timer.  Daemon threads are cleaned up by the OS."""
+        """Stop the drain timer, cancel any in-flight scan, and close the
+        WebSocket connection gracefully."""
         self._timer.stop()
+        self.scan_manager.cancel()
+        if self._ws_client is not None:
+            self._ws_client.stop()
 
     # ── GUI → backend mutations ──────────────────────────────────────────────
 
@@ -136,9 +140,6 @@ class ScanningEngine:
 
         enabled = [k for k, v in consent.items() if v]
         disabled = [k for k, v in consent.items() if not v]
-        print(f"[WRIGHT] Consent saved — enabled: {enabled or 'none'}")
-        if disabled:
-            print(f"[WRIGHT]              disabled: {disabled}")
         logger.info("Consent updated via GUI: enabled=%s disabled=%s", enabled, disabled)
 
         self.controller.request_config_reload()
@@ -194,7 +195,6 @@ class ScanningEngine:
         cfg["collector_types"] = types
         save_config(cfg)
         self._cfg = cfg
-        print(f"[WRIGHT] Firmware types updated: {types}")
         logger.info("Firmware types updated via GUI: %s", types)
         self.controller.request_config_reload()
         self.scan_manager.update_firmware_types(types)
