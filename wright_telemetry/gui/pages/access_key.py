@@ -192,28 +192,24 @@ class AccessKeyPage(QWidget):
         self._set_status("Connecting to Wright One…")
 
         from wright_telemetry.portal_client import redeem_access_key
-        from wright_telemetry.config import load_config
-
-        cfg = load_config() or {}
 
         def _on_result(result: dict) -> None:
             # Called from the background redeem thread.  Emit a signal so Qt
             # delivers _handle_result on the main thread — QTimer.singleShot
             # without a receiver context is unreliable from non-Qt threads.
-            self._redeem_done.emit({"result": result, "cfg": cfg})
+            self._redeem_done.emit({"result": result})
 
         redeem_access_key(access_key=raw_key, callback=_on_result)
 
     def _handle_result(self, payload: dict) -> None:
         result: dict = payload["result"]
-        cfg: dict    = payload["cfg"]
         from wright_telemetry.config import load_config, save_config
 
         if result.get("success"):
             # Persist credentials — the engine will be started fresh after this
             from wright_telemetry.config import _DEFAULT_POLL_INTERVAL, _DEFAULT_COLLECTOR_TYPES
             from wright_telemetry.settings import API_URL
-            cfg = load_config() or cfg
+            cfg = load_config() or {}
             cfg["wright_api_key"] = result["apiKey"]
             cfg["facility_id"] = result["facilityId"]
             cfg.setdefault("wright_api_url", API_URL)

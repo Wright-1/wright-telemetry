@@ -438,6 +438,7 @@ class _ScanRow(QWidget):
         super().__init__(parent)
         self._engine = engine
         self.subnet = result.subnet
+        self._status: str = result.status  # explicit state, never derive from label text
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet("background: transparent;")
         self.setFixedHeight(40)
@@ -527,7 +528,12 @@ class _ScanRow(QWidget):
 
         self.update(result)
 
+    @property
+    def status(self) -> str:
+        return self._status
+
     def update(self, result: SubnetScanResult) -> None:  # type: ignore[override]
+        self._status = result.status
         label, color = self._STATUS_CFG.get(result.status, ("—", T.TEXT_MUTED))
         self._status_lbl.setText(label)
         self._status_lbl.setStyleSheet(
@@ -577,7 +583,7 @@ class _ScanRow(QWidget):
     def _on_action(self) -> None:
         if self._engine is None:
             return
-        if self._btn.text() == "⊗":
+        if self._status == "scanning":
             self._engine.cancel_scan()
         else:
             self._engine.scan_manager.enqueue([self.subnet])
@@ -691,16 +697,23 @@ class _ActiveScansCard(QWidget):
         if result.subnet in self._rows:
             self._rows[result.subnet].update(result)
         else:
+            # Divider goes *before* the new row, skipped for the very first entry
+            # so there is never a trailing separator after the last row.
+            is_first = len(self._rows) == 0
             row = _ScanRow(result, self._engine)
-            div = _hdiv()
+            div = None if is_first else _hdiv()
             self._rows[result.subnet] = row
             self._dividers[result.subnet] = div
             idx = self._rows_layout.count() - 1   # before stretch
-            self._rows_layout.insertWidget(idx, row)
-            self._rows_layout.insertWidget(idx + 1, div)
+            if div is not None:
+                self._rows_layout.insertWidget(idx, div)
+                self._rows_layout.insertWidget(idx + 1, row)
+            else:
+                self._rows_layout.insertWidget(idx, row)
         self._refresh_badge()
 
     def remove_row(self, subnet: str) -> None:
+        is_first = next(iter(self._rows), None) == subnet
         row = self._rows.pop(subnet, None)
         div = self._dividers.pop(subnet, None)
         if row:
@@ -711,13 +724,26 @@ class _ActiveScansCard(QWidget):
             div.setVisible(False)
             self._rows_layout.removeWidget(div)
             div.deleteLater()
+        # When the first row (the one without a leading divider) is removed, the
+        # new first row now has an orphaned leading divider — remove it too.
+        if is_first and self._rows:
+            new_first = next(iter(self._rows))
+            leading_div = self._dividers.get(new_first)
+            if leading_div is not None:
+                leading_div.setVisible(False)
+                self._rows_layout.removeWidget(leading_div)
+                leading_div.deleteLater()
+                self._dividers[new_first] = None
         self._refresh_badge()
 
+    def row_count(self) -> int:
+        return len(self._rows)
+
+    def get_row(self, subnet: str) -> "_ScanRow | None":
+        return self._rows.get(subnet)
+
     def _refresh_badge(self) -> None:
-        active = sum(
-            1 for r in self._rows.values()
-            if "Scanning" in (r._status_lbl.text() or "")
-        )
+        active = sum(1 for r in self._rows.values() if r.status == "scanning")
         self._badge_count.setText(f"{active} ACTIVE")
 
 
@@ -911,7 +937,7 @@ class DiscoveryPage(QWidget):
         self._total_miners = total
         self._warning.setVisible(False)
         if total > 0:
-            n = len(self._scans_card._rows)
+            n = self._scans_card.row_count()
             s = "s" if total != 1 else ""
             self._status_lbl.setText(
                 f"{total} miner{s} found across {n} subnet{'s' if n != 1 else ''}"
@@ -926,7 +952,7 @@ class DiscoveryPage(QWidget):
         self._status_dot.setStyleSheet(
             f"color: {T.ACCENT_ORANGE}; background: transparent;"
         )
-        if "found" not in self._status_lbl.text():
+        if self._total_miners == 0:
             self._status_lbl.setText("Scan in progress…")
 
     def _set_status_idle(self) -> None:
@@ -943,5 +969,6 @@ class DiscoveryPage(QWidget):
         if self._engine is None:
             return
         for result in self._engine.scan_manager.get_all_results():
-            if result.subnet in self._scans_card._rows:
-                self._scans_card._rows[result.subnet].update(result)
+            row = self._scans_card.get_row(result.subnet)
+            if row is not None:
+                row.update(result)

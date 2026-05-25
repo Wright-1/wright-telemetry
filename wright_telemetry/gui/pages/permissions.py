@@ -183,6 +183,8 @@ class PermissionsPage(QWidget):
         scroll_layout.addStretch()
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll, 1)
+
+
     def get_consent(self) -> dict[str, bool]:
         """Return current toggle states as a consent dict."""
         return {row.key: row.toggle.isChecked() for row in self.rows}
@@ -196,8 +198,12 @@ class PermissionsPage(QWidget):
         if self._engine is not None:
             self._engine.update_consent(self.get_consent())
 
-    def _on_next(self) -> None:
-        """Flush any pending debounce immediately, then navigate."""
+    def on_next(self) -> None:
+        """Called by the wizard when its Next button is pressed.
+
+        Flushes any pending debounce immediately so consent is always
+        persisted before the page transitions, then emits next_clicked.
+        """
         self._debounce.stop()
         self._flush_consent()
         self.next_clicked.emit()

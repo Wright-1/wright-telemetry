@@ -427,12 +427,16 @@ class _PortalBanner(QWidget):
         layout.addWidget(sub)
         layout.addSpacing(10)
 
-        link = _lbl("portal.wrightfan.com  ↗", 13, 500, T.TEXT_PRIMARY)
-        link.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        link.setCursor(Qt.CursorShape.PointingHandCursor)
-        link.setStyleSheet(
-            f"color: {T.TEXT_PRIMARY}; background: transparent; text-decoration: underline;"
+        link = QLabel(
+            f'<a href="https://portal.wrightfan.com" '
+            f'style="color:{T.TEXT_PRIMARY}; text-decoration:underline;">'
+            f'portal.wrightfan.com  ↗</a>'
         )
+        link.setFont(make_font(13, 500))
+        link.setStyleSheet("background: transparent;")
+        link.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        link.setTextFormat(Qt.TextFormat.RichText)
+        link.setOpenExternalLinks(True)
         layout.addWidget(link)
 
 
@@ -445,6 +449,7 @@ class OverviewPage(QWidget):
         super().__init__(parent)
         self._engine = engine
         self._fw_breakdown: dict[str, int] = {}
+        self._subnet_breakdowns: dict[str, dict[str, int]] = {}  # per-subnet, prevents double-counting on rescan
 
         self.setStyleSheet(f"background: {T.BG_WINDOW};")
 
@@ -504,28 +509,31 @@ class OverviewPage(QWidget):
         self._ops_card.set_miner_count(count)
 
     def _on_scan_complete(self, subnet: str, miners_found: int, breakdown: object) -> None:
-        # Merge new breakdown into aggregate
         bd: dict[str, int] = breakdown if isinstance(breakdown, dict) else {}
-        for key, val in bd.items():
-            self._fw_breakdown[key] = self._fw_breakdown.get(key, 0) + val
+        # Replace this subnet's entry, then recompute aggregate from scratch
+        # so that a rescan never double-counts the old values.
+        self._subnet_breakdowns[subnet] = bd
+        self._fw_breakdown = {}
+        for sub_bd in self._subnet_breakdowns.values():
+            for key, val in sub_bd.items():
+                self._fw_breakdown[key] = self._fw_breakdown.get(key, 0) + val
         self._topo_card.update_distribution(self._fw_breakdown)
 
     def _on_poll_cycle(self) -> None:
-        # Refresh miner count from engine after each poll
-        if self._engine is not None:
-            count = len(self._engine._cfg.get("miners", []))
-            self._ops_card.set_miner_count(count)
+        # miner_count_changed fires within each poll cycle and drives _on_miner_count;
+        # nothing additional is needed here.
+        pass
 
     def _refresh_topology_from_engine(self) -> None:
         if self._engine is None:
             return
-        breakdown: dict[str, int] = {}
+        self._subnet_breakdowns = {}
         for result in self._engine.scan_manager.get_all_results():
             if result.status == "complete":
-                for k, v in result.firmware_breakdown.items():
-                    breakdown[k] = breakdown.get(k, 0) + v
-        self._fw_breakdown = breakdown
-        self._topo_card.update_distribution(breakdown)
-
-        miners = self._engine._cfg.get("miners", [])
-        self._ops_card.set_miner_count(len(miners))
+                self._subnet_breakdowns[result.subnet] = dict(result.firmware_breakdown)
+        self._fw_breakdown = {}
+        for sub_bd in self._subnet_breakdowns.values():
+            for k, v in sub_bd.items():
+                self._fw_breakdown[k] = self._fw_breakdown.get(k, 0) + v
+        self._topo_card.update_distribution(self._fw_breakdown)
+        # Miner count will be populated by miner_count_changed on the first poll cycle.
