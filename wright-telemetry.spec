@@ -179,13 +179,13 @@ app = BUNDLE(
     name="WrightData.app",
     icon=_icon_arg,
     bundle_identifier="com.wrightone.wrightdata",
-    version="0.7.3",
+    version="0.7.8",
     info_plist={
         # Human-readable name shown in Finder / Dock / menu bar
         "CFBundleName":            "WrightData",
         "CFBundleDisplayName":     "WrightData",
-        "CFBundleVersion":         "0.7.3",
-        "CFBundleShortVersionString": "0.7.3",
+        "CFBundleVersion":         "0.7.8",
+        "CFBundleShortVersionString": "0.7.8",
         "CFBundleIdentifier":      "com.wrightone.wrightdata",
         "CFBundleExecutable":      "wright-telemetry-gui",
 
