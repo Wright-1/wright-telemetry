@@ -16,6 +16,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+import re
+import subprocess
+
 import requests
 
 logger = logging.getLogger(__name__)
@@ -40,6 +43,135 @@ class DiscoveredMiner:
 # Local network helpers
 # ------------------------------------------------------------------
 
+def _subnets_from_ip_commands() -> list[str]:
+    """Enumerate every network interface's attached subnet via OS commands.
+
+    Platform dispatch:
+        Linux        – ``ip addr show``  (+ ``ip route show`` as fallback)
+        macOS / BSD  – ``ifconfig -a``
+        Windows      – ``ipconfig``
+
+    Returns a deduplicated list of CIDR strings, or ``[]`` if the relevant
+    command is unavailable or produces no usable output.
+    """
+    subnets: list[str] = []
+    seen: set[str] = set()
+
+    def _add(ip: str, prefix: int) -> None:
+        try:
+            if ipaddress.IPv4Address(ip).is_loopback:
+                return
+            net = str(ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False))
+            if net not in seen:
+                seen.add(net)
+                subnets.append(net)
+        except ValueError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Linux – ip addr show
+    # ------------------------------------------------------------------
+    if sys.platform.startswith("linux"):
+        try:
+            out = subprocess.check_output(
+                ["ip", "addr", "show"],
+                stderr=subprocess.DEVNULL, text=True,
+            )
+            for m in re.finditer(r"inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)", out):
+                _add(m.group(1), int(m.group(2)))
+        except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+            pass
+
+        # ip route show – connected routes as a cross-check / fallback
+        if not subnets:
+            try:
+                out = subprocess.check_output(
+                    ["ip", "route", "show"],
+                    stderr=subprocess.DEVNULL, text=True,
+                )
+                # e.g. "192.168.1.0/24 dev eth0 proto kernel scope link"
+                for m in re.finditer(
+                    r"(\d+\.\d+\.\d+\.\d+/\d+)\s+dev\s+\S+\s+proto\s+kernel", out
+                ):
+                    try:
+                        net = ipaddress.IPv4Network(m.group(1), strict=False)
+                        cidr = str(net)
+                        if cidr not in seen:
+                            seen.add(cidr)
+                            subnets.append(cidr)
+                    except ValueError:
+                        pass
+            except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+                pass
+
+    # ------------------------------------------------------------------
+    # macOS / BSD – ifconfig -a
+    # ------------------------------------------------------------------
+    elif sys.platform == "darwin" or sys.platform.startswith("freebsd"):
+        try:
+            out = subprocess.check_output(
+                ["ifconfig", "-a"],
+                stderr=subprocess.DEVNULL, text=True,
+            )
+            # e.g. "inet 192.168.1.5 netmask 0xffffff00"
+            for m in re.finditer(
+                r"inet\s+(\d+\.\d+\.\d+\.\d+)\s+netmask\s+"
+                r"(0x[0-9a-fA-F]+|\d+\.\d+\.\d+\.\d+)",
+                out,
+            ):
+                ip, mask_raw = m.group(1), m.group(2)
+                try:
+                    if mask_raw.startswith("0x"):
+                        prefix = bin(int(mask_raw, 16)).count("1")
+                    else:
+                        prefix = sum(
+                            bin(int(b)).count("1") for b in mask_raw.split(".")
+                        )
+                    _add(ip, prefix)
+                except ValueError:
+                    pass
+        except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+            pass
+
+    # ------------------------------------------------------------------
+    # Windows – ipconfig
+    # ------------------------------------------------------------------
+    elif sys.platform == "win32":
+        try:
+            out = subprocess.check_output(
+                ["ipconfig"],
+                stderr=subprocess.DEVNULL, text=True,
+            )
+            # ipconfig prints address and mask on consecutive lines:
+            #   IPv4 Address. . . : 192.168.1.100
+            #   Subnet Mask . . . : 255.255.255.0
+            ip_pat  = re.compile(r"IPv4 Address[^:]*:\s*(\d+\.\d+\.\d+\.\d+)")
+            mask_pat = re.compile(r"Subnet Mask[^:]*:\s*(\d+\.\d+\.\d+\.\d+)")
+            lines = out.splitlines()
+            i = 0
+            while i < len(lines):
+                ip_m = ip_pat.search(lines[i])
+                if ip_m:
+                    # Mask is usually on the very next line
+                    for j in range(i + 1, min(i + 4, len(lines))):
+                        mask_m = mask_pat.search(lines[j])
+                        if mask_m:
+                            try:
+                                prefix = sum(
+                                    bin(int(b)).count("1")
+                                    for b in mask_m.group(1).split(".")
+                                )
+                                _add(ip_m.group(1), prefix)
+                            except ValueError:
+                                pass
+                            break
+                i += 1
+        except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+            pass
+
+    return subnets
+
+
 def get_local_ip() -> Optional[str]:
     """Return the primary LAN IP of this machine (best-effort)."""
     try:
@@ -52,41 +184,45 @@ def get_local_ip() -> Optional[str]:
 
 
 def default_subnets() -> list[str]:
-    """Return /24 CIDRs for all detected local interfaces, excluding loopback.
+    """Return CIDRs for all detected local interfaces, excluding loopback.
 
-    Uses ``socket.getaddrinfo`` on the local hostname as the primary
-    cross-platform method (no psutil, no netifaces, no fcntl).  Supplements
-    with the UDP-trick IP from :func:`get_local_ip` so that machines with
-    unusual hostname resolution still get at least one subnet.
+    Detection order (results are merged / deduplicated across all three):
+
+    1. OS interface command (``ip addr``, ``ifconfig``, or ``ipconfig``) —
+       most accurate; uses the real prefix length for each interface.
+    2. ``socket.getaddrinfo`` on the local hostname — broad cross-platform
+       fallback; assumes /24.
+    3. UDP-connect trick — always finds the *default-route* interface;
+       also assumes /24.
 
     Returns an empty list if nothing can be detected.
     """
-    ips: list[str] = []
+    seen: set[str] = set()
+    subnets: list[str] = []
 
-    # Primary: hostname-based getaddrinfo — covers most multi-interface setups
+    def _add(cidr: str) -> None:
+        if cidr not in seen:
+            seen.add(cidr)
+            subnets.append(cidr)
+
+    # 1. OS-level interface enumeration (most reliable, real prefix lengths)
+    for cidr in _subnets_from_ip_commands():
+        _add(cidr)
+
+    # 2. Hostname-based getaddrinfo (cross-platform, assumes /24)
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
         for info in infos:
             ip = info[4][0]
             if not ip.startswith("127."):
-                ips.append(ip)
+                _add(str(ipaddress.IPv4Network(f"{ip}/24", strict=False)))
     except Exception:
         pass
 
-    # Supplement: UDP trick picks up the default-route interface even if
-    # hostname resolution is misconfigured or returns only loopback
+    # 3. UDP trick — picks up default-route NIC even if hostname is broken
     udp_ip = get_local_ip()
-    if udp_ip and not udp_ip.startswith("127.") and udp_ip not in ips:
-        ips.append(udp_ip)
-
-    # Deduplicate and map each IP → its /24
-    seen: set[str] = set()
-    subnets: list[str] = []
-    for ip in ips:
-        subnet = str(ipaddress.IPv4Network(f"{ip}/24", strict=False))
-        if subnet not in seen:
-            seen.add(subnet)
-            subnets.append(subnet)
+    if udp_ip and not udp_ip.startswith("127."):
+        _add(str(ipaddress.IPv4Network(f"{udp_ip}/24", strict=False)))
 
     return subnets
 
