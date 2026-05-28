@@ -38,6 +38,7 @@ _cli_hiddenimports = [
     "wright_telemetry.collectors.bitmain",
     "wright_telemetry.collectors.luxos",
     "wright_telemetry.collectors.vnish",
+    "wright_telemetry.mining_rig_agent",
     "pyfiglet",
     "pyfiglet.fonts",
     "websockets",
