@@ -245,9 +245,18 @@ class _ProgressEntryCard(QWidget):
         self._status_lbl = _lbl("No scan running", 12, 400, T.TEXT_SECONDARY)
         ftr.addWidget(self._status_lbl)
         ftr.addStretch()
+        self._next_scan_lbl = _lbl("", 11, 400, T.TEXT_MUTED)
+        ftr.addWidget(self._next_scan_lbl)
+        ftr.addSpacing(12)
         self._counts_lbl = _lbl("", 12, 400, T.TEXT_MUTED)
         ftr.addWidget(self._counts_lbl)
         prog.addLayout(ftr)
+
+        # 1-second ticker to keep the countdown fresh
+        self._countdown_timer = QTimer()
+        self._countdown_timer.setInterval(1000)
+        self._countdown_timer.timeout.connect(self._refresh_countdown)
+        self._countdown_timer.start()
 
         outer.addWidget(progress_widget)
         outer.addWidget(_hdiv())
@@ -447,6 +456,7 @@ class _ProgressEntryCard(QWidget):
         self._bar.setMaximum(max(total, 1))
         self._bar.setValue(0)
         self._pct_lbl.setText("0%")
+        self._next_scan_lbl.setVisible(False)
         self._style_cancel()
 
     def update_progress(self, subnet: str, scanned: int, total: int) -> None:
@@ -463,11 +473,27 @@ class _ProgressEntryCard(QWidget):
         self._counts_lbl.setText("")
         self._bar.setValue(0)
         self._pct_lbl.setText("—")
+        self._next_scan_lbl.setVisible(True)
+        self._refresh_countdown()
         self._style_start()
 
     def set_cancelled(self, subnet: str) -> None:
         self.set_idle()
         self._status_lbl.setText(f"Cancelled: {subnet}")
+
+    def _refresh_countdown(self) -> None:
+        """Update the 'Next auto scan in X:XX' label from the engine timer."""
+        if self._scanning or self._engine is None:
+            self._next_scan_lbl.setVisible(False)
+            return
+        secs = self._engine.seconds_until_next_discovery()
+        if secs <= 0:
+            self._next_scan_lbl.setText("")
+            self._next_scan_lbl.setVisible(False)
+            return
+        mins, s = divmod(secs, 60)
+        self._next_scan_lbl.setText(f"Next auto scan in {mins}:{s:02d}")
+        self._next_scan_lbl.setVisible(True)
 
     # ── Button styles ─────────────────────────────────────────────────────────
 
@@ -985,6 +1011,7 @@ class DiscoveryPage(QWidget):
         self._engine = engine
         self._progress_entry._engine = engine
         self._progress_entry.sync_firmware_toggles(engine)
+        self._progress_entry._refresh_countdown()
         self._scans_card._engine = engine
         self._connect_signals(engine)
 
