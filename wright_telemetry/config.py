@@ -380,6 +380,11 @@ def _encode_password(pw: str) -> str:
     return base64.b64encode(pw.encode("utf-8")).decode("utf-8")
 
 
+def encode_password(pw: str) -> str:
+    """Base64-encode a plaintext password for storage in config."""
+    return _encode_password(pw)
+
+
 def decode_password(b64: str) -> str:
     return base64.b64decode(b64.encode("utf-8")).decode("utf-8")
 
