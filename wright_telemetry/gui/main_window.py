@@ -257,6 +257,9 @@ class MainWindow(QWidget):
     def _on_discovery_next(self) -> None:
         self._ob_discovery = True
         self._update_onboarding_ui()
+        # Pre-fill the register URL with the email stored at provision time
+        email = (self._engine._cfg.get("email", "") if self._engine else "")
+        self.pages["portal"].set_email(email)
         # Show portal page in place of overview
         self.stack.setCurrentWidget(self.pages["portal"])
         self.sidebar.set_active("overview")   # keep nav consistent

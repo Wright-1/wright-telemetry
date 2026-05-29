@@ -718,6 +718,7 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
         if result["success"]:
             cfg["wright_api_key"] = result["apiKey"]
             cfg["facility_id"]    = result["facilityId"]
+            cfg["email"]          = result.get("email", "")
             cfg["wright_api_url"] = API_URL
             console.print()
             console.print(f"  [green]✓[/] Activated — Facility ID: [cyan]{result['facilityId']}[/]")

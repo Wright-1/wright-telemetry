@@ -7,6 +7,8 @@ replaces this page with the real Overview.
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
@@ -24,8 +26,11 @@ from wright_telemetry.gui.widgets import PrimaryButton
 class PortalPage(QWidget):
     """Step 3 of onboarding: direct the user to create a portal account."""
 
+    _REGISTER_BASE = "https://portal.wrightfan.com/auth/register"
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._register_url = self._REGISTER_BASE
         self.setStyleSheet(f"background: {T.BG_WINDOW};")
 
         outer = QVBoxLayout(self)
@@ -62,7 +67,7 @@ class PortalPage(QWidget):
         # CTA button — centred
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self._open_btn = PrimaryButton("Open Wright One Portal  ↗")
+        self._open_btn = PrimaryButton("Create your account  ↗")
         self._open_btn.setFixedHeight(44)
         self._open_btn.setMinimumWidth(220)
         self._open_btn.clicked.connect(self._on_open)
@@ -73,9 +78,9 @@ class PortalPage(QWidget):
 
         # Sub-link
         already = QLabel(
-            "Already have an account? Visit "
+            "Already have an account? "
             f"<a style='color:{T.ACCENT_BLUE};' "
-            f"href='https://portal.wrightfan.com'>portal.wrightfan.com</a>"
+            f"href='https://portal.wrightfan.com/auth/login'>Sign in here</a>"
         )
         already.setFont(make_font(*T.FONT_BODY_SMALL))
         already.setStyleSheet(f"color: {T.TEXT_MUTED};")
@@ -96,5 +101,12 @@ class PortalPage(QWidget):
 
         outer.addStretch(1)
 
+    def set_email(self, email: str) -> None:
+        """Pre-fill the register URL with *email* so the form is ready to go."""
+        if email:
+            self._register_url = f"{self._REGISTER_BASE}?{urlencode({'email': email})}"
+        else:
+            self._register_url = self._REGISTER_BASE
+
     def _on_open(self) -> None:
-        QDesktopServices.openUrl(QUrl("https://portal.wrightfan.com"))
+        QDesktopServices.openUrl(QUrl(self._register_url))

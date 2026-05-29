@@ -35,7 +35,7 @@ def _redeem(access_key: str) -> dict[str, Any]:
         if r.status_code == 200 and payload.get("success"):
             data = payload.get("data", {})
             print(f"[WRIGHT] Provisioned — facilityId: {data['facilityId']}  apiKey: {data['apiKey']}")
-            return {"success": True, "apiKey": data["apiKey"], "facilityId": data["facilityId"]}
+            return {"success": True, "apiKey": data["apiKey"], "facilityId": data["facilityId"], "email": data.get("email", "")}
         err = payload.get("error") or payload.get("message") or f"HTTP {r.status_code}"
         logger.warning("access-key redeem failed: %s", err)
         return {"success": False, "error": err}
@@ -70,8 +70,12 @@ def redeem_access_key(access_key: str, callback: Any) -> None:
     t.start()
 
 
-def fetch_agent_info(api_key: str, push_gui_event: Any) -> None:
-    """Fetch facility + customer info from GET /api/agent/info.
+def fetch_agent_info(api_key: str, facility_id: str, push_gui_event: Any) -> None:
+    """Fetch facility + customer info from GET /api/agent/info/:facilityId.
+
+    The *facility_id* is the only identity the local config knows about;
+    the server validates it against ERPNext and derives the customer from
+    the facility record.
 
     Runs on a daemon thread.  Pushes one of:
       {"event": "agent_info",       "data": {...}}
@@ -79,7 +83,7 @@ def fetch_agent_info(api_key: str, push_gui_event: Any) -> None:
     """
 
     def _run() -> None:
-        url = build_url("agent/info", pipeline=False)
+        url = build_url(f"agent/info/{facility_id}", pipeline=False)
         print(f"[WRIGHT] GET {url}")
         try:
             r = requests.get(url, headers={"x-api-key": api_key}, timeout=_TIMEOUT)
