@@ -24,7 +24,7 @@ from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
 from wright_telemetry.config import decode_password, load_config, mask_config
 from wright_telemetry.mac_util import normalize_mac_address
-from wright_telemetry.consent import consented_metrics
+from wright_telemetry.consent import DEFAULT_CONSENT, consented_metrics
 from wright_telemetry.discovery import (
     discover_miners,
     discovered_to_miner_cfgs,
@@ -799,7 +799,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     """Main entry point -- runs forever with crash recovery."""
     poll_interval = cfg.get("poll_interval_seconds", 30)
     facility_id = cfg.get("facility_id", "unknown")
-    metrics = consented_metrics(cfg.get("consent", {}))
+    metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))
     default_collector_type = cfg.get("collector_type", "braiins")
 
     discovery_cfg = cfg.get("discovery", {})
@@ -920,7 +920,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 if controller and controller.check_config_reload():
                     cfg = _reload_cfg(cfg)
                     poll_interval = cfg.get("poll_interval_seconds", 30)
-                    metrics = consented_metrics(cfg.get("consent", {}))
+                    metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))
                     default_collector_type = cfg.get("collector_type", "braiins")
                     discovery_cfg = cfg.get("discovery", {})
                     discovery_enabled = discovery_cfg.get("enabled", False)

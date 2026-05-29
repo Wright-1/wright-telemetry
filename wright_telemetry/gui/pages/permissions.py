@@ -162,7 +162,7 @@ class PermissionsPage(QWidget):
                 subtitle=subtitle,
                 detail=detail,
                 category_color=color,
-                checked=saved_consent.get(key, False),
+                checked=saved_consent.get(key, True),
             )
             card_layout.addWidget(row)
             row.toggle.toggled.connect(self._on_toggle_changed)
@@ -184,6 +184,11 @@ class PermissionsPage(QWidget):
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll, 1)
 
+        # Flush the initial (all-on) consent state immediately so the engine
+        # and config file reflect the correct defaults from the very first run,
+        # without waiting for the user to change a toggle or click Next.
+        QTimer.singleShot(0, self._flush_consent)
+
 
     def get_consent(self) -> dict[str, bool]:
         """Return current toggle states as a consent dict."""
@@ -194,9 +199,23 @@ class PermissionsPage(QWidget):
         self._debounce.start()  # restarts automatically if already running
 
     def _flush_consent(self) -> None:
-        """Save current consent state and signal the scheduler."""
+        """Save current consent state and signal the scheduler.
+
+        If the engine is already wired, delegates to it so the scheduler
+        is hot-reloaded.  Otherwise writes directly to disk so that the
+        WebSocket client and scheduler always see the correct defaults
+        even before the engine comes up (e.g. first-run provisioning flow).
+        """
+        consent = self.get_consent()
         if self._engine is not None:
-            self._engine.update_consent(self.get_consent())
+            self._engine.update_consent(consent)
+        else:
+            # Engine not attached yet — persist directly so other components
+            # (ws_client, scheduler) read the correct defaults from disk.
+            from wright_telemetry.config import load_config, save_config
+            cfg = load_config() or {}
+            cfg["consent"] = consent
+            save_config(cfg)
 
     def on_next(self) -> None:
         """Called by the wizard when its Next button is pressed.

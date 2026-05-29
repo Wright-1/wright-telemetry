@@ -334,6 +334,16 @@ class _ProgressEntryCard(QWidget):
 
         outer.addWidget(entry_widget)
 
+    def sync_firmware_toggles(self, engine: "ScanningEngine") -> None:
+        """Update toggle states to match the engine's collector_types config."""
+        active_types: list[str] = engine._cfg.get("collector_types") or []
+        for key, toggle in self._fw_toggles.items():
+            # Block the toggled signal while we programmatically update state
+            # to avoid triggering _on_firmware_changed and a spurious rescan.
+            toggle.toggle.blockSignals(True)
+            toggle.toggle.setChecked(key in active_types or not active_types)
+            toggle.toggle.blockSignals(False)
+
     # ── Progress slots ────────────────────────────────────────────────────────
 
     def set_scanning(self, subnet: str, total: int) -> None:
@@ -861,6 +871,7 @@ class DiscoveryPage(QWidget):
         """Attach a freshly created engine after provisioning."""
         self._engine = engine
         self._progress_entry._engine = engine
+        self._progress_entry.sync_firmware_toggles(engine)
         self._scans_card._engine = engine
         self._connect_signals(engine)
 
