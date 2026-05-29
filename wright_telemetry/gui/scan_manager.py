@@ -50,6 +50,9 @@ class ScanManager:
         self._cancel_event = threading.Event()
         self._worker: Optional[threading.Thread] = None
         self._current_subnet: Optional[str] = None
+        # Per-subnet miner dicts (credential-free) shared with the scheduler.
+        # Updated after each subnet scan; never written to the config file.
+        self._found_miners: dict[str, list[dict]] = {}
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -90,10 +93,15 @@ class ScanManager:
         """Remove a subnet from results and queue. Cancels it if currently scanning."""
         with self._lock:
             self._results.pop(subnet, None)
+            self._found_miners.pop(subnet, None)
             if subnet in self._queue:
                 self._queue.remove(subnet)
             if self._current_subnet == subnet:
                 self._cancel_event.set()
+            all_miners = [m for cfgs in self._found_miners.values() for m in cfgs]
+        # Update shared store and wake scheduler outside the lock
+        self._controller.set_discovered_miners(all_miners)
+        self._controller.request_config_reload()
 
     def start_all(self) -> None:
         """Re-queue every known subnet and start scanning."""
@@ -267,6 +275,7 @@ class ScanManager:
             subnet, len(found), firmware_breakdown,
         )
 
+        # ── GUI events (live progress, unchanged) ────────────────────────────────
         self._controller.push_gui_event({
             "event": "scan_complete",
             "subnet": subnet,
@@ -278,6 +287,28 @@ class ScanManager:
             "event": "discovery_total",
             "total": self.total_miners(),
         })
+
+        # ── Shared Model update → scheduler ─────────────────────────────────
+        # Convert DiscoveredMiner objects to credential-free dicts and store
+        # them in the controller so the scheduler can read them directly.
+        # Credentials are applied by the scheduler from the live config.
+        miner_dicts = [
+            {
+                "name":        m.hostname or m.ip,
+                "url":         f"http://{m.ip}",
+                "firmware":    m.firmware,
+                "mac_address": m.mac_address,
+                "discovered":  True,
+            }
+            for m in found
+        ]
+        with self._lock:
+            self._found_miners[subnet] = miner_dicts
+            all_miners = [m for cfgs in self._found_miners.values() for m in cfgs]
+        self._controller.set_discovered_miners(all_miners)
+        # Wake the scheduler so it picks up the new miners without waiting
+        # for the next full poll_interval sleep.
+        self._controller.request_config_reload()
 
     def _finish_cancelled(self, subnet: str) -> None:
         with self._lock:

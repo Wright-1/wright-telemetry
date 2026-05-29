@@ -57,26 +57,125 @@ def _check_fd_growth(baseline: int, last_check: float) -> tuple[int, float]:
     return baseline, now
 
 
-def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return miners to poll: legacy config miners merged with any discovered ones.
+def _integrate_new_miners(
+    refreshed: list[dict[str, Any]],
+    collectors: list,
+    identities: dict,
+    known_urls: set,
+    known_macs: set,
+    default_collector_type: str,
+) -> tuple:
+    """Detect new or IP-moved miners in *refreshed* and add them to *collectors*.
 
-    Miners in ``cfg["miners"]`` are always included for backwards compatibility —
-    users who ran an older setup wizard may have miners written there.  Discovered
-    miners are merged in-memory only; nothing is ever written back to the config
-    file.  The server upserts the miners table automatically from the
-    ``miner_identity`` field present on every telemetry payload.
+    Returns updated ``(collectors, identities, known_urls, known_macs)``.
+    Called from both the CLI periodic re-discovery block and the GUI
+    config-reload block so both paths share the same integration logic.
+    """
+    # Detect miners that moved to a new IP (same MAC, different URL)
+    refreshed_by_mac = {m["mac_address"]: m for m in refreshed if m.get("mac_address")}
+    for i, (miner_cfg, _) in enumerate(collectors):
+        mac = miner_cfg.get("mac_address")
+        if not mac or mac not in refreshed_by_mac:
+            continue
+        new_cfg = refreshed_by_mac[mac]
+        if new_cfg["url"] == miner_cfg["url"]:
+            continue
+        old_url = miner_cfg["url"]
+        logger.info(
+            "Miner '%s' (%s) changed IP: %s → %s",
+            miner_cfg.get("name", mac), mac, old_url, new_cfg["url"],
+        )
+        password = decode_password(new_cfg["password_b64"]) if new_cfg.get("password_b64") else ""
+        new_collector = CollectorFactory.create(
+            name=new_cfg.get("firmware", default_collector_type),
+            url=new_cfg["url"],
+            username=new_cfg.get("username"),
+            password=password,
+        )
+        try:
+            new_collector.authenticate()
+        except Exception as exc:
+            logger.warning("Auth failed for moved miner '%s': %s", new_cfg.get("name", mac), exc)
+        old_identity = identities.pop(old_url, None)
+        if old_identity:
+            old_identity.ip_address = (
+                new_cfg["url"]
+                .removeprefix("http://")
+                .removeprefix("https://")
+                .split("/")[0]
+                .split(":")[0]
+            )
+            identities[new_cfg["url"]] = old_identity
+        collectors[i][1].close()
+        collectors[i] = (new_cfg, new_collector)
+        known_urls.discard(old_url)
+        known_urls.add(new_cfg["url"])
+
+    # Genuinely new miners (new URL and new or absent MAC)
+    new_urls = {m["url"] for m in refreshed} - known_urls
+    new_miner_cfgs = [
+        m for m in refreshed
+        if m["url"] in new_urls
+        and (not m.get("mac_address") or m["mac_address"] not in known_macs)
+    ]
+    if new_miner_cfgs:
+        new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
+        _authenticate_all(new_collectors)
+        new_ids = _fetch_identities(new_collectors)
+        collectors.extend(new_collectors)
+        identities.update(new_ids)
+        known_urls |= {m["url"] for m in new_miner_cfgs}
+        known_macs |= {m["mac_address"] for m in new_miner_cfgs if m.get("mac_address")}
+        logger.info(
+            "Integrated %d new miner(s): %s",
+            len(new_miner_cfgs), ", ".join(m["url"] for m in new_miner_cfgs),
+        )
+
+    return collectors, identities, known_urls, known_macs
+
+
+def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[str, Any]]:
+    """Return miners to poll: config miners merged with any discovered ones.
+
+    In GUI mode (*controller* is provided) the shared discovery store is read
+    directly — no network scan is run here.  The ScanManager owns all scanning
+    and keeps the store up to date; the scheduler just consumes the results.
+
+    In CLI / headless mode (*controller* is None) the original subnet-scan
+    path is used so the agent works without the GUI.
+
+    Miners are never written to the config file; the server upserts them
+    automatically from the ``miner_identity`` field on every telemetry payload.
     """
     # Backwards compat: miners explicitly listed in the config file.
     config_miners: list[dict[str, Any]] = list(cfg.get("miners", []))
 
     discovery_cfg = cfg.get("discovery", {})
+    default_user    = discovery_cfg.get("default_username",    "root")
+    default_pw_b64  = discovery_cfg.get("default_password_b64", "")
+
+    if controller is not None and controller.has_gui_scanner:
+        # ── GUI mode: read from the shared discovery store ───────────────────
+        # Miners were found by ScanManager and stored credential-free.
+        # Apply credentials from the live config before merging.
+        raw = controller.get_discovered_miners()
+        discovered_cfgs = [
+            {
+                **m,
+                "username":     m.get("username",     default_user),
+                "password_b64": m.get("password_b64", default_pw_b64),
+            }
+            for m in raw
+        ]
+        if discovered_cfgs:
+            logger.info("Scheduler using %d miner(s) from GUI discovery", len(discovered_cfgs))
+        return merge_miners(config_miners, discovered_cfgs)
+
+    # ── CLI / TUI / headless mode: run our own subnet scan ─────────────────
     if not discovery_cfg.get("enabled", False):
         return config_miners
 
     subnets = discovery_cfg.get("subnets")
-    default_user = discovery_cfg.get("default_username", "root")
-    default_pw_b64 = discovery_cfg.get("default_password_b64", "")
-    # Support both list format and legacy single-string format
     collector_types = cfg.get("collector_types") or cfg.get("collector_type", "braiins")
     firmware_types = firmware_types_for_collector(collector_types)
 
@@ -84,7 +183,6 @@ def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
     logger.info("Discovered %d miner(s) via subnet scan", len(discovered_cfgs))
 
-    # Merge in-memory only — config file is never touched.
     return merge_miners(config_miners, discovered_cfgs)
 
 
@@ -823,12 +921,21 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
         try:
             logger.info("Starting collection loop (poll every %ds, %d metric(s))", poll_interval, len(metrics))
 
-            miners = _resolve_miners(cfg)
+            miners = _resolve_miners(cfg, controller)
             collectors = _build_collectors(miners, default_collector_type)
 
             if not collectors:
-                logger.error("No miners found (configured or discovered). Run --setup to add miners.")
-                time.sleep(poll_interval)
+                logger.info(
+                    "No miners available yet — waiting for GUI discovery to complete"
+                    if controller else
+                    "No miners found (configured or discovered). Run --setup to add miners."
+                )
+                # In GUI mode wake immediately when ScanManager signals new miners
+                # (via request_config_reload); in CLI mode just sleep.
+                if controller:
+                    controller.wait_for_mode_change(timeout=poll_interval)
+                else:
+                    time.sleep(poll_interval)
                 continue
 
             _authenticate_all(collectors)
@@ -856,65 +963,23 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 now = time.time()
 
                 if discovery_enabled and (now - last_scan) >= scan_interval:
-                    logger.info("Running periodic miner re-discovery…")
-                    refreshed = _resolve_miners(cfg)
-
-                    # Detect miners that moved to a new IP (MAC known, URL changed)
-                    refreshed_by_mac = {
-                        m["mac_address"]: m for m in refreshed if m.get("mac_address")
-                    }
-                    for i, (miner_cfg, _) in enumerate(collectors):
-                        mac = miner_cfg.get("mac_address")
-                        if not mac or mac not in refreshed_by_mac:
-                            continue
-                        new_cfg = refreshed_by_mac[mac]
-                        if new_cfg["url"] == miner_cfg["url"]:
-                            continue
-                        old_url = miner_cfg["url"]
-                        logger.info(
-                            "Miner '%s' (%s) changed IP: %s → %s",
-                            miner_cfg.get("name", mac), mac, old_url, new_cfg["url"],
+                    if controller and controller.has_gui_scanner:
+                        # GUI mode: ask ScanManager to re-scan the known subnets.
+                        # It will update the shared store and call request_config_reload()
+                        # when done — the config-reload block below integrates the results.
+                        logger.info("Requesting periodic miner re-discovery via GUI scanner…")
+                        controller.push_gui_event({
+                            "event": "request_scan",
+                            "subnets": discovery_cfg.get("subnets"),
+                        })
+                    else:
+                        # CLI / headless mode: run our own subnet scan.
+                        logger.info("Running periodic miner re-discovery…")
+                        refreshed = _resolve_miners(cfg)
+                        collectors, identities, known_urls, known_macs = _integrate_new_miners(
+                            refreshed, collectors, identities,
+                            known_urls, known_macs, default_collector_type,
                         )
-                        password = decode_password(new_cfg["password_b64"]) if new_cfg.get("password_b64") else ""
-                        new_collector = CollectorFactory.create(
-                            name=new_cfg.get("firmware", default_collector_type),
-                            url=new_cfg["url"],
-                            username=new_cfg.get("username"),
-                            password=password,
-                        )
-                        try:
-                            new_collector.authenticate()
-                        except Exception as exc:
-                            logger.warning("Auth failed for moved miner '%s': %s", new_cfg.get("name", mac), exc)
-                        # Move identity to new URL and update collector
-                        old_identity = identities.pop(old_url, None)
-                        if old_identity:
-                            old_identity.ip_address = new_cfg["url"].removeprefix("http://").removeprefix("https://").split("/")[0].split(":")[0]
-                            identities[new_cfg["url"]] = old_identity
-                        collectors[i][1].close()
-                        collectors[i] = (new_cfg, new_collector)
-                        known_urls.discard(old_url)
-                        known_urls.add(new_cfg["url"])
-
-                    # Genuinely new miners (new URL and new or absent MAC)
-                    new_urls = {m["url"] for m in refreshed} - known_urls
-                    new_miner_cfgs = [
-                        m for m in refreshed
-                        if m["url"] in new_urls
-                        and (not m.get("mac_address") or m["mac_address"] not in known_macs)
-                    ]
-
-                    if new_miner_cfgs:
-                        new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
-                        _authenticate_all(new_collectors)
-                        new_ids = _fetch_identities(new_collectors)
-
-                        collectors.extend(new_collectors)
-                        identities.update(new_ids)
-                        known_urls |= {m["url"] for m in new_miner_cfgs}
-                        known_macs |= {m["mac_address"] for m in new_miner_cfgs if m.get("mac_address")}
-                        logger.info("Discovered %d new miner(s): %s", len(new_miner_cfgs), ", ".join(m["url"] for m in new_miner_cfgs))
-
                     last_scan = now
 
                 if controller and controller.check_config_reload():
@@ -935,6 +1000,18 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         api_client.send_agent_config(safe_cfg, __version__)
                     except Exception as exc:
                         logger.warning("Failed to send agent config after reload: %s", exc)
+                    # Integrate any miners that arrived via GUI discovery (or
+                    # CLI re-discovery) since the last config reload.
+                    refreshed = _resolve_miners(cfg, controller)
+                    collectors, identities, known_urls, known_macs = _integrate_new_miners(
+                        refreshed, collectors, identities,
+                        known_urls, known_macs, default_collector_type,
+                    )
+                    if collectors:
+                        controller.push_gui_event({
+                            "event": "miners_resolved",
+                            "count": len(collectors),
+                        })
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
 

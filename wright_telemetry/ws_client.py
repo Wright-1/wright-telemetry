@@ -38,6 +38,18 @@ class AgentController:
         self._event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self._gui_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
 
+        # ── Shared discovery state (Model layer) ──────────────────────────────
+        # Written by ScanManager after each subnet scan completes.
+        # Read by the scheduler thread via get_discovered_miners().
+        # Stores credential-free dicts: {url, firmware, name, mac_address}.
+        # The GUI continues to receive its own live progress events unchanged.
+        self._discovered_miners: list[dict[str, Any]] = []
+        self._miners_lock = threading.Lock()
+        # True only when a GUI ScanManager is wired up. When False (CLI / TUI
+        # mode) the scheduler runs its own subnet scan instead of reading the
+        # shared store. Set to True by ScanningEngine on startup.
+        self._has_gui_scanner: bool = False
+
     @property
     def mode(self) -> str:
         with self._lock:
@@ -95,6 +107,28 @@ class AgentController:
                 events.append(self._gui_event_queue.get_nowait())
             except queue.Empty:
                 return events
+
+    def attach_gui_scanner(self) -> None:
+        """Called by ScanningEngine to mark that a GUI ScanManager is running.
+
+        Once set, the scheduler reads discovered miners from the shared store
+        instead of running its own subnet scan.
+        """
+        self._has_gui_scanner = True
+
+    @property
+    def has_gui_scanner(self) -> bool:
+        return self._has_gui_scanner
+
+    def set_discovered_miners(self, miners: list[dict[str, Any]]) -> None:
+        """Called by ScanManager after each scan to share results with the scheduler."""
+        with self._miners_lock:
+            self._discovered_miners = list(miners)
+
+    def get_discovered_miners(self) -> list[dict[str, Any]]:
+        """Called by the scheduler to read the latest GUI discovery results."""
+        with self._miners_lock:
+            return list(self._discovered_miners)
 
     def request_config_reload(self) -> None:
         """Signal the scheduler to reload config from disk.
