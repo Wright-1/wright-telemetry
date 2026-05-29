@@ -111,6 +111,10 @@ class ScanningEngine:
         )
         self._ws_client.start()
 
+        # Tell the controller (and therefore the scheduler) that a GUI
+        # ScanManager is running — switches _resolve_miners to GUI mode.
+        self.controller.attach_gui_scanner()
+
         # Auto-enqueue: detected local subnets + any already in config
         self._auto_enqueue_initial_subnets()
 
@@ -261,6 +265,17 @@ class ScanningEngine:
 
             elif etype == "scan_queue_empty":
                 self.signals.scan_queue_empty.emit()
+
+            elif etype == "request_scan":
+                # Scheduler is asking for a periodic re-discovery.
+                # Route it through the ScanManager so the GUI gets live
+                # progress events exactly as if the user had triggered the scan.
+                subnets = event.get("subnets")
+                if subnets:
+                    self.scan_manager.enqueue(subnets)
+                else:
+                    # No specific subnets: re-queue everything already known
+                    self.scan_manager.start_all()
 
             elif etype == "discovery_total":
                 self.signals.discovery_total_changed.emit(event["total"])
