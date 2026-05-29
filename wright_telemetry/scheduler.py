@@ -919,24 +919,23 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     while True:
         collectors = []
         try:
-            logger.info("Starting collection loop (poll every %ds, %d metric(s))", poll_interval, len(metrics))
-
             miners = _resolve_miners(cfg, controller)
             collectors = _build_collectors(miners, default_collector_type)
 
             if not collectors:
-                logger.info(
-                    "No miners available yet — waiting for GUI discovery to complete"
+                logger.debug(
+                    "No miners available yet — waiting for discovery"
                     if controller else
-                    "No miners found (configured or discovered). Run --setup to add miners."
+                    "No miners found. Run --setup to add miners."
                 )
-                # In GUI mode wake immediately when ScanManager signals new miners
-                # (via request_config_reload); in CLI mode just sleep.
                 if controller:
                     controller.wait_for_mode_change(timeout=poll_interval)
                 else:
                     time.sleep(poll_interval)
                 continue
+
+            logger.info("Starting collection loop (poll every %ds, %d metric(s), %d miner(s))",
+                        poll_interval, len(metrics), len(collectors))
 
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
@@ -962,18 +961,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
             while True:
                 now = time.time()
 
+                # ── Periodic re-discovery (CLI / headless only) ──────────────────────
+                # In GUI mode the engine's discovery timer owns all scanning.
+                # The scheduler never initiates discovery — it only polls
+                # miners that are already in the shared store.
                 if discovery_enabled and (now - last_scan) >= scan_interval:
-                    if controller and controller.has_gui_scanner:
-                        # GUI mode: ask ScanManager to re-scan the known subnets.
-                        # It will update the shared store and call request_config_reload()
-                        # when done — the config-reload block below integrates the results.
-                        logger.info("Requesting periodic miner re-discovery via GUI scanner…")
-                        controller.push_gui_event({
-                            "event": "request_scan",
-                            "subnets": discovery_cfg.get("subnets"),
-                        })
-                    else:
-                        # CLI / headless mode: run our own subnet scan.
+                    if not (controller and controller.has_gui_scanner):
                         logger.info("Running periodic miner re-discovery…")
                         refreshed = _resolve_miners(cfg)
                         collectors, identities, known_urls, known_macs = _integrate_new_miners(
@@ -982,6 +975,10 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         )
                     last_scan = now
 
+                # ── Config / discovery-store reload ──────────────────────────────
+                # Fired by ScanManager after each scan completes, and by any
+                # consent / credential change.  In GUI mode this is the only
+                # way new miners enter the collector list.
                 if controller and controller.check_config_reload():
                     cfg = _reload_cfg(cfg)
                     poll_interval = cfg.get("poll_interval_seconds", 30)
@@ -1000,8 +997,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         api_client.send_agent_config(safe_cfg, __version__)
                     except Exception as exc:
                         logger.warning("Failed to send agent config after reload: %s", exc)
-                    # Integrate any miners that arrived via GUI discovery (or
-                    # CLI re-discovery) since the last config reload.
+                    # Integrate miners from the discovery store (GUI) or CLI scan.
                     refreshed = _resolve_miners(cfg, controller)
                     collectors, identities, known_urls, known_macs = _integrate_new_miners(
                         refreshed, collectors, identities,
