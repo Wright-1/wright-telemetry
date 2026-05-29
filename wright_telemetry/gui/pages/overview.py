@@ -144,8 +144,6 @@ class _AgentDetailsCard(QWidget):
             f"color: {T.TEXT_PRIMARY}; background: transparent;"
         )
         display = f"{facility_name}"
-        if facility_code:
-            display += f"  ·  {facility_code}"
         self._facility_lbl.setText(display)
         self._facility_lbl.setStyleSheet(
             f"color: {T.TEXT_PRIMARY}; background: transparent;"
