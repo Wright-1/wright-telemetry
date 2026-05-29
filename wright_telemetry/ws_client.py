@@ -137,11 +137,19 @@ class WebSocketClient:
     def _build_ws_url(api_url: str) -> str:
         """Convert an HTTP(S) api_url to its WebSocket equivalent.
 
-        Falls back to the ``WRIGHT_WS_URL`` environment setting when
-        *api_url* is empty.
+        Priority:
+        1. ``WRIGHT_WS_URL`` env var — used as-is when set (allows pointing
+           the WebSocket gateway to a different host/port than the REST API).
+        2. *api_url* argument (from ``wright_api_url`` in the config file).
+        3. The ``WS_URL`` settings default.
         """
+        import os
         from wright_telemetry.settings import WS_URL
-        base = (api_url.rstrip("/") if api_url.strip() else WS_URL.rstrip("/"))
+        ws_env = os.environ.get("WRIGHT_WS_URL", "").strip()
+        if ws_env:
+            base = ws_env.rstrip("/")
+        else:
+            base = (api_url.rstrip("/") if api_url.strip() else WS_URL.rstrip("/"))
         tail = "/api/v2/ws/agent" if not base.endswith("/api") else "/v2/ws/agent"
         http_url = base + tail
         if http_url.startswith("https://"):
@@ -199,8 +207,9 @@ class WebSocketClient:
             })
             return
 
-        consent = cfg.get("consent", {})
-        if not consent.get("remote_config", False):
+        from wright_telemetry.consent import DEFAULT_CONSENT
+        consent = cfg.get("consent", DEFAULT_CONSENT)
+        if not consent.get("remote_config", True):
             self.controller.push_event({
                 "event": "config_error",
                 "error": (
