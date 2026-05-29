@@ -31,7 +31,7 @@ from wright_telemetry.discovery import (
     firmware_types_for_collector,
     merge_miners,
 )
-from wright_telemetry.models import MinerIdentity, TelemetryPayload
+from wright_telemetry.models import CoolingData, MinerIdentity, TelemetryPayload
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +328,6 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
                     logger.warning("Error fetching cooling from '%s': %s", name, exc)
                     continue
 
-                from wright_telemetry.models import CoolingData
                 if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
                     continue
 
@@ -389,7 +388,6 @@ def _detect_fan_dips(
 
     Returns the list of fan positions that triggered the detection, or [].
     """
-    from wright_telemetry.models import CoolingData
     if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
         return []
 
@@ -452,8 +450,6 @@ def _check_fan_rpm_changes(
     Shared implementation: only :func:`_run_ws_fan_detection` calls this. CLI Wright Fan
     mode uses :func:`_detect_fan_dips` instead.
     """
-    from wright_telemetry.models import CoolingData
-
     if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
         return []
 
@@ -559,7 +555,7 @@ def _handle_wright_fan_dip_detection(
     )
 
 
-def run_fan_detection(cfg: dict[str, Any]) -> None:
+def run_fan_detection(cfg: dict[str, Any]) -> bool:
     """Poll fan RPM on all configured miners, detecting Wright Fan dip signatures.
 
     Only ``cooling`` data is fetched locally — the only outbound API call is
@@ -636,7 +632,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> None:
                     print("  To re-enter detection mode: wright-telemetry --detect-wright-fans")
                     logger.info("Detection mode idle timeout (4 hours). Exiting.")
                     stop_event.set()
-                    return
+                    return True
 
                 for miner_cfg, collector in collectors:
                     name = miner_cfg.get("name", miner_cfg["url"])
@@ -838,6 +834,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
 
+            if controller:
+                controller.push_gui_event({
+                    "event": "miners_resolved",
+                    "count": len(collectors),
+                })
+
             consecutive_crashes = 0
             last_scan = time.time()
             try:
@@ -924,6 +926,10 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     discovery_enabled = discovery_cfg.get("enabled", False)
                     scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
                     logger.info("Configuration reloaded from disk")
+                    if metrics:
+                        print(f"[WRIGHT] Config reloaded — active metrics: {', '.join(metrics)}")
+                    else:
+                        print("[WRIGHT] Config reloaded — all metrics disabled, collector will idle")
                     try:
                         safe_cfg = {k: v for k, v in cfg.items() if k != "wright_api_key"}
                         api_client.send_agent_config(safe_cfg, __version__)
@@ -931,6 +937,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         logger.warning("Failed to send agent config after reload: %s", exc)
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
+
+                if controller:
+                    controller.push_gui_event({
+                        "event": "poll_cycle_complete",
+                        "miner_count": len(collectors),
+                    })
 
                 if _fd_baseline:
                     _fd_baseline, _fd_last_check = _check_fd_growth(_fd_baseline, _fd_last_check)

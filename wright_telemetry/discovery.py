@@ -376,8 +376,16 @@ def scan_hosts(
     hosts: list[str],
     firmware_types: Optional[list[str]] = None,
     progress_cb: Optional[ProgressCallback] = None,
+    cancel_event: Optional["threading.Event"] = None,
 ) -> list[DiscoveredMiner]:
-    """Probe a list of IP addresses for miners."""
+    """Probe a list of IP addresses for miners.
+
+    Pass *cancel_event* to support early cancellation.  When the event is set
+    the loop exits immediately and pending futures are dropped via
+    ``shutdown(wait=False, cancel_futures=True)``; already-running probe
+    threads finish naturally in the background (each has a short network
+    timeout) without blocking the caller.
+    """
     probes = {
         k: v for k, v in _PROBES.items()
         if firmware_types is None or k in firmware_types
@@ -389,8 +397,10 @@ def scan_hosts(
     discovered: list[DiscoveredMiner] = []
     scanned = 0
     num_probes = len(probes)
+    cancelled = False
 
-    with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, total)) as pool:
+    pool = ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, total))
+    try:
         future_map: dict[Any, str] = {}
         for ip in hosts:
             for probe_fn in probes.values():
@@ -398,12 +408,22 @@ def scan_hosts(
                 future_map[fut] = ip
 
         for fut in as_completed(future_map):
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
             scanned += 1
             if progress_cb and scanned % num_probes == 0:
                 progress_cb(scanned // num_probes, total)
             result = fut.result()
             if result is not None:
                 discovered.append(result)
+    finally:
+        # wait=False returns immediately; cancel_futures=True drops pending ones.
+        # Already-running probes finish in daemon threads without blocking us.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    if cancelled:
+        return discovered   # return partial results; caller checks cancel_event
 
     discovered.sort(key=lambda m: tuple(int(p) for p in m.ip.split(".")))
     return discovered

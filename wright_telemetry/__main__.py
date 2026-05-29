@@ -2,7 +2,8 @@
 
 Usage:
     wright-telemetry                       Run the collector (starts setup if first time)
-    wright-telemetry --setup               Re-run the setup wizard
+    wright-telemetry --gui                 Open the graphical setup wizard
+    wright-telemetry --setup               Re-run the TUI setup wizard
     wright-telemetry --detect-wright-fans  Start Wright Fan detection mode
     wright-telemetry --discover            Scan all local subnets for miners and exit
     wright-telemetry --subnets-file FILE   Import VLANs from file, scan, and save to config
@@ -26,7 +27,7 @@ from wright_telemetry import __version__
 
 console = Console()
 from wright_telemetry.api_client import WrightAPIClient
-from wright_telemetry.config import CONFIG_DIR, is_config_complete, load_config, print_config_summary, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
+from wright_telemetry.config import CONFIG_DIR, ensure_config_file, is_config_complete, load_config, print_config_summary, prompt_config_location, run_setup_wizard, run_setup_wizard_miners
 from wright_telemetry.logging_setup import configure_logging
 from wright_telemetry.service import install_service, uninstall_service
 from wright_telemetry.updater import check_for_update
@@ -68,8 +69,8 @@ def _print_welcome_banner(cfg: dict, version: str) -> None:
     )
     consent_txt = (
         "[bold cyan]Your data, your choice[/]\n\n"
-        "Every metric is [bold]OFF by default[/]. "
-        "The setup wizard explains each one before you enable it. "
+        "Every metric is [bold]ON by default[/]. "
+        "The setup wizard lets you review and adjust each one before starting. "
         "Change your choices any time with [cyan]wright-telemetry --setup[/].\n\n"
         "[dim]\u2022 Passwords never leave this machine\n"
         "\u2022 AES-256-GCM encrypted before transit\n"
@@ -144,7 +145,8 @@ def _parse_args() -> argparse.Namespace:
         prog="wright-telemetry",
         description="Collects miner telemetry and sends it to the Wright Fan dashboard.",
     )
-    parser.add_argument("--setup", action="store_true", help="Re-run the setup wizard")
+    parser.add_argument("--gui", action="store_true", help="Open the graphical setup wizard")
+    parser.add_argument("--setup", action="store_true", help="Re-run the TUI setup wizard")
     parser.add_argument("--set-config", action="store_true", help="Choose or create the config file interactively")
     parser.add_argument("--discover", action="store_true", help="Scan all local subnets for miners and exit")
     parser.add_argument("--subnets-file", metavar="FILE", help="Import VLANs from a text file (one CIDR per line), save to config, and scan")
@@ -161,12 +163,16 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    # Ensure the data/log directory exists early so that launchd (macOS) can
-    # open its stdout/stderr log paths on the next reboot.  Running any
-    # subcommand with an updated binary is enough to heal existing installs.
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    # Ensure ~/.wright-telemetry/ and config.json exist before anything else.
+    # Uses the shared ensure_config_file() so CLI and GUI behave identically.
+    ensure_config_file()
 
     args = _parse_args()
+
+    if args.gui:
+        from wright_telemetry.gui.app import run_gui
+        run_gui()
+        return
 
     if args.loki_auth:
         os.environ["WRIGHT_LOKI_AUTH"] = args.loki_auth
@@ -240,7 +246,7 @@ def main() -> None:
     if sys.stdin.isatty() and (args.set_config or ("WRIGHT_CONFIG" not in os.environ)):
         prompt_config_location(force=args.set_config)
 
-    # Load or create config
+    # Load config (file is guaranteed to exist after ensure_config_file() above)
     cfg = load_config()
 
     # Backfill consent fields that were added after the initial release so
@@ -253,7 +259,8 @@ def main() -> None:
             _needs_save = True
         if "auto_update" not in cfg["consent"]:
             # Derive from the old top-level flag; default ON if flag was absent.
-            cfg["consent"]["auto_update"] = not cfg.get("disable_auto_update", True)
+            # disable_auto_update=False (or absent) → auto_update=True (ON).
+            cfg["consent"]["auto_update"] = not cfg.get("disable_auto_update", False)
             _needs_save = True
         if _needs_save:
             from wright_telemetry.config import save_config as _save
