@@ -99,7 +99,7 @@ class ScanningEngine:
 
         # Mark GUI mode BEFORE starting the scheduler thread so it never
         # races into the CLI discovery path on its very first _resolve_miners call.
-        self.controller.attach_gui_scanner()
+
 
         # Scheduler thread
         from wright_telemetry.scheduler import run as scheduler_run

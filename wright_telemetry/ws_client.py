@@ -48,7 +48,7 @@ class AgentController:
         # True only when a GUI ScanManager is wired up. When False (CLI / TUI
         # mode) the scheduler runs its own subnet scan instead of reading the
         # shared store. Set to True by ScanningEngine on startup.
-        self._has_gui_scanner: bool = False
+
 
     @property
     def mode(self) -> str:
@@ -108,18 +108,6 @@ class AgentController:
             except queue.Empty:
                 return events
 
-    def attach_gui_scanner(self) -> None:
-        """Called by ScanningEngine to mark that a GUI ScanManager is running.
-
-        Once set, the scheduler reads discovered miners from the shared store
-        instead of running its own subnet scan.
-        """
-        self._has_gui_scanner = True
-
-    @property
-    def has_gui_scanner(self) -> bool:
-        return self._has_gui_scanner
-
     def set_discovered_miners(self, miners: list[dict[str, Any]]) -> None:
         """Called by ScanManager after each scan to share results with the scheduler."""
         with self._miners_lock:
@@ -131,15 +119,14 @@ class AgentController:
             return list(self._discovered_miners)
 
     def request_config_reload(self) -> None:
-        """Signal the scheduler to reload config from disk.
+        """Flag the scheduler to reload config on its next poll tick.
 
-        Also wakes the scheduler immediately from wait_for_mode_change()
-        instead of sleeping the full poll interval.
+        Intentionally does *not* wake the scheduler early.  The poll loop
+        runs on a fixed interval and picks up this flag at the top of each
+        tick.  Only fan-detection mode changes (request_fan_detection /
+        request_normal) are allowed to interrupt the sleep.
         """
         self._config_reload.set()
-        with self._wake:
-            self._wake_seq += 1
-            self._wake.notify_all()
 
     def check_config_reload(self) -> bool:
         """Return True if a config reload was requested, clearing the flag."""
