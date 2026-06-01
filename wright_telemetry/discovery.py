@@ -168,10 +168,10 @@ def _probe_braiins(ip: str) -> Optional[DiscoveredMiner]:
     stock firmware, not Braiins — those are excluded to avoid false positives.
     """
     url = f"http://{ip}/api/v1/miner/details"
+    session = requests.Session()
     try:
-        resp = requests.get(url, timeout=_PROBE_TIMEOUT)
+        resp = session.get(url, timeout=_PROBE_TIMEOUT)
         if resp.status_code == 401:
-            # Bitmain uses HTTP Digest Auth — exclude it.
             www_auth = resp.headers.get("WWW-Authenticate", "")
             if "Digest" in www_auth:
                 return None
@@ -191,6 +191,8 @@ def _probe_braiins(ip: str) -> Optional[DiscoveredMiner]:
             )
     except (requests.ConnectionError, requests.Timeout, OSError):
         pass
+    finally:
+        session.close()
     return None
 
 
@@ -253,14 +255,13 @@ def _probe_bitmain(ip: str) -> Optional[DiscoveredMiner]:
     from requests.auth import HTTPDigestAuth
 
     url = f"http://{ip}/cgi-bin/get_system_info.cgi"
+    session = requests.Session()
     try:
-        resp = requests.get(
+        resp = session.get(
             url,
             auth=HTTPDigestAuth("root", "root"),
             timeout=_PROBE_TIMEOUT,
         )
-        # Accept 401 as a Bitmain signal only if we also see the Digest challenge
-        # (WWW-Authenticate header contains "Digest") — avoids false positives.
         if resp.status_code == 401:
             www_auth = resp.headers.get("WWW-Authenticate", "")
             if "Digest" in www_auth:
@@ -282,6 +283,8 @@ def _probe_bitmain(ip: str) -> Optional[DiscoveredMiner]:
         )
     except Exception:
         return None
+    finally:
+        session.close()
 
 
 def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
@@ -293,8 +296,9 @@ def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
     for credentials is added.
     """
     url = f"http://{ip}/api/v1/info"
+    session = requests.Session()
     try:
-        resp = requests.get(url, timeout=_PROBE_TIMEOUT)
+        resp = session.get(url, timeout=_PROBE_TIMEOUT)
         if resp.status_code != 200:
             return None
         try:
@@ -310,6 +314,8 @@ def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
         )
     except (requests.ConnectionError, requests.Timeout, OSError):
         pass
+    finally:
+        session.close()
     return None
 
 
