@@ -359,7 +359,11 @@ class WebSocketClient:
         consecutive_failures = 0
         connect_kw: dict[str, Any] = {}
         if self._ws_url.startswith("wss://"):
-            connect_kw["ssl"] = ssl.create_default_context()
+            try:
+                import certifi
+                connect_kw["ssl"] = ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                connect_kw["ssl"] = ssl.create_default_context()
 
         while True:
             try:
