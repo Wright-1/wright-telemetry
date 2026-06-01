@@ -22,7 +22,6 @@ from wright_telemetry.discovery import (
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
     load_subnets_file,
-    merge_miners,
     parse_ip_target,
 )
 
@@ -222,24 +221,9 @@ class TestParseIpTarget:
 
 
 # ---------------------------------------------------------------
-# merge_miners / discovered_to_miner_cfgs
 # ---------------------------------------------------------------
-
-class TestMergeMiners:
-
-    def test_no_overlap(self):
-        manual = [{"url": "http://1.1.1.1", "name": "m1"}]
-        discovered = [{"url": "http://2.2.2.2", "name": "d1"}]
-        merged = merge_miners(manual, discovered)
-        assert len(merged) == 2
-
-    def test_manual_wins_on_overlap(self):
-        manual = [{"url": "http://1.1.1.1", "name": "manual"}]
-        discovered = [{"url": "http://1.1.1.1", "name": "discovered"}]
-        merged = merge_miners(manual, discovered)
-        assert len(merged) == 1
-        assert merged[0]["name"] == "manual"
-
+# discovered_to_miner_cfgs
+# ---------------------------------------------------------------
 
 class TestDiscoveredToMinerCfgs:
 
