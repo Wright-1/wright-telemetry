@@ -295,7 +295,12 @@ class MainWindow(QWidget):
         self._engine = ScanningEngine(cfg)
         self._connect_engine_signals(self._engine)
 
-        self.pages["permissions"]._engine = self._engine
+        perm_page = self.pages["permissions"]
+        perm_page._engine = self._engine
+        perm_page._update_next_btn_visibility(self._engine.scan_manager.total_miners())
+        self._engine.signals.discovery_total_changed.connect(
+            perm_page._update_next_btn_visibility
+        )
         self.pages["discovery"].wire_engine(self._engine)
         self.pages["overview"]._engine    = self._engine
 

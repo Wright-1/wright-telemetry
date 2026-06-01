@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 from wright_telemetry.consent import DEFAULT_CONSENT, METRICS
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
-from wright_telemetry.gui.widgets import PermissionRow
+from wright_telemetry.gui.widgets import PermissionRow, PrimaryButton
 
 if TYPE_CHECKING:
     from wright_telemetry.gui.engine import ScanningEngine
@@ -184,11 +184,30 @@ class PermissionsPage(QWidget):
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll, 1)
 
+        # ── Next button (shown only when no miners detected yet) ───────────────
+        outer.addSpacing(16)
+        self._next_btn = PrimaryButton("Next: Discover Miners  →")
+        self._next_btn.setFixedHeight(44)
+        self._next_btn.clicked.connect(self.on_next)
+        outer.addWidget(self._next_btn)
+        outer.addSpacing(16)
+
+        # Wire miner-count signal if engine already present
+        if engine is not None:
+            self._update_next_btn_visibility(engine.scan_manager.total_miners())
+            engine.signals.discovery_total_changed.connect(
+                self._update_next_btn_visibility
+            )
+
         # Flush the initial (all-on) consent state immediately so the engine
         # and config file reflect the correct defaults from the very first run,
         # without waiting for the user to change a toggle or click Next.
         QTimer.singleShot(0, self._flush_consent)
 
+
+    def _update_next_btn_visibility(self, total_miners: int) -> None:
+        """Show the Next button only while no miners have been found yet."""
+        self._next_btn.setVisible(total_miners == 0)
 
     def get_consent(self) -> dict[str, bool]:
         """Return current toggle states as a consent dict."""
