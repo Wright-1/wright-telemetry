@@ -268,8 +268,6 @@ class MainWindow(QWidget):
     def _on_account_connected(self) -> None:
         self._ob_account = True
         self._update_onboarding_ui()
-        # Now switch to the real Overview
-        self._switch_page("overview")
 
     # -------------------------------------------------------------------------
     # Engine wiring
