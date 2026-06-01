@@ -30,7 +30,6 @@ from wright_telemetry.discovery import (
     DiscoveredMiner,
     default_subnet,
     default_subnets,
-    discovered_to_miner_cfgs,
     firmware_types_for_collector,
     load_subnets_file,
     parse_ip_target,
@@ -404,14 +403,14 @@ def _print_miners_table(found: list) -> None:
 def _wizard_discovery(
     existing_discovery: Optional[dict[str, Any]] = None,
     collector_types: list[str] = _DEFAULT_COLLECTOR_TYPES,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+) -> dict[str, Any]:
     """Unified miner discovery wizard.
 
     Shows an overview, lets the user choose how to supply subnet targets,
     collects credentials, runs a Rich progress-bar scan, shows results, and
     loops until the user accepts or skips.
 
-    Returns ``(miners, discovery_cfg)``.
+    Returns ``discovery_cfg``.
     """
     from rich.progress import (
         BarColumn, Progress, SpinnerColumn,
@@ -478,7 +477,7 @@ def _wizard_discovery(
         if method is None:
             sys.exit(0)
         if method == "skip":
-            return [], disc
+            return disc
 
         # ── Collect targets ───────────────────────────────────────────────────
         subnets = []
@@ -656,7 +655,7 @@ def _wizard_discovery(
         if action == "accept":
             break
         if action == "skip":
-            return [], disc
+            return disc
         # action == "retry" → loop back to Step 1
 
     # ── Build config ──────────────────────────────────────────────────────────
@@ -669,8 +668,7 @@ def _wizard_discovery(
     if default_pw_b64:
         discovery_cfg["default_password_b64"] = default_pw_b64
 
-    miners = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
-    return miners, discovery_cfg
+    return discovery_cfg
 
 
 def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -779,15 +777,11 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
 
 def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
     """Phase 2 of setup: miner discovery and final save."""
-    discovered_miners, discovery_cfg = _wizard_discovery(
+    discovery_cfg = _wizard_discovery(
         cfg.get("discovery"),
         collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
     )
     cfg["discovery"] = discovery_cfg
-    # Discovered miners are NOT written to the config file.
-    # The scheduler will POST them to the API via metric_type='mark_miner'
-    # on startup, and re-discover them on every scan cycle using the
-    # subnets stored in cfg["discovery"].
 
     save_config(cfg)
     console.print(f"\n  [green]\u2713[/] Configuration saved to [cyan]{CONFIG_FILE}[/]")
