@@ -147,19 +147,13 @@ def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[st
     Miners are never written to the config file; the server upserts them
     automatically from the ``miner_identity`` field on every telemetry payload.
     """
-    # Backwards compat: miners explicitly listed in the config file.
-    config_miners: list[dict[str, Any]] = list(cfg.get("miners", []))
-
     discovery_cfg = cfg.get("discovery", {})
-    default_user    = discovery_cfg.get("default_username",    "root")
-    default_pw_b64  = discovery_cfg.get("default_password_b64", "")
+    default_user   = discovery_cfg.get("default_username",    "root")
+    default_pw_b64 = discovery_cfg.get("default_password_b64", "")
 
-    if controller is not None and controller.has_gui_scanner:
-        # ── GUI mode: read from the shared discovery store ───────────────────
-        # Miners were found by ScanManager and stored credential-free.
-        # Apply credentials from the live config before merging.
+    if controller is not None:
         raw = controller.get_discovered_miners()
-        discovered_cfgs = [
+        return [
             {
                 **m,
                 "username":     m.get("username",     default_user),
@@ -167,23 +161,17 @@ def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[st
             }
             for m in raw
         ]
-        if discovered_cfgs:
-            logger.info("Scheduler using %d miner(s) from GUI discovery", len(discovered_cfgs))
-        return merge_miners(config_miners, discovered_cfgs)
 
-    # ── CLI / TUI / headless mode: run our own subnet scan ─────────────────
+    # No controller (standalone / headless): run a direct subnet scan.
     if not discovery_cfg.get("enabled", False):
-        return config_miners
+        return []
 
     subnets = discovery_cfg.get("subnets")
     collector_types = cfg.get("collector_types") or cfg.get("collector_type", "braiins")
     firmware_types = firmware_types_for_collector(collector_types)
-
     found = discover_miners(subnets=subnets, firmware_types=firmware_types)
-    discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
-    logger.info("Discovered %d miner(s) via subnet scan", len(discovered_cfgs))
-
-    return merge_miners(config_miners, discovered_cfgs)
+    logger.info("Discovered %d miner(s) via subnet scan", len(found))
+    return discovered_to_miner_cfgs(found, default_user, default_pw_b64)
 
 
 def _build_collectors(
@@ -900,132 +888,65 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))
     default_collector_type = cfg.get("collector_type", "braiins")
 
-    discovery_cfg = cfg.get("discovery", {})
-    discovery_enabled = discovery_cfg.get("enabled", False)
-    scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
-
-    if not metrics:
-        logger.warning("No metrics are enabled. The collector will idle. Run --setup to enable metrics.")
-
     api_client = WrightAPIClient(
         api_url=cfg.get("wright_api_url", ""),
         api_key=cfg.get("wright_api_key", ""),
         facility_id=facility_id,
     )
-
     baseline_tracker = BaselineTracker()
     consecutive_crashes = 0
 
     while True:
-        collectors = []
+        collectors: list = []
+        known_urls: set[str] = set()
+        known_macs: set[str] = set()
+        identities: dict = {}
+
         try:
-            miners = _resolve_miners(cfg, controller)
-            collectors = _build_collectors(miners, default_collector_type)
-
-            if not collectors:
-                logger.debug(
-                    "No miners available yet — waiting for discovery"
-                    if controller else
-                    "No miners found. Run --setup to add miners."
-                )
-                if controller:
-                    controller.wait_for_mode_change(timeout=poll_interval)
-                else:
-                    time.sleep(poll_interval)
-                continue
-
-            logger.info("Starting collection loop (poll every %ds, %d metric(s), %d miner(s))",
-                        poll_interval, len(metrics), len(collectors))
-
-            _authenticate_all(collectors)
-            identities = _fetch_identities(collectors)
-
-            if controller:
-                controller.push_gui_event({
-                    "event": "miners_resolved",
-                    "count": len(collectors),
-                })
-
-            consecutive_crashes = 0
-            last_scan = time.time()
             try:
                 import psutil as _psutil
                 _fd_baseline = _psutil.Process().num_fds()
             except Exception:
                 _fd_baseline = 0
             _fd_last_check = 0.0
-            known_urls = {m["url"] for m in miners}
-            # Include MACs back-propagated from identity fetch
-            known_macs = {m["mac_address"] for m in miners if m.get("mac_address")}
 
             while True:
-                now = time.time()
-
-                # ── Periodic re-discovery (CLI / headless only) ──────────────────────
-                # In GUI mode the engine's discovery timer owns all scanning.
-                # The scheduler never initiates discovery — it only polls
-                # miners that are already in the shared store.
-                if discovery_enabled and (now - last_scan) >= scan_interval:
-                    if not (controller and controller.has_gui_scanner):
-                        logger.info("Running periodic miner re-discovery…")
-                        refreshed = _resolve_miners(cfg)
-                        collectors, identities, known_urls, known_macs = _integrate_new_miners(
-                            refreshed, collectors, identities,
-                            known_urls, known_macs, default_collector_type,
-                        )
-                    last_scan = now
-
-                # ── Config / discovery-store reload ──────────────────────────────
-                # Fired by ScanManager after each scan completes, and by any
-                # consent / credential change.  In GUI mode this is the only
-                # way new miners enter the collector list.
                 if controller and controller.check_config_reload():
                     cfg = _reload_cfg(cfg)
                     poll_interval = cfg.get("poll_interval_seconds", 30)
                     metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))
                     default_collector_type = cfg.get("collector_type", "braiins")
-                    discovery_cfg = cfg.get("discovery", {})
-                    discovery_enabled = discovery_cfg.get("enabled", False)
-                    scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
-                    logger.info("Configuration reloaded from disk")
-                    if metrics:
-                        print(f"[WRIGHT] Config reloaded — active metrics: {', '.join(metrics)}")
-                    else:
-                        print("[WRIGHT] Config reloaded — all metrics disabled, collector will idle")
+                    logger.info("Config reloaded — active metrics: %s", ", ".join(metrics) if metrics else "(none)")
                     try:
                         safe_cfg = {k: v for k, v in cfg.items() if k != "wright_api_key"}
                         api_client.send_agent_config(safe_cfg, __version__)
                     except Exception as exc:
                         logger.warning("Failed to send agent config after reload: %s", exc)
-                    # Integrate miners from the discovery store (GUI) or CLI scan.
-                    refreshed = _resolve_miners(cfg, controller)
-                    collectors, identities, known_urls, known_macs = _integrate_new_miners(
-                        refreshed, collectors, identities,
-                        known_urls, known_macs, default_collector_type,
-                    )
-                    if collectors:
-                        controller.push_gui_event({
-                            "event": "miners_resolved",
-                            "count": len(collectors),
-                        })
 
-                _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
+                refreshed = _resolve_miners(cfg, controller)
+                collectors, identities, known_urls, known_macs = _integrate_new_miners(
+                    refreshed, collectors, identities, known_urls, known_macs, default_collector_type,
+                )
 
-                if controller:
-                    controller.push_gui_event({
-                        "event": "poll_cycle_complete",
-                        "miner_count": len(collectors),
-                    })
+                if collectors:
+                    consecutive_crashes = 0
+                    if controller:
+                        controller.push_gui_event({"event": "miners_resolved", "count": len(collectors)})
+                    _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
+                    if controller:
+                        controller.push_gui_event({"event": "poll_cycle_complete", "miner_count": len(collectors)})
+                else:
+                    logger.debug("No miners available yet — skipping poll cycle")
 
                 if _fd_baseline:
                     _fd_baseline, _fd_last_check = _check_fd_growth(_fd_baseline, _fd_last_check)
 
-                if controller and controller.wait_for_mode_change(timeout=poll_interval):
-                    if controller.mode == "fan_detection":
+                if controller:
+                    woken = controller.wait_for_mode_change(timeout=poll_interval)
+                    if woken and controller.mode == "fan_detection":
                         _run_ws_fan_detection(cfg, controller, api_client)
                 else:
-                    if not controller:
-                        time.sleep(poll_interval)
+                    time.sleep(poll_interval)
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")
