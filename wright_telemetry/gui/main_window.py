@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -341,6 +342,74 @@ class MainWindow(QWidget):
     # -------------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._engine is not None:
-            self._engine.stop()
-        event.accept()
+        if self._confirm_close():
+            if self._engine is not None:
+                self._engine.stop()
+            event.accept()
+        else:
+            event.ignore()
+
+    def _confirm_close(self) -> bool:
+        """Show a native confirmation dialog. Returns True if the user confirms."""
+        import sys
+        if sys.platform == "darwin":
+            return self._confirm_close_macos()
+        # Fallback for Windows / Linux
+        reply = QMessageBox.question(
+            self,
+            "Close WrightData",
+            "Are you sure you want to close WrightData?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _confirm_close_macos(self) -> bool:
+        """Native macOS confirmation dialog.
+
+        Tries NSAlert first (uses the real WrightData app icon, fully respects
+        dark mode).  Falls back to osascript if PyObjC is unavailable, then to
+        QMessageBox as a last resort.
+        """
+        # ── 1. NSAlert via PyObjC (packaged app: app icon, dark-mode aware) ──
+        try:
+            from AppKit import NSAlert  # type: ignore
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_("Close WrightData")
+            alert.setInformativeText_("Are you sure you want to close WrightData?")
+            alert.setAlertStyle_(0)          # 0 = NSAlertStyleWarning
+            alert.addButtonWithTitle_("Close")
+            alert.addButtonWithTitle_("Cancel")
+            # runModal returns 1000 for the first button (Close)
+            return int(alert.runModal()) == 1000
+        except Exception:
+            pass
+
+        # ── 2. osascript fallback (dev environment without PyObjC) ────────────
+        import subprocess
+        script = (
+            'display dialog "Are you sure you want to close WrightData?" '
+            'with title "Close WrightData" '
+            'buttons {"Cancel", "Close"} '
+            'default button "Cancel" '
+            'with icon caution'
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+            )
+            return "Close" in result.stdout
+        except Exception:
+            pass
+
+        # ── 3. Qt fallback (should never be reached on macOS) ─────────────────
+        reply = QMessageBox.question(
+            self,
+            "Close WrightData",
+            "Are you sure you want to close WrightData?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
