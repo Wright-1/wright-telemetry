@@ -29,7 +29,6 @@ from wright_telemetry.discovery import (
     discover_miners,
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
-    merge_miners,
 )
 from wright_telemetry.models import CoolingData, MinerIdentity, TelemetryPayload
 
