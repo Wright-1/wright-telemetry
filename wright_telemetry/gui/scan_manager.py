@@ -99,9 +99,7 @@ class ScanManager:
             if self._current_subnet == subnet:
                 self._cancel_event.set()
             all_miners = [m for cfgs in self._found_miners.values() for m in cfgs]
-        # Update shared store and wake scheduler outside the lock
         self._controller.set_discovered_miners(all_miners)
-        self._controller.request_config_reload()
 
     def start_all(self) -> None:
         """Re-queue every known subnet and start scanning."""
@@ -306,9 +304,6 @@ class ScanManager:
             self._found_miners[subnet] = miner_dicts
             all_miners = [m for cfgs in self._found_miners.values() for m in cfgs]
         self._controller.set_discovered_miners(all_miners)
-        # Wake the scheduler so it picks up the new miners without waiting
-        # for the next full poll_interval sleep.
-        self._controller.request_config_reload()
 
     def _finish_cancelled(self, subnet: str) -> None:
         with self._lock:
