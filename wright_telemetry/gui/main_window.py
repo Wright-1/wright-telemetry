@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
 from wright_telemetry.gui.pages.access_key import AccessKeyPage
+from wright_telemetry.gui.pages.logs import LogsPage
 from wright_telemetry.gui.pages.permissions import PermissionsPage
 from wright_telemetry.gui.pages.discovery import DiscoveryPage
 from wright_telemetry.gui.pages.overview import OverviewPage
@@ -43,7 +44,7 @@ class MainWindow(QWidget):
     window width and disappears once step 3 completes.
     """
 
-    PAGE_KEYS = ["permissions", "discovery", "overview"]
+    PAGE_KEYS = ["permissions", "discovery", "overview", "logs"]
 
     def __init__(
         self,
@@ -98,6 +99,7 @@ class MainWindow(QWidget):
             "permissions": PermissionsPage(engine=engine),
             "discovery":   DiscoveryPage(engine=engine),
             "overview":    OverviewPage(engine=engine),
+            "logs":        LogsPage(),
             "portal":      PortalPage(),
         }
         for key in self.PAGE_KEYS:
@@ -342,6 +344,7 @@ class MainWindow(QWidget):
         if key in self.pages:
             self.stack.setCurrentWidget(self.pages[key])
             self.sidebar.set_active(key)
+            # Security panel only shows on the Permissions page
             self.security.setVisible(key == "permissions")
 
     # -------------------------------------------------------------------------
