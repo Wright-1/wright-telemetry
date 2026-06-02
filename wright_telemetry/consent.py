@@ -72,6 +72,22 @@ METRICS: dict[str, dict[str, str]] = {
             "failures and automatically file support reports on your behalf."
         ),
     },
+    "auto_restart": {
+        "label": "Run on Startup",
+        "endpoint": "OS service manager (launchd / systemd / Task Scheduler)",
+        "description": (
+            "Registers this agent as a background service so it starts\n"
+            "automatically whenever your machine boots, without any manual\n"
+            "action.\n"
+            "\n"
+            "On macOS this installs a LaunchAgent; on Linux a systemd user\n"
+            "service (with linger, so it survives without a login session);\n"
+            "on Windows a Task Scheduler entry with a crash-restart wrapper.\n"
+            "\n"
+            "You can remove it at any time with:\n"
+            "  wright-telemetry --uninstall"
+        ),
+    },
     "auto_update": {
         "label": "Automatic Updates",
         "endpoint": "GitHub Releases API",

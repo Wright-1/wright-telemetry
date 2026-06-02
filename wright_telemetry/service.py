@@ -42,12 +42,16 @@ def _install_systemd() -> None:
     unit = textwrap.dedent(f"""\
         [Unit]
         Description=Wright Telemetry Collector
+        After=network-online.target
+        Wants=network-online.target
 
         [Service]
         Type=simple
         ExecStart={exe}
-        Restart=always
-        RestartSec=10
+        Restart=on-failure
+        RestartSec=15
+        # Disable the default rate-limit so systemd never permanently gives up
+        StartLimitIntervalSec=0
         Environment=WRIGHT_LOKI_AUTH=%E{_SERVICE_NAME}/loki_auth
 
         [Install]
@@ -113,7 +117,18 @@ def _install_launchd() -> None:
             <key>RunAtLoad</key>
             <true/>
             <key>KeepAlive</key>
-            <true/>
+            <dict>
+                <!-- Restart on crash, but NOT on a clean sys.exit(0) -->
+                <!-- This lets --uninstall and graceful shutdowns stay down -->
+                <key>Crashed</key>
+                <true/>
+                <key>SuccessfulExit</key>
+                <false/>
+            </dict>
+            <key>ThrottleInterval</key>
+            <integer>30</integer>
+            <key>ProcessType</key>
+            <string>Background</string>
             <key>StandardOutPath</key>
             <string>{log_dir / "stdout.log"}</string>
             <key>StandardErrorPath</key>
@@ -167,30 +182,81 @@ def _uninstall_launchd() -> None:
 
 
 # ------------------------------------------------------------------
-# Windows (Task Scheduler)
+# Windows (Task Scheduler + PowerShell watchdog)
 # ------------------------------------------------------------------
+
+_WATCHDOG_SCRIPT_NAME = "wright-telemetry-watchdog.ps1"
+
+
+def _watchdog_script_path(exe: str) -> Path:
+    """Place the watchdog script alongside the binary."""
+    return Path(exe).parent / _WATCHDOG_SCRIPT_NAME
+
+
+def _write_watchdog_script(exe: str) -> Path:
+    """Write the PowerShell crash-restart loop and return its path.
+
+    The loop restarts the binary on any non-zero exit code, but stops
+    cleanly on exit code 0 (which wright-telemetry uses for --uninstall
+    and graceful shutdowns).  A 15-second sleep between restarts prevents
+    tight CPU-burning loops on repeated crashes.
+    """
+    script = textwrap.dedent(f"""\
+        # Wright Telemetry watchdog — do not edit manually.
+        # Restarts the agent on crash; stops on clean exit (code 0).
+        $binary = "{exe}"
+        while ($true) {{
+            $proc = Start-Process -FilePath $binary -PassThru -Wait -WindowStyle Hidden
+            if ($proc.ExitCode -eq 0) {{ exit 0 }}
+            Start-Sleep -Seconds 15
+        }}
+    """)
+    script_path = _watchdog_script_path(exe)
+    script_path.write_text(script, encoding="utf-8")
+    return script_path
+
 
 def _install_windows_task() -> None:
     exe = _get_executable()
+    script_path = _write_watchdog_script(exe)
     task_name = f"\\WrightFan\\{_SERVICE_NAME}"
 
+    # Run the PowerShell watchdog (which in turn runs the binary).
+    # -WindowStyle Hidden keeps it off the taskbar.
+    # -ExecutionPolicy Bypass avoids policy blocks on the watchdog script.
+    tr = (
+        f'powershell.exe -NonInteractive -WindowStyle Hidden '
+        f'-ExecutionPolicy Bypass -File "{script_path}"'
+    )
     cmd = [
         "schtasks", "/Create",
         "/TN", task_name,
-        "/TR", exe,
+        "/TR", tr,
         "/SC", "ONLOGON",
         "/F",  # force overwrite
+        "/RL", "HIGHEST",  # run with highest available privileges
     ]
     subprocess.run(cmd, check=True)
 
     print(f"  Installed Windows scheduled task: {task_name}")
+    print(f"  Watchdog script: {script_path}")
     print(f"  Status: schtasks /Query /TN \"{task_name}\"")
 
 
 def _uninstall_windows_task() -> None:
     task_name = f"\\WrightFan\\{_SERVICE_NAME}"
     subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"], check=False)
-    print("  Removed Windows scheduled task.")
+
+    # Also clean up the watchdog script if it exists
+    exe = _get_executable()
+    script_path = _watchdog_script_path(exe)
+    if script_path.exists():
+        try:
+            script_path.unlink()
+        except OSError:
+            pass
+
+    print("  Removed Windows scheduled task and watchdog script.")
 
 
 # ------------------------------------------------------------------

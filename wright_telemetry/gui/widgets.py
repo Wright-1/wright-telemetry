@@ -111,6 +111,7 @@ _ICON_BG: dict[str, str] = {
     "uptime":        "#F0FDF4",
     "hashboards":    "#F5F3FF",
     "errors":        "#FEF2F2",
+    "auto_restart":  "#F0FDF4",
     "auto_update":   "#FFF7ED",
     "remote_config": "#EBF5FF",
 }

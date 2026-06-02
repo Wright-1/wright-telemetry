@@ -41,6 +41,7 @@ CATEGORY_COLORS: dict[str, str] = {
     "uptime": ACCENT_GREEN,
     "hashboards": ACCENT_PURPLE,
     "errors": ACCENT_RED,
+    "auto_restart": ACCENT_GREEN,
     "auto_update": ACCENT_ORANGE,
     "remote_config": ACCENT_BLUE,
 }
@@ -52,6 +53,7 @@ CATEGORY_ICONS: dict[str, str] = {
     "uptime":       "⊛",   # reliability / shield
     "hashboards":   "⊞",   # grid / hashboards
     "errors":       "△",   # warning / errors
+    "auto_restart": "⟳",   # restart / persist
     "auto_update":  "↻",   # refresh / updates
     "remote_config":"⇌",   # remote / sync
 }

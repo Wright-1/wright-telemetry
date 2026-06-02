@@ -144,6 +144,7 @@ class PermissionsPage(QWidget):
             "uptime":        "Miner uptime and current firmware version",
             "hashboards":    "Temperature and status for each hashboard",
             "errors":        "Error log: timestamps, error codes, and affected components",
+            "auto_restart":  "Start automatically on boot and restart if the agent crashes",
             "auto_update":   "Auto-download and apply new agent versions in the background",
             "remote_config": "View and update agent config remotely from your dashboard",
         }

@@ -236,9 +236,8 @@ def main() -> None:
         run_baseline_collection(cfg)
         # Fall through to the normal polling loop below
 
-    if args.uninstall:
-        uninstall_service()
-        sys.exit(0)
+    # Note: --uninstall is handled later in main() after config is loaded,
+    # so service_installed can be cleared in config.json.
 
     # Ask where the config file lives before we try to load it.
     # Skipped when WRIGHT_CONFIG env var is already set (service installs,
@@ -343,11 +342,60 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     logger.info("Wright Telemetry Collector v%s starting", __version__)
 
+    # --install / --uninstall are explicit manual overrides — honour them and exit.
     if args.install:
         install_service()
+        cfg["service_installed"] = True
+        from wright_telemetry.config import save_config as _save
+        _save(cfg)
         print("\n  The service has been installed and will start automatically.")
         print("  You can also run the collector manually: wright-telemetry")
         sys.exit(0)
+
+    if args.uninstall:
+        # Already handled above, but guard in case flow reaches here somehow.
+        uninstall_service()
+        cfg["service_installed"] = False
+        from wright_telemetry.config import save_config as _save
+        _save(cfg)
+        sys.exit(0)
+
+    _auto_restart = cfg.get("consent", {}).get("auto_restart", True)
+
+    if ran_setup:
+        # First-time setup (or re-run): install or uninstall based on consent.
+        if _auto_restart:
+            try:
+                install_service()
+                cfg["service_installed"] = True
+                from wright_telemetry.config import save_config as _save
+                _save(cfg)
+                logger.info("Background service registered successfully")
+            except Exception as exc:
+                logger.warning("Could not register background service (non-fatal): %s", exc)
+        else:
+            # User explicitly opted out — remove any existing registration.
+            if cfg.get("service_installed"):
+                try:
+                    uninstall_service()
+                    cfg["service_installed"] = False
+                    from wright_telemetry.config import save_config as _save
+                    _save(cfg)
+                except Exception as exc:
+                    logger.warning("Could not remove background service (non-fatal): %s", exc)
+    elif _auto_restart and not cfg.get("service_installed"):
+        # Drift detection: consent says yes but the OS registration is missing
+        # (e.g. user moved the binary, OS upgrade wiped LaunchAgents, etc.).
+        # Re-register silently.
+        logger.info("Service registration missing — re-registering...")
+        try:
+            install_service()
+            cfg["service_installed"] = True
+            from wright_telemetry.config import save_config as _save
+            _save(cfg)
+            logger.info("Background service re-registered successfully")
+        except Exception as exc:
+            logger.warning("Could not re-register background service (non-fatal): %s", exc)
 
     check_for_update(cfg)
 
