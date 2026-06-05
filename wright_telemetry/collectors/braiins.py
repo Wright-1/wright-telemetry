@@ -41,10 +41,6 @@ class BraiinsCollector(MinerCollector):
         super().__init__(url, username, password)
         self._session = requests.Session()
         self._token: Optional[str] = None
-        # Set to True when authenticate() fails so _get() doesn't hammer
-        # the login endpoint once per metric within the same poll cycle.
-        # Cleared at the start of every explicit authenticate() call.
-        self._auth_failed: bool = False
         # Avoid requests' default Accept-Encoding (gzip, deflate, br). Some
         # embedded Braiins/stacks return compressed responses that decode to an
         # empty body in urllib3, which then fails JSON parsing — while stdlib
@@ -61,7 +57,6 @@ class BraiinsCollector(MinerCollector):
     # ------------------------------------------------------------------
 
     def authenticate(self) -> None:
-        self._auth_failed = False   # reset so _get() will retry on the next cycle
         if not self.username:
             logger.debug("No Braiins credentials configured -- skipping auth for %s", self.url)
             return
@@ -83,10 +78,8 @@ class BraiinsCollector(MinerCollector):
             else:
                 logger.warning("Auth response missing token for %s -- body: %s -- continuing without auth",
                                self.url, data)
-                self._auth_failed = True
         except (requests.RequestException, ValueError) as exc:
             logger.warning("Auth failed for %s (%s) -- will try requests without auth", self.url, exc)
-            self._auth_failed = True
 
     def _json_from_response(self, resp: requests.Response, url: str) -> dict:
         """Decode JSON, accepting UTF-8 BOM; raise with useful logs if the body is wrong."""
@@ -145,7 +138,7 @@ class BraiinsCollector(MinerCollector):
             url = f"{self.url}{path}"
             resp = self._session.get(url, timeout=_REQUEST_TIMEOUT)
 
-        if resp.status_code == 401 and self.username and not self._auth_failed:
+        if resp.status_code == 401 and self.username:
             logger.info("Got 401 from %s -- re-authenticating", url)
             self.authenticate()
             resp = self._session.get(url, timeout=_REQUEST_TIMEOUT)
