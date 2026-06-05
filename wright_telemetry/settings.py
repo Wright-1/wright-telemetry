@@ -24,14 +24,14 @@ import os
 # ---------------------------------------------------------------------------
 # Portal / provisioning API  (access-key redeem, agent-info, agent-config)
 # ---------------------------------------------------------------------------
-API_URL: str = os.environ.get("WRIGHT_API_URL", "https://api.dev.wrightfan.com/api").rstrip("/")
+API_URL: str = os.environ.get("WRIGHT_API_URL", "https://api.wrightfan.com/api").rstrip("/")
 
 # ---------------------------------------------------------------------------
 # Ingest gateway  (POST /api/v2/telemetry)
 # ---------------------------------------------------------------------------
-INGEST_URL: str = os.environ.get("WRIGHT_INGEST_URL", "https://api.dev.wrightfan.com/api").rstrip("/")
+INGEST_URL: str = os.environ.get("WRIGHT_INGEST_URL", "https://api.wrightfan.com/api").rstrip("/")
 
 # ---------------------------------------------------------------------------
 # WebSocket gateway  (ws[s]://.../api/v2/ws/agent)
 # ---------------------------------------------------------------------------
-WS_URL: str = os.environ.get("WRIGHT_WS_URL", "https://api.dev.wrightfan.com/api").rstrip("/")
+WS_URL: str = os.environ.get("WRIGHT_WS_URL", "https://api.wrightfan.com/api").rstrip("/")

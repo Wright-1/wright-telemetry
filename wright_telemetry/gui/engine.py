@@ -208,6 +208,7 @@ class ScanningEngine:
         # Tell the GUI to remove the row
         self.controller.push_gui_event({"event": "subnet_removed", "subnet": subnet})
 
+    #TODO - we may want a unique credential per subnet at some point
     def update_discovery_credentials(self, username: str, password: str) -> None:
         """Persist default miner credentials used during subnet discovery."""
         from wright_telemetry.config import encode_password, load_config, save_config
