@@ -818,12 +818,14 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     )
     baseline_tracker = BaselineTracker()
     consecutive_crashes = 0
+    scan_interval = cfg.get("discovery", {}).get("scan_interval_seconds", 300)
 
     while True:
         collectors: list = []
         known_urls: set[str] = set()
         known_macs: set[str] = set()
         identities: dict = {}
+        last_scan: float = 0.0  # force an immediate scan on first tick
 
         try:
             try:
@@ -839,6 +841,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     poll_interval = cfg.get("poll_interval_seconds", 30)
                     metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))
                     default_collector_type = cfg.get("collector_type", "braiins")
+                    scan_interval = cfg.get("discovery", {}).get("scan_interval_seconds", 300)
                     logger.info("Config reloaded — active metrics: %s", ", ".join(metrics) if metrics else "(none)")
                     try:
                         safe_cfg = {k: v for k, v in cfg.items() if k != "wright_api_key"}
@@ -846,7 +849,17 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     except Exception as exc:
                         logger.warning("Failed to send agent config after reload: %s", exc)
 
-                refreshed = _resolve_miners(cfg, controller)
+                now = time.time()
+                if controller is not None:
+                    # GUI mode: ScanManager owns scanning; reading the shared store is free.
+                    refreshed = _resolve_miners(cfg, controller)
+                elif now - last_scan >= scan_interval:
+                    # TUI / headless: real subnet scan — throttled to scan_interval.
+                    logger.info("Running periodic miner re-discovery…")
+                    refreshed = _resolve_miners(cfg)
+                    last_scan = now
+                else:
+                    refreshed = []
 
                 # Detect miners that moved to a new IP (same MAC, different URL)
                 refreshed_by_mac = {m["mac_address"]: m for m in refreshed if m.get("mac_address")}
