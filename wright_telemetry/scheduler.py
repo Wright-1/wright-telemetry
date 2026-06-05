@@ -74,6 +74,7 @@ def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[st
     default_user   = discovery_cfg.get("default_username",    "root")
     default_pw_b64 = discovery_cfg.get("default_password_b64", "")
 
+    #Controller already exists so just use the miners that it has found
     if controller is not None:
         raw = controller.get_discovered_miners()
         return [
@@ -808,40 +809,129 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     """Main entry point -- runs forever with crash recovery."""
     poll_interval = cfg.get("poll_interval_seconds", 30)
     facility_id = cfg.get("facility_id", "unknown")
-    metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))
+    metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))  # DEFAULT_CONSENT: all ON
     default_collector_type = cfg.get("collector_type", "braiins")
+
+    discovery_cfg = cfg.get("discovery", {})
+    discovery_enabled = discovery_cfg.get("enabled", False)
+    scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
 
     api_client = WrightAPIClient(
         api_url=cfg.get("wright_api_url", ""),
         api_key=cfg.get("wright_api_key", ""),
         facility_id=facility_id,
     )
+
     baseline_tracker = BaselineTracker()
     consecutive_crashes = 0
-    scan_interval = cfg.get("discovery", {}).get("scan_interval_seconds", 300)
 
     while True:
-        collectors: list = []
-        known_urls: set[str] = set()
-        known_macs: set[str] = set()
-        identities: dict = {}
-        last_scan: float = 0.0  # force an immediate scan on first tick
-
+        collectors = []
         try:
+            logger.info("Starting collection loop (poll every %ds, %d metric(s))", poll_interval, len(metrics))
+
+            miners = _resolve_miners(cfg, controller)  # pass controller for GUI store
+            collectors = _build_collectors(miners, default_collector_type)
+
+            if not collectors:
+                if controller is None:
+                    logger.error("No miners found (configured or discovered). Run --setup to add miners.")
+                    time.sleep(poll_interval)
+                    continue
+                # GUI: miners arrive asynchronously via ScanManager — fall through to poll loop
+                logger.debug("No miners yet — waiting for ScanManager discovery…")
+
+            _authenticate_all(collectors)
+            identities = _fetch_identities(collectors)
+
+            if controller:
+                controller.push_gui_event({"event": "miners_resolved", "count": len(collectors)})
+
+            consecutive_crashes = 0
+            last_scan = time.time()
             try:
                 import psutil as _psutil
                 _fd_baseline = _psutil.Process().num_fds()
             except Exception:
                 _fd_baseline = 0
             _fd_last_check = 0.0
+            known_urls = {m["url"] for m in miners}
+            known_macs = {m["mac_address"] for m in miners if m.get("mac_address")}
 
             while True:
+                now = time.time()
+
+                # GUI always reads from the shared store (free); TUI scans on the interval.
+                if controller is not None or (discovery_enabled and (now - last_scan) >= scan_interval):
+                    logger.info("Running periodic miner re-discovery…")
+                    refreshed = _resolve_miners(cfg, controller)  # pass controller for GUI store
+
+                    # Detect miners that moved to a new IP (MAC known, URL changed)
+                    refreshed_by_mac = {
+                        m["mac_address"]: m for m in refreshed if m.get("mac_address")
+                    }
+                    for i, (miner_cfg, _) in enumerate(collectors):
+                        mac = miner_cfg.get("mac_address")
+                        if not mac or mac not in refreshed_by_mac:
+                            continue
+                        new_cfg = refreshed_by_mac[mac]
+                        if new_cfg["url"] == miner_cfg["url"]:
+                            continue
+                        old_url = miner_cfg["url"]
+                        logger.info(
+                            "Miner '%s' (%s) changed IP: %s → %s",
+                            miner_cfg.get("name", mac), mac, old_url, new_cfg["url"],
+                        )
+                        password = decode_password(new_cfg["password_b64"]) if new_cfg.get("password_b64") else ""
+                        new_collector = CollectorFactory.create(
+                            name=new_cfg.get("firmware", default_collector_type),
+                            url=new_cfg["url"],
+                            username=new_cfg.get("username"),
+                            password=password,
+                        )
+                        try:
+                            new_collector.authenticate()
+                        except Exception as exc:
+                            logger.warning("Auth failed for moved miner '%s': %s", new_cfg.get("name", mac), exc)
+                        # Move identity to new URL and update collector
+                        old_identity = identities.pop(old_url, None)
+                        if old_identity:
+                            old_identity.ip_address = new_cfg["url"].removeprefix("http://").removeprefix("https://").split("/")[0].split(":")[0]
+                            identities[new_cfg["url"]] = old_identity
+                        collectors[i][1].close()
+                        collectors[i] = (new_cfg, new_collector)
+                        known_urls.discard(old_url)
+                        known_urls.add(new_cfg["url"])
+
+                    # Genuinely new miners (new URL and new or absent MAC)
+                    new_urls = {m["url"] for m in refreshed} - known_urls
+                    new_miner_cfgs = [
+                        m for m in refreshed
+                        if m["url"] in new_urls
+                        and (not m.get("mac_address") or m["mac_address"] not in known_macs)
+                    ]
+
+                    if new_miner_cfgs:
+                        new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
+                        _authenticate_all(new_collectors)
+                        new_ids = _fetch_identities(new_collectors)
+
+                        collectors.extend(new_collectors)
+                        identities.update(new_ids)
+                        known_urls |= {m["url"] for m in new_miner_cfgs}
+                        known_macs |= {m["mac_address"] for m in new_miner_cfgs if m.get("mac_address")}
+                        logger.info("Discovered %d new miner(s): %s", len(new_miner_cfgs), ", ".join(m["url"] for m in new_miner_cfgs))
+
+                    last_scan = now
+
                 if controller and controller.check_config_reload():
                     cfg = _reload_cfg(cfg)
                     poll_interval = cfg.get("poll_interval_seconds", 30)
-                    metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))
+                    metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))  # DEFAULT_CONSENT: all ON
                     default_collector_type = cfg.get("collector_type", "braiins")
-                    scan_interval = cfg.get("discovery", {}).get("scan_interval_seconds", 300)
+                    discovery_cfg = cfg.get("discovery", {})
+                    discovery_enabled = discovery_cfg.get("enabled", False)
+                    scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
                     logger.info("Config reloaded — active metrics: %s", ", ".join(metrics) if metrics else "(none)")
                     try:
                         safe_cfg = {k: v for k, v in cfg.items() if k != "wright_api_key"}
@@ -849,88 +939,20 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     except Exception as exc:
                         logger.warning("Failed to send agent config after reload: %s", exc)
 
-                now = time.time()
-                if controller is not None:
-                    # GUI mode: ScanManager owns scanning; reading the shared store is free.
-                    refreshed = _resolve_miners(cfg, controller)
-                elif now - last_scan >= scan_interval:
-                    # TUI / headless: real subnet scan — throttled to scan_interval.
-                    logger.info("Running periodic miner re-discovery…")
-                    refreshed = _resolve_miners(cfg)
-                    last_scan = now
-                else:
-                    refreshed = []
+                _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
 
-                # Detect miners that moved to a new IP (same MAC, different URL)
-                refreshed_by_mac = {m["mac_address"]: m for m in refreshed if m.get("mac_address")}
-                for i, (miner_cfg, _) in enumerate(collectors):
-                    mac = miner_cfg.get("mac_address")
-                    if not mac or mac not in refreshed_by_mac:
-                        continue
-                    new_cfg = refreshed_by_mac[mac]
-                    if new_cfg["url"] == miner_cfg["url"]:
-                        continue
-                    old_url = miner_cfg["url"]
-                    logger.info(
-                        "Miner '%s' (%s) changed IP: %s → %s",
-                        miner_cfg.get("name", mac), mac, old_url, new_cfg["url"],
-                    )
-                    password = decode_password(new_cfg["password_b64"]) if new_cfg.get("password_b64") else ""
-                    new_collector = CollectorFactory.create(
-                        name=new_cfg.get("firmware", default_collector_type),
-                        url=new_cfg["url"],
-                        username=new_cfg.get("username"),
-                        password=password,
-                    )
-                    try:
-                        new_collector.authenticate()
-                    except Exception as exc:
-                        logger.warning("Auth failed for moved miner '%s': %s", new_cfg.get("name", mac), exc)
-                    old_identity = identities.pop(old_url, None)
-                    if old_identity:
-                        old_identity.ip_address = new_cfg["url"].removeprefix("http://").removeprefix("https://").split("/")[0].split(":")[0]
-                        identities[new_cfg["url"]] = old_identity
-                    collectors[i][1].close()
-                    collectors[i] = (new_cfg, new_collector)
-                    known_urls.discard(old_url)
-                    known_urls.add(new_cfg["url"])
-
-                # Genuinely new miners (new URL and new or absent MAC)
-                new_urls = {m["url"] for m in refreshed} - known_urls
-                new_miner_cfgs = [
-                    m for m in refreshed
-                    if m["url"] in new_urls
-                    and (not m.get("mac_address") or m["mac_address"] not in known_macs)
-                ]
-                if new_miner_cfgs:
-                    new_collectors = _build_collectors(new_miner_cfgs, default_collector_type)
-                    _authenticate_all(new_collectors)
-                    new_ids = _fetch_identities(new_collectors)
-                    collectors.extend(new_collectors)
-                    identities.update(new_ids)
-                    known_urls |= {m["url"] for m in new_miner_cfgs}
-                    known_macs |= {m["mac_address"] for m in new_miner_cfgs if m.get("mac_address")}
-                    logger.info("Discovered %d new miner(s): %s", len(new_miner_cfgs), ", ".join(m["url"] for m in new_miner_cfgs))
-
-                if collectors:
-                    consecutive_crashes = 0
-                    if controller:
-                        controller.push_gui_event({"event": "miners_resolved", "count": len(collectors)})
-                    _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
-                    if controller:
-                        controller.push_gui_event({"event": "poll_cycle_complete", "miner_count": len(collectors)})
-                else:
-                    logger.debug("No miners available yet — skipping poll cycle")
+                if controller:
+                    controller.push_gui_event({"event": "poll_cycle_complete", "miner_count": len(collectors)})
 
                 if _fd_baseline:
                     _fd_baseline, _fd_last_check = _check_fd_growth(_fd_baseline, _fd_last_check)
 
-                if controller:
-                    woken = controller.wait_for_mode_change(timeout=poll_interval)
-                    if woken and controller.mode == "fan_detection":
+                if controller and controller.wait_for_mode_change(timeout=poll_interval):
+                    if controller.mode == "fan_detection":
                         _run_ws_fan_detection(cfg, controller, api_client)
                 else:
-                    time.sleep(poll_interval)
+                    if not controller:
+                        time.sleep(poll_interval)
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")
