@@ -13,6 +13,7 @@ class MinerIdentity:
     serial_number: str
     hostname: str
     mac_address: str
+    model: str = ""
     wright_fans: Optional[bool] = None
     ip_address: str = ""
     firmware: Optional[str] = None
