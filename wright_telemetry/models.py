@@ -124,12 +124,13 @@ class CoolingData:
             FanReading(position=i, rpm=rpm, target_speed_ratio=0.0)
             for i, rpm in enumerate(stats.get("fan", []))
         ]
-        # Highest chip temp across all chains.
+        # Highest temp (board or chip) across all chains.
         all_temps: list[float] = []
         for chain in stats.get("chain", []):
-            for t in chain.get("temp_chip", []):
-                if isinstance(t, (int, float)) and t > 0:
-                    all_temps.append(float(t))
+            for key in ("temp_pcb", "temp_chip"):
+                for t in chain.get(key, []):
+                    if isinstance(t, (int, float)) and t > 0:
+                        all_temps.append(float(t))
         highest_temp: Optional[dict[str, Any]] = (
             {"value": max(all_temps), "unit": "C"} if all_temps else None
         )
