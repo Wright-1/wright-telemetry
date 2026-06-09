@@ -97,6 +97,7 @@ class BitmainCollector(MinerCollector):
             serial_number=serial,
             hostname=sysinfo.get("hostname", ""),
             mac_address=sysinfo.get("macaddr", ""),
+            model=miner_type.get("miner_type", ""),
             firmware="bitmain",
             ip_address=sysinfo.get("ipaddress", ""),
         )
