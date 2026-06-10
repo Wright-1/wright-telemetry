@@ -38,6 +38,18 @@ class AgentController:
         self._event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self._gui_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
 
+        # ── Shared discovery state (Model layer) ──────────────────────────────
+        # Written by ScanManager after each subnet scan completes.
+        # Read by the scheduler thread via get_discovered_miners().
+        # Stores credential-free dicts: {url, firmware, name, mac_address}.
+        # The GUI continues to receive its own live progress events unchanged.
+        self._discovered_miners: list[dict[str, Any]] = []
+        self._miners_lock = threading.Lock()
+        # True only when a GUI ScanManager is wired up. When False (CLI / TUI
+        # mode) the scheduler runs its own subnet scan instead of reading the
+        # shared store. Set to True by ScanningEngine on startup.
+
+
     @property
     def mode(self) -> str:
         with self._lock:
@@ -96,16 +108,25 @@ class AgentController:
             except queue.Empty:
                 return events
 
-    def request_config_reload(self) -> None:
-        """Signal the scheduler to reload config from disk.
+    def set_discovered_miners(self, miners: list[dict[str, Any]]) -> None:
+        """Called by ScanManager after each scan to share results with the scheduler."""
+        with self._miners_lock:
+            self._discovered_miners = list(miners)
 
-        Also wakes the scheduler immediately from wait_for_mode_change()
-        instead of sleeping the full poll interval.
+    def get_discovered_miners(self) -> list[dict[str, Any]]:
+        """Called by the scheduler to read the latest GUI discovery results."""
+        with self._miners_lock:
+            return list(self._discovered_miners)
+
+    def request_config_reload(self) -> None:
+        """Flag the scheduler to reload config on its next poll tick.
+
+        Intentionally does *not* wake the scheduler early.  The poll loop
+        runs on a fixed interval and picks up this flag at the top of each
+        tick.  Only fan-detection mode changes (request_fan_detection /
+        request_normal) are allowed to interrupt the sleep.
         """
         self._config_reload.set()
-        with self._wake:
-            self._wake_seq += 1
-            self._wake.notify_all()
 
     def check_config_reload(self) -> bool:
         """Return True if a config reload was requested, clearing the flag."""
@@ -137,11 +158,19 @@ class WebSocketClient:
     def _build_ws_url(api_url: str) -> str:
         """Convert an HTTP(S) api_url to its WebSocket equivalent.
 
-        Falls back to the ``WRIGHT_WS_URL`` environment setting when
-        *api_url* is empty.
+        Priority:
+        1. ``WRIGHT_WS_URL`` env var — used as-is when set (allows pointing
+           the WebSocket gateway to a different host/port than the REST API).
+        2. *api_url* argument (from ``wright_api_url`` in the config file).
+        3. The ``WS_URL`` settings default.
         """
+        import os
         from wright_telemetry.settings import WS_URL
-        base = (api_url.rstrip("/") if api_url.strip() else WS_URL.rstrip("/"))
+        ws_env = os.environ.get("WRIGHT_WS_URL", "").strip()
+        if ws_env:
+            base = ws_env.rstrip("/")
+        else:
+            base = (api_url.rstrip("/") if api_url.strip() else WS_URL.rstrip("/"))
         tail = "/api/v2/ws/agent" if not base.endswith("/api") else "/v2/ws/agent"
         http_url = base + tail
         if http_url.startswith("https://"):
@@ -199,8 +228,9 @@ class WebSocketClient:
             })
             return
 
-        consent = cfg.get("consent", {})
-        if not consent.get("remote_config", False):
+        from wright_telemetry.consent import DEFAULT_CONSENT
+        consent = cfg.get("consent", DEFAULT_CONSENT)
+        if not consent.get("remote_config", True):
             self.controller.push_event({
                 "event": "config_error",
                 "error": (
@@ -316,7 +346,11 @@ class WebSocketClient:
         consecutive_failures = 0
         connect_kw: dict[str, Any] = {}
         if self._ws_url.startswith("wss://"):
-            connect_kw["ssl"] = ssl.create_default_context()
+            try:
+                import certifi
+                connect_kw["ssl"] = ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                connect_kw["ssl"] = ssl.create_default_context()
 
         while True:
             try:

@@ -168,10 +168,10 @@ def _probe_braiins(ip: str) -> Optional[DiscoveredMiner]:
     stock firmware, not Braiins — those are excluded to avoid false positives.
     """
     url = f"http://{ip}/api/v1/miner/details"
+    session = requests.Session()
     try:
-        resp = requests.get(url, timeout=_PROBE_TIMEOUT)
+        resp = session.get(url, timeout=_PROBE_TIMEOUT)
         if resp.status_code == 401:
-            # Bitmain uses HTTP Digest Auth — exclude it.
             www_auth = resp.headers.get("WWW-Authenticate", "")
             if "Digest" in www_auth:
                 return None
@@ -191,6 +191,8 @@ def _probe_braiins(ip: str) -> Optional[DiscoveredMiner]:
             )
     except (requests.ConnectionError, requests.Timeout, OSError):
         pass
+    finally:
+        session.close()
     return None
 
 
@@ -253,14 +255,13 @@ def _probe_bitmain(ip: str) -> Optional[DiscoveredMiner]:
     from requests.auth import HTTPDigestAuth
 
     url = f"http://{ip}/cgi-bin/get_system_info.cgi"
+    session = requests.Session()
     try:
-        resp = requests.get(
+        resp = session.get(
             url,
             auth=HTTPDigestAuth("root", "root"),
             timeout=_PROBE_TIMEOUT,
         )
-        # Accept 401 as a Bitmain signal only if we also see the Digest challenge
-        # (WWW-Authenticate header contains "Digest") — avoids false positives.
         if resp.status_code == 401:
             www_auth = resp.headers.get("WWW-Authenticate", "")
             if "Digest" in www_auth:
@@ -282,6 +283,8 @@ def _probe_bitmain(ip: str) -> Optional[DiscoveredMiner]:
         )
     except Exception:
         return None
+    finally:
+        session.close()
 
 
 def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
@@ -293,8 +296,9 @@ def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
     for credentials is added.
     """
     url = f"http://{ip}/api/v1/info"
+    session = requests.Session()
     try:
-        resp = requests.get(url, timeout=_PROBE_TIMEOUT)
+        resp = session.get(url, timeout=_PROBE_TIMEOUT)
         if resp.status_code != 200:
             return None
         try:
@@ -310,6 +314,8 @@ def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
         )
     except (requests.ConnectionError, requests.Timeout, OSError):
         pass
+    finally:
+        session.close()
     return None
 
 
@@ -499,49 +505,6 @@ def discovered_to_miner_cfgs(
             entry["password_b64"] = default_password_b64
         cfgs.append(entry)
     return cfgs
-
-
-def merge_miners(
-    manual: list[dict[str, Any]],
-    discovered: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Merge manually-configured miners with discovered ones.
-
-    MAC address is the primary deduplication key; URL is the fallback.
-    When a discovered miner's MAC matches an existing entry at a different
-    URL, the existing entry's URL is updated to reflect the new IP so that
-    a miner that obtained a new DHCP lease is not treated as a new device.
-    """
-    merged = [dict(m) for m in manual]
-
-    # Build MAC → index map for fast lookup (only entries that have a MAC)
-    mac_to_idx: dict[str, int] = {
-        m["mac_address"]: i
-        for i, m in enumerate(merged)
-        if m.get("mac_address")
-    }
-    known_urls = {m["url"] for m in merged}
-
-    for d in discovered:
-        d_mac = d.get("mac_address")
-        if d_mac and d_mac in mac_to_idx:
-            # Known miner — update its URL if the IP changed
-            idx = mac_to_idx[d_mac]
-            if merged[idx]["url"] != d["url"]:
-                logger.info(
-                    "Miner %s (%s) moved: %s → %s",
-                    merged[idx].get("name", d_mac), d_mac,
-                    merged[idx]["url"], d["url"],
-                )
-                merged[idx]["url"] = d["url"]
-                known_urls = {m["url"] for m in merged}  # refresh after update
-        elif d["url"] not in known_urls:
-            merged.append(d)
-            if d_mac:
-                mac_to_idx[d_mac] = len(merged) - 1
-            known_urls.add(d["url"])
-
-    return merged
 
 
 # ------------------------------------------------------------------

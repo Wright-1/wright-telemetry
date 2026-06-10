@@ -27,6 +27,7 @@ class Sidebar(QWidget):
         ("permissions", "⊛", "Permissions"),
         ("discovery",   "◎", "Discovery"),
         ("overview",    "⊞", "Overview"),
+        ("logs",        "≡", "Logs"),
     ]
 
     def __init__(self, version: str = "0.7.3", parent: QWidget | None = None):
@@ -176,9 +177,12 @@ class Sidebar(QWidget):
 
         When ``connected`` is False (no portal account detected) the Overview
         nav item is hidden and the signup card is shown in its place.
+        The Logs item is always visible regardless of portal state.
         """
         self._items["overview"].setVisible(connected)
         self._signup_card.setVisible(not connected)
+        # Logs page is always accessible
+        self._items["logs"].setVisible(True)
 
     def _make_signup_card(self) -> QWidget:
         """Sidebar card: label + full-width button + tagline."""

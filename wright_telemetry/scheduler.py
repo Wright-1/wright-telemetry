@@ -24,12 +24,11 @@ from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
 from wright_telemetry.config import decode_password, load_config, mask_config
 from wright_telemetry.mac_util import normalize_mac_address
-from wright_telemetry.consent import consented_metrics
+from wright_telemetry.consent import DEFAULT_CONSENT, consented_metrics
 from wright_telemetry.discovery import (
     discover_miners,
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
-    merge_miners,
 )
 from wright_telemetry.models import CoolingData, MinerIdentity, TelemetryPayload
 
@@ -57,35 +56,46 @@ def _check_fd_growth(baseline: int, last_check: float) -> tuple[int, float]:
     return baseline, now
 
 
-def _resolve_miners(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return miners to poll: legacy config miners merged with any discovered ones.
 
-    Miners in ``cfg["miners"]`` are always included for backwards compatibility —
-    users who ran an older setup wizard may have miners written there.  Discovered
-    miners are merged in-memory only; nothing is ever written back to the config
-    file.  The server upserts the miners table automatically from the
-    ``miner_identity`` field present on every telemetry payload.
+def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[str, Any]]:
+    """Return miners to poll: config miners merged with any discovered ones.
+
+    In GUI mode (*controller* is provided) the shared discovery store is read
+    directly — no network scan is run here.  The ScanManager owns all scanning
+    and keeps the store up to date; the scheduler just consumes the results.
+
+    In CLI / headless mode (*controller* is None) the original subnet-scan
+    path is used so the agent works without the GUI.
+
+    Miners are never written to the config file; the server upserts them
+    automatically from the ``miner_identity`` field on every telemetry payload.
     """
-    # Backwards compat: miners explicitly listed in the config file.
-    config_miners: list[dict[str, Any]] = list(cfg.get("miners", []))
-
     discovery_cfg = cfg.get("discovery", {})
+    default_user   = discovery_cfg.get("default_username",    "root")
+    default_pw_b64 = discovery_cfg.get("default_password_b64", "")
+
+    #Controller already exists so just use the miners that it has found
+    if controller is not None:
+        raw = controller.get_discovered_miners()
+        return [
+            {
+                **m,
+                "username":     m.get("username",     default_user),
+                "password_b64": m.get("password_b64", default_pw_b64),
+            }
+            for m in raw
+        ]
+
+    # No controller (standalone / headless): run a direct subnet scan.
     if not discovery_cfg.get("enabled", False):
-        return config_miners
+        return []
 
     subnets = discovery_cfg.get("subnets")
-    default_user = discovery_cfg.get("default_username", "root")
-    default_pw_b64 = discovery_cfg.get("default_password_b64", "")
-    # Support both list format and legacy single-string format
     collector_types = cfg.get("collector_types") or cfg.get("collector_type", "braiins")
     firmware_types = firmware_types_for_collector(collector_types)
-
     found = discover_miners(subnets=subnets, firmware_types=firmware_types)
-    discovered_cfgs = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
-    logger.info("Discovered %d miner(s) via subnet scan", len(discovered_cfgs))
-
-    # Merge in-memory only — config file is never touched.
-    return merge_miners(config_miners, discovered_cfgs)
+    logger.info("Discovered %d miner(s) via subnet scan", len(found))
+    return discovered_to_miner_cfgs(found, default_user, default_pw_b64)
 
 
 def _build_collectors(
@@ -799,15 +809,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     """Main entry point -- runs forever with crash recovery."""
     poll_interval = cfg.get("poll_interval_seconds", 30)
     facility_id = cfg.get("facility_id", "unknown")
-    metrics = consented_metrics(cfg.get("consent", {}))
+    metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))  # DEFAULT_CONSENT: all ON
     default_collector_type = cfg.get("collector_type", "braiins")
 
     discovery_cfg = cfg.get("discovery", {})
     discovery_enabled = discovery_cfg.get("enabled", False)
     scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
-
-    if not metrics:
-        logger.warning("No metrics are enabled. The collector will idle. Run --setup to enable metrics.")
 
     api_client = WrightAPIClient(
         api_url=cfg.get("wright_api_url", ""),
@@ -823,22 +830,22 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
         try:
             logger.info("Starting collection loop (poll every %ds, %d metric(s))", poll_interval, len(metrics))
 
-            miners = _resolve_miners(cfg)
+            miners = _resolve_miners(cfg, controller)  # pass controller for GUI store
             collectors = _build_collectors(miners, default_collector_type)
 
             if not collectors:
-                logger.error("No miners found (configured or discovered). Run --setup to add miners.")
-                time.sleep(poll_interval)
-                continue
+                if controller is None:
+                    logger.error("No miners found (configured or discovered). Run --setup to add miners.")
+                    time.sleep(poll_interval)
+                    continue
+                # GUI: miners arrive asynchronously via ScanManager — fall through to poll loop
+                logger.debug("No miners yet — waiting for ScanManager discovery…")
 
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
 
             if controller:
-                controller.push_gui_event({
-                    "event": "miners_resolved",
-                    "count": len(collectors),
-                })
+                controller.push_gui_event({"event": "miners_resolved", "count": len(collectors)})
 
             consecutive_crashes = 0
             last_scan = time.time()
@@ -849,15 +856,15 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 _fd_baseline = 0
             _fd_last_check = 0.0
             known_urls = {m["url"] for m in miners}
-            # Include MACs back-propagated from identity fetch
             known_macs = {m["mac_address"] for m in miners if m.get("mac_address")}
 
             while True:
                 now = time.time()
 
-                if discovery_enabled and (now - last_scan) >= scan_interval:
+                # GUI always reads from the shared store (free); TUI scans on the interval.
+                if controller is not None or (discovery_enabled and (now - last_scan) >= scan_interval):
                     logger.info("Running periodic miner re-discovery…")
-                    refreshed = _resolve_miners(cfg)
+                    refreshed = _resolve_miners(cfg, controller)  # pass controller for GUI store
 
                     # Detect miners that moved to a new IP (MAC known, URL changed)
                     refreshed_by_mac = {
@@ -920,16 +927,12 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 if controller and controller.check_config_reload():
                     cfg = _reload_cfg(cfg)
                     poll_interval = cfg.get("poll_interval_seconds", 30)
-                    metrics = consented_metrics(cfg.get("consent", {}))
+                    metrics = consented_metrics(cfg.get("consent", DEFAULT_CONSENT))  # DEFAULT_CONSENT: all ON
                     default_collector_type = cfg.get("collector_type", "braiins")
                     discovery_cfg = cfg.get("discovery", {})
                     discovery_enabled = discovery_cfg.get("enabled", False)
                     scan_interval = discovery_cfg.get("scan_interval_seconds", 300)
-                    logger.info("Configuration reloaded from disk")
-                    if metrics:
-                        print(f"[WRIGHT] Config reloaded — active metrics: {', '.join(metrics)}")
-                    else:
-                        print("[WRIGHT] Config reloaded — all metrics disabled, collector will idle")
+                    logger.info("Config reloaded — active metrics: %s", ", ".join(metrics) if metrics else "(none)")
                     try:
                         safe_cfg = {k: v for k, v in cfg.items() if k != "wright_api_key"}
                         api_client.send_agent_config(safe_cfg, __version__)
@@ -939,10 +942,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
 
                 if controller:
-                    controller.push_gui_event({
-                        "event": "poll_cycle_complete",
-                        "miner_count": len(collectors),
-                    })
+                    controller.push_gui_event({"event": "poll_cycle_complete", "miner_count": len(collectors)})
 
                 if _fd_baseline:
                     _fd_baseline, _fd_last_check = _check_fd_growth(_fd_baseline, _fd_last_check)

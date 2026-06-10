@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -179,6 +180,12 @@ class _ProgressEntryCard(QWidget):
         self._scanning = False
         self._fw_toggles: dict[str, _FirmwareToggle] = {}
 
+        # Debounce credential saves — wait 500ms after the last keystroke
+        self._cred_debounce = QTimer()
+        self._cred_debounce.setSingleShot(True)
+        self._cred_debounce.setInterval(500)
+        self._cred_debounce.timeout.connect(self._flush_credentials)
+
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("pe_card")
         self.setStyleSheet(f"""
@@ -238,9 +245,18 @@ class _ProgressEntryCard(QWidget):
         self._status_lbl = _lbl("No scan running", 12, 400, T.TEXT_SECONDARY)
         ftr.addWidget(self._status_lbl)
         ftr.addStretch()
+        self._next_scan_lbl = _lbl("", 11, 400, T.TEXT_MUTED)
+        ftr.addWidget(self._next_scan_lbl)
+        ftr.addSpacing(12)
         self._counts_lbl = _lbl("", 12, 400, T.TEXT_MUTED)
         ftr.addWidget(self._counts_lbl)
         prog.addLayout(ftr)
+
+        # 1-second ticker to keep the countdown fresh
+        self._countdown_timer = QTimer()
+        self._countdown_timer.setInterval(1000)
+        self._countdown_timer.timeout.connect(self._refresh_countdown)
+        self._countdown_timer.start()
 
         outer.addWidget(progress_widget)
         outer.addWidget(_hdiv())
@@ -286,7 +302,93 @@ class _ProgressEntryCard(QWidget):
 
         entry.addLayout(fw_and_warn)
 
-        # CIDR input — multi-value, comma-separated
+        # ── Credentials ────────────────────────────────────────────────────
+        entry.addSpacing(4)
+        entry.addWidget(_lbl("MINER CREDENTIALS", 10, 600, T.TEXT_MUTED))
+        entry.addWidget(_lbl(
+            "Default username and password used when connecting to discovered miners.",
+            11, 400, T.TEXT_MUTED, wrap=True,
+        ))
+
+        _input_style = f"""
+            QLineEdit {{
+                background: {T.BG_WINDOW};
+                border: 1px solid {T.BORDER_DEFAULT};
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: {T.TEXT_PRIMARY};
+                font-size: 13px;
+            }}
+            QLineEdit:focus {{
+                border-color: {T.ACCENT_BLUE};
+            }}
+        """
+
+        creds_row = QHBoxLayout()
+        creds_row.setSpacing(12)
+
+        # Username
+        user_col = QVBoxLayout()
+        user_col.setSpacing(4)
+        user_col.addWidget(_lbl("USERNAME", 10, 600, T.TEXT_MUTED))
+        self._username_input = QLineEdit()
+        self._username_input.setPlaceholderText("root")
+        self._username_input.setFont(make_font(12, 400))
+        self._username_input.setFixedHeight(36)
+        self._username_input.setStyleSheet(_input_style)
+        disc_cfg = engine._cfg.get("discovery", {}) if engine else {}
+        self._username_input.setText(disc_cfg.get("default_username", ""))
+        self._username_input.textChanged.connect(self._on_credentials_changed)
+        user_col.addWidget(self._username_input)
+        creds_row.addLayout(user_col, 1)
+
+        # Password with show/hide toggle
+        pw_col = QVBoxLayout()
+        pw_col.setSpacing(4)
+        pw_col.addWidget(_lbl("PASSWORD", 10, 600, T.TEXT_MUTED))
+        pw_wrap = QHBoxLayout()
+        pw_wrap.setSpacing(0)
+        self._password_input = QLineEdit()
+        self._password_input.setPlaceholderText("Leave blank if none")
+        self._password_input.setFont(make_font(12, 400))
+        self._password_input.setFixedHeight(36)
+        self._password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._password_input.setStyleSheet(_input_style)
+        # Pre-populate: if a password_b64 is saved decode and show placeholder dots
+        if disc_cfg.get("default_password_b64"):
+            self._password_input.setPlaceholderText("(saved — type to change)")
+        self._password_input.textChanged.connect(self._on_credentials_changed)
+        pw_wrap.addWidget(self._password_input, 1)
+
+        self._pw_toggle_btn = QPushButton("Show")
+        self._pw_toggle_btn.setFixedHeight(36)
+        self._pw_toggle_btn.setFixedWidth(52)
+        self._pw_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pw_toggle_btn.setCheckable(True)
+        self._pw_toggle_btn.setFont(make_font(11, 600))
+        self._pw_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {T.BG_WINDOW};
+                border: 1px solid {T.BORDER_DEFAULT};
+                border-radius: 6px;
+                color: {T.TEXT_MUTED};
+            }}
+            QPushButton:checked {{
+                color: {T.ACCENT_BLUE};
+                border-color: {T.ACCENT_BLUE};
+            }}
+            QPushButton:hover {{
+                background: {T.BG_CARD};
+            }}
+        """)
+        self._pw_toggle_btn.toggled.connect(self._on_pw_visibility_toggled)
+        pw_wrap.addWidget(self._pw_toggle_btn)
+        pw_col.addLayout(pw_wrap)
+        creds_row.addLayout(pw_col, 1)
+
+        entry.addLayout(creds_row)
+
+        # ── CIDR input — multi-value, comma-separated ──────────────────────
         entry.addSpacing(4)
         entry.addWidget(_lbl("CIDR RANGE", 10, 600, T.TEXT_MUTED))
         self._cidr_input = QTextEdit()
@@ -334,6 +436,16 @@ class _ProgressEntryCard(QWidget):
 
         outer.addWidget(entry_widget)
 
+    def sync_firmware_toggles(self, engine: "ScanningEngine") -> None:
+        """Update toggle states to match the engine's collector_types config."""
+        active_types: list[str] = engine._cfg.get("collector_types") or []
+        for key, toggle in self._fw_toggles.items():
+            # Block the toggled signal while we programmatically update state
+            # to avoid triggering _on_firmware_changed and a spurious rescan.
+            toggle.toggle.blockSignals(True)
+            toggle.toggle.setChecked(key in active_types or not active_types)
+            toggle.toggle.blockSignals(False)
+
     # ── Progress slots ────────────────────────────────────────────────────────
 
     def set_scanning(self, subnet: str, total: int) -> None:
@@ -344,6 +456,7 @@ class _ProgressEntryCard(QWidget):
         self._bar.setMaximum(max(total, 1))
         self._bar.setValue(0)
         self._pct_lbl.setText("0%")
+        self._next_scan_lbl.setVisible(False)
         self._style_cancel()
 
     def update_progress(self, subnet: str, scanned: int, total: int) -> None:
@@ -360,11 +473,27 @@ class _ProgressEntryCard(QWidget):
         self._counts_lbl.setText("")
         self._bar.setValue(0)
         self._pct_lbl.setText("—")
+        self._next_scan_lbl.setVisible(True)
+        self._refresh_countdown()
         self._style_start()
 
     def set_cancelled(self, subnet: str) -> None:
         self.set_idle()
         self._status_lbl.setText(f"Cancelled: {subnet}")
+
+    def _refresh_countdown(self) -> None:
+        """Update the 'Next auto scan in X:XX' label from the engine timer."""
+        if self._scanning or self._engine is None:
+            self._next_scan_lbl.setVisible(False)
+            return
+        secs = self._engine.seconds_until_next_discovery()
+        if secs <= 0:
+            self._next_scan_lbl.setText("")
+            self._next_scan_lbl.setVisible(False)
+            return
+        mins, s = divmod(secs, 60)
+        self._next_scan_lbl.setText(f"Next auto scan in {mins}:{s:02d}")
+        self._next_scan_lbl.setVisible(True)
 
     # ── Button styles ─────────────────────────────────────────────────────────
 
@@ -402,9 +531,29 @@ class _ProgressEntryCard(QWidget):
         selected = [k for k, t in self._fw_toggles.items() if t.isChecked()]
         self._engine.update_firmware_types(selected)
 
+    def _on_credentials_changed(self) -> None:
+        """Restart the debounce timer on every keystroke."""
+        self._cred_debounce.start()
+
+    def _on_pw_visibility_toggled(self, visible: bool) -> None:
+        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        self._password_input.setEchoMode(mode)
+        self._pw_toggle_btn.setText("Hide" if visible else "Show")
+
+    def _flush_credentials(self) -> None:
+        """Persist username/password to config via the engine."""
+        if self._engine is None:
+            return
+        username = self._username_input.text().strip()
+        password = self._password_input.text()  # do not strip — passwords can have spaces
+        self._engine.update_discovery_credentials(username, password)
+
     def _on_add(self) -> None:
         if self._engine is None:
             return
+        # Flush any pending credential changes immediately before scanning
+        self._cred_debounce.stop()
+        self._flush_credentials()
         raw = self._cidr_input.toPlainText().strip()
         if not raw:
             return
@@ -861,6 +1010,8 @@ class DiscoveryPage(QWidget):
         """Attach a freshly created engine after provisioning."""
         self._engine = engine
         self._progress_entry._engine = engine
+        self._progress_entry.sync_firmware_toggles(engine)
+        self._progress_entry._refresh_countdown()
         self._scans_card._engine = engine
         self._connect_signals(engine)
 

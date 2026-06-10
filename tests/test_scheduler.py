@@ -295,55 +295,48 @@ class TestDetectFanDips:
 
 class TestResolveMiners:
 
-    def test_returns_config_miners_when_discovery_disabled(self):
-        """Miners explicitly in cfg["miners"] are returned even with discovery off."""
+    def test_returns_empty_when_config_miners_present_but_discovery_disabled(self):
+        """cfg['miners'] is deprecated — _resolve_miners ignores it."""
         cfg = {
             "miners": [
                 {"url": "http://10.0.0.1", "name": "legacy-a", "firmware": "braiins"},
-                {"url": "http://10.0.0.2", "name": "legacy-b", "firmware": "luxos"},
             ],
             "discovery": {"enabled": False},
         }
         result = _resolve_miners(cfg)
-        assert len(result) == 2
-        assert result[0]["url"] == "http://10.0.0.1"
-        assert result[1]["url"] == "http://10.0.0.2"
+        assert result == []
 
     def test_returns_empty_when_no_miners_and_discovery_disabled(self):
         cfg = {"discovery": {"enabled": False}}
         assert _resolve_miners(cfg) == []
 
-    def test_config_miners_included_when_discovery_enabled(self, monkeypatch):
-        """Legacy config miners survive even when the discovery scan finds nothing."""
-        monkeypatch.setattr(
-            "wright_telemetry.scheduler.discover_miners",
-            lambda **_kw: [],
-        )
-        cfg = {
-            "miners": [{"url": "http://10.0.0.1", "name": "legacy", "firmware": "braiins"}],
-            "discovery": {"enabled": True, "subnets": ["10.0.0.0/24"]},
-        }
-        result = _resolve_miners(cfg)
-        assert any(m["url"] == "http://10.0.0.1" for m in result)
-
-    def test_discovered_miners_merged_with_config_miners(self, monkeypatch):
-        """Discovery results are merged in-memory alongside legacy config miners."""
+    def test_discovery_scan_results_returned_when_enabled(self, monkeypatch):
+        """Without a controller, _resolve_miners runs a subnet scan and returns results."""
         from wright_telemetry.discovery import DiscoveredMiner
-
         monkeypatch.setattr(
             "wright_telemetry.scheduler.discover_miners",
             lambda **_kw: [
-                DiscoveredMiner(ip="10.0.0.5", firmware="braiins", hostname="new", mac_address="AA:BB:CC:DD:EE:05"),
+                DiscoveredMiner(ip="10.0.0.5", firmware="braiins", hostname="found", mac_address="AA:BB:CC:DD:EE:05"),
             ],
         )
-        cfg = {
-            "miners": [{"url": "http://10.0.0.1", "name": "legacy", "firmware": "braiins", "mac_address": "AA:BB:CC:DD:EE:01"}],
-            "discovery": {"enabled": True, "subnets": ["10.0.0.0/24"]},
-        }
+        cfg = {"discovery": {"enabled": True, "subnets": ["10.0.0.0/24"]}}
         result = _resolve_miners(cfg)
+        assert len(result) == 1
+        assert result[0]["url"] == "http://10.0.0.5"
+
+    def test_controller_store_returned_when_controller_provided(self):
+        """With a controller, _resolve_miners reads from the in-memory discovery store."""
+        from unittest.mock import MagicMock
+        controller = MagicMock()
+        controller.get_discovered_miners.return_value = [
+            {"url": "http://10.0.0.1", "name": "store-miner", "firmware": "braiins"},
+            {"url": "http://10.0.0.5", "name": "store-miner-2", "firmware": "luxos"},
+        ]
+        cfg = {"discovery": {}}
+        result = _resolve_miners(cfg, controller)
         urls = [m["url"] for m in result]
-        assert "http://10.0.0.1" in urls   # legacy preserved
-        assert "http://10.0.0.5" in urls   # newly discovered added
+        assert "http://10.0.0.1" in urls
+        assert "http://10.0.0.5" in urls
 
     def test_no_duplicates_when_config_miner_matches_discovered(self, monkeypatch):
         """A miner already in config is not duplicated when discovery finds the same MAC."""

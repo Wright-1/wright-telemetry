@@ -72,6 +72,18 @@ class ScanningEngine:
         self._timer.setInterval(250)
         self._timer.timeout.connect(self._drain_events)
 
+        # Periodic re-discovery timer (Qt main thread).
+        # Interval is read from config; defaults to 5 minutes.
+        # Fires scan_manager.start_all() which re-queues every known subnet
+        # through the existing wright-scanner thread — GUI progress events
+        # flow exactly as for a user-triggered scan.
+        discovery_interval_ms = int(
+            cfg.get("discovery", {}).get("scan_interval_seconds", 300) * 1000
+        )
+        self._discovery_timer = QTimer()
+        self._discovery_timer.setInterval(discovery_interval_ms)
+        self._discovery_timer.timeout.connect(self._on_discovery_timer)
+
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -84,6 +96,10 @@ class ScanningEngine:
         import wright_telemetry.collectors.braiins  # noqa: F401
         import wright_telemetry.collectors.luxos    # noqa: F401
         import wright_telemetry.collectors.vnish    # noqa: F401
+
+        # Mark GUI mode BEFORE starting the scheduler thread so it never
+        # races into the CLI discovery path on its very first _resolve_miners call.
+
 
         # Scheduler thread
         from wright_telemetry.scheduler import run as scheduler_run
@@ -119,11 +135,15 @@ class ScanningEngine:
 
         # GUI event drain timer
         self._timer.start()
+        # Periodic discovery timer — first fire after one full interval so the
+        # initial auto-scan on startup always runs before the first re-scan.
+        self._discovery_timer.start()
 
     def stop(self) -> None:
         """Stop the drain timer, cancel any in-flight scan, and close the
         WebSocket connection gracefully."""
         self._timer.stop()
+        self._discovery_timer.stop()
         self.scan_manager.cancel()
         if self._ws_client is not None:
             self._ws_client.stop()
@@ -188,6 +208,21 @@ class ScanningEngine:
         # Tell the GUI to remove the row
         self.controller.push_gui_event({"event": "subnet_removed", "subnet": subnet})
 
+    #TODO - we may want a unique credential per subnet at some point
+    def update_discovery_credentials(self, username: str, password: str) -> None:
+        """Persist default miner credentials used during subnet discovery."""
+        from wright_telemetry.config import encode_password, load_config, save_config
+        cfg = load_config() or {}
+        disc = cfg.setdefault("discovery", {})
+        disc["default_username"] = username or "root"
+        if password:
+            disc["default_password_b64"] = encode_password(password)
+        else:
+            disc.pop("default_password_b64", None)
+        save_config(cfg)
+        self._cfg = cfg
+        self.controller.request_config_reload()
+
     def update_firmware_types(self, types: list[str]) -> None:
         """Persist firmware type selection and re-queue all subnets for rescan."""
         from wright_telemetry.config import load_config, save_config
@@ -201,18 +236,58 @@ class ScanningEngine:
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
+    def seconds_until_next_discovery(self) -> int:
+        """Remaining seconds until the next automatic re-scan fires.
+
+        Returns 0 when the timer is inactive or has already elapsed.
+        Safe to call from the Qt main thread only.
+        """
+        ms = self._discovery_timer.remainingTime()
+        return max(0, ms // 1000) if ms >= 0 else 0
+
+    def _on_discovery_timer(self) -> None:
+        """Periodic re-scan: re-queue every known subnet through the scanner.
+
+        Only fires if there are subnets to re-scan.  The ScanManager skips
+        subnets that are already queued or actively scanning, so this is safe
+        to call even if a scan is still in progress.
+        """
+        if self.scan_manager.get_all_results():
+            logger.info("Discovery timer fired — re-queuing all known subnets")
+            self.scan_manager.start_all()
+
     def _fetch_agent_info(self) -> None:
         from wright_telemetry.portal_client import fetch_agent_info
         fetch_agent_info(
             api_key=self._cfg.get("wright_api_key", ""),
+            facility_id=self._cfg.get("facility_id", ""),
             push_gui_event=self.controller.push_gui_event,
         )
 
     def _auto_enqueue_initial_subnets(self) -> None:
-        """Enqueue detected local subnets + any already saved in config."""
+        """Enqueue detected local subnets + any already saved in config.
+
+        Auto-detected subnets are also persisted to config so that deleting
+        one from the GUI removes it permanently rather than having it
+        reappear on the next restart.
+        """
         from wright_telemetry.discovery import default_subnets
+        from wright_telemetry.config import load_config, save_config
         detected = default_subnets()
-        config_subnets = self._cfg.get("discovery", {}).get("subnets", [])
+        cfg = load_config() or self._cfg
+        disc = cfg.setdefault("discovery", {})
+        config_subnets: list[str] = disc.get("subnets", [])
+
+        # Merge auto-detected subnets into config so the full list is
+        # managed in one place and deletions are permanent.
+        new_subnets = [s for s in detected if s not in config_subnets]
+        if new_subnets:
+            config_subnets = config_subnets + new_subnets
+            disc["subnets"] = config_subnets
+            disc.setdefault("enabled", True)
+            save_config(cfg)
+            self._cfg = cfg
+
         all_subnets = list(dict.fromkeys(detected + config_subnets))  # dedupe, preserve order
         if all_subnets:
             logger.info("Auto-enqueueing %d subnet(s) for initial scan", len(all_subnets))
@@ -261,6 +336,17 @@ class ScanningEngine:
 
             elif etype == "scan_queue_empty":
                 self.signals.scan_queue_empty.emit()
+
+            elif etype == "request_scan":
+                # Scheduler is asking for a periodic re-discovery.
+                # Route it through the ScanManager so the GUI gets live
+                # progress events exactly as if the user had triggered the scan.
+                subnets = event.get("subnets")
+                if subnets:
+                    self.scan_manager.enqueue(subnets)
+                else:
+                    # No specific subnets: re-queue everything already known
+                    self.scan_manager.start_all()
 
             elif etype == "discovery_total":
                 self.signals.discovery_total_changed.emit(event["total"])

@@ -211,7 +211,8 @@ class AccessKeyPage(QWidget):
             from wright_telemetry.settings import API_URL
             cfg = load_config() or {}
             cfg["wright_api_key"] = result["apiKey"]
-            cfg["facility_id"] = result["facilityId"]
+            cfg["facility_id"]    = result["facilityId"]
+            cfg["email"]          = result.get("email", "")
             cfg.setdefault("wright_api_url", API_URL)
             cfg.setdefault("poll_interval_seconds", _DEFAULT_POLL_INTERVAL)
             cfg.setdefault("collector_types", list(_DEFAULT_COLLECTOR_TYPES))

@@ -112,11 +112,11 @@ class WrightAPIClient(ApiClient):
     """
 
     def __init__(self, api_url: str, api_key: str, facility_id: str) -> None:
-        from wright_telemetry.settings import API_URL
-        # Use the provided api_url if non-empty; fall back to the env/default setting.
-        effective = api_url.rstrip("/") if api_url.strip() else API_URL.rstrip("/")
-        self._api_url    = effective
-        self._ingest_url = effective
+        from wright_telemetry.settings import API_URL, INGEST_URL
+        # Portal / provisioning calls use api_url (falls back to WRIGHT_API_URL env).
+        self._api_url    = api_url.rstrip("/") if api_url.strip() else API_URL.rstrip("/")
+        # Telemetry pipeline always uses WRIGHT_INGEST_URL — independent of api_url.
+        self._ingest_url = INGEST_URL.rstrip("/")
         self.api_key     = api_key
         self.facility_id = facility_id
 

@@ -25,6 +25,12 @@ DIST_DIR="dist"
 BUILD_DIR="build"
 OUTPUT_DMG="${DIST_DIR}/${DMG_BASENAME}-${VERSION}.dmg"
 
+# ── macOS deployment target ───────────────────────────────────────────────────
+# Build with Python 3.9 (compiled for macOS 12) so the app runs on Monterey+.
+# venv-build is a separate venv created from /opt/homebrew/opt/python@3.9.
+export MACOSX_DEPLOYMENT_TARGET="12.0"
+BUILD_VENV="$(dirname "$0")/venv-build"
+
 BUILD_APP=true
 BUILD_DMG=true
 
@@ -49,30 +55,37 @@ hr
 # ── Guard: macOS only ─────────────────────────────────────────────────────────
 [[ "$(uname)" == "Darwin" ]] || die "This script must be run on macOS."
 
-# ── Detect Python / pip ───────────────────────────────────────────────────────
-PYTHON="${PYTHON:-python3}"
-"${PYTHON}" --version &>/dev/null || die "python3 not found. Set the PYTHON env var if your interpreter has a different name."
+# ── Select Python from the build venv (macOS 12-targeting Python 3.9) ─────────
+if [[ -x "${BUILD_VENV}/bin/python3" ]]; then
+  PYTHON="${BUILD_VENV}/bin/python3"
+  info "Using build venv Python: ${PYTHON} (MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET})"
+else
+  warn "venv-build not found at ${BUILD_VENV}"
+  warn "Run: /opt/homebrew/opt/python@3.9/bin/python3.9 -m venv venv-build"
+  warn "Then: MACOSX_DEPLOYMENT_TARGET=12.0 venv-build/bin/pip install -r requirements.txt pyinstaller dmgbuild"
+  die  "Cannot build without the macOS-12-targeting venv. See warnings above."
+fi
 
 PIP="${PYTHON} -m pip"
 
-# ── Ensure required Python packages are installed ────────────────────────────
-info "Checking Python dependencies…"
+# ── Verify required packages are present in the build venv ───────────────────
+info "Checking Python dependencies in venv-build…"
 
-install_if_missing() {
+check_import() {
   local pkg="$1"
   local import_name="${2:-$1}"
-  if ! "${PYTHON}" -c "import ${import_name}" &>/dev/null; then
-    info "Installing ${pkg}…"
-    ${PIP} install --quiet "${pkg}"
-    ok "${pkg} installed"
+  if "${PYTHON}" -c "import ${import_name}" &>/dev/null; then
+    ok "${pkg} ✓"
   else
-    ok "${pkg} already installed"
+    warn "${pkg} missing — installing into venv-build…"
+    MACOSX_DEPLOYMENT_TARGET=12.0 ${PIP} install --quiet "${pkg}"
+    ok "${pkg} installed"
   fi
 }
 
-install_if_missing "pyinstaller"  "PyInstaller"
-install_if_missing "PyQt6"        "PyQt6"
-install_if_missing "dmgbuild"     "dmgbuild"
+check_import "pyinstaller"  "PyInstaller"
+check_import "PyQt6"        "PyQt6"
+check_import "dmgbuild"     "dmgbuild"
 
 # ── 1. Generate app icon (.icns) if missing ─────────────────────────────────
 # Must run before PyInstaller so the icon is embedded in WrightData.app.

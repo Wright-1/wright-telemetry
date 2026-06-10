@@ -32,6 +32,7 @@ _shared_datas = [
 # ── CLI-only hidden imports (no GUI) ──────────────────────────────────────
 
 _cli_hiddenimports = [
+    "certifi",
     "wright_telemetry",
     "wright_telemetry.collectors",
     "wright_telemetry.collectors.braiins",
