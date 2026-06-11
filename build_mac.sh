@@ -86,6 +86,7 @@ check_import() {
 check_import "pyinstaller"  "PyInstaller"
 check_import "PyQt6"        "PyQt6"
 check_import "dmgbuild"     "dmgbuild"
+check_import "pyfiglet"     "pyfiglet"
 
 # ── 1. Generate app icon (.icns) if missing ─────────────────────────────────
 # Must run before PyInstaller so the icon is embedded in WrightData.app.
