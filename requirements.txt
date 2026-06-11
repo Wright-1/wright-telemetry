@@ -1,9 +1,9 @@
-pyfiglet>=1.0.2
+pyfiglet>=1.0.4
 requests>=2.31.0
 cryptography>=41.0.0
 websockets>=12.0
-openpyxl>=3.1.0
-psutil>=5.9.0
+openpyxl>=3.1.5
+psutil>=7.2.2
 rich>=13.0
-questionary>=2.0
-PyQt6>=6.11.0
+questionary>=2.1.1
+PyQt6>=6.4.0
