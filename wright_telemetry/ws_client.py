@@ -15,7 +15,6 @@ import ssl
 import threading
 from typing import Any, Optional
 
-from wright_telemetry.api_client import wright_api_url
 from wright_telemetry.config import load_config, save_config, mask_config
 
 logger = logging.getLogger(__name__)
@@ -30,9 +29,26 @@ class AgentController:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._mode = "normal"
-        self._mode_changed = threading.Event()
+        # Use a Condition + generation counter instead of a bare Event so that
+        # rapid back-to-back signals are never silently dropped by a race
+        # between .wait() returning and .clear() executing.
+        self._wake = threading.Condition()
+        self._wake_seq: int = 0
         self._config_reload = threading.Event()
         self._event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._gui_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+
+        # ── Shared discovery state (Model layer) ──────────────────────────────
+        # Written by ScanManager after each subnet scan completes.
+        # Read by the scheduler thread via get_discovered_miners().
+        # Stores credential-free dicts: {url, firmware, name, mac_address}.
+        # The GUI continues to receive its own live progress events unchanged.
+        self._discovered_miners: list[dict[str, Any]] = []
+        self._miners_lock = threading.Lock()
+        # True only when a GUI ScanManager is wired up. When False (CLI / TUI
+        # mode) the scheduler runs its own subnet scan instead of reading the
+        # shared store. Set to True by ScanningEngine on startup.
+
 
     @property
     def mode(self) -> str:
@@ -42,21 +58,30 @@ class AgentController:
     def request_fan_detection(self) -> None:
         with self._lock:
             self._mode = "fan_detection"
-        self._mode_changed.set()
+        with self._wake:
+            self._wake_seq += 1
+            self._wake.notify_all()
 
     def request_normal(self) -> None:
         with self._lock:
             self._mode = "normal"
-        self._mode_changed.set()
+        with self._wake:
+            self._wake_seq += 1
+            self._wake.notify_all()
 
     def wait_for_mode_change(self, timeout: Optional[float] = None) -> bool:
-        """Block until the mode changes or *timeout* elapses.
+        """Block until a wake signal is issued or *timeout* elapses.
 
-        Returns ``True`` if the mode changed, ``False`` on timeout.
+        Returns ``True`` if woken by a signal, ``False`` on timeout.
+
+        Uses a generation counter so every call to ``request_fan_detection``,
+        ``request_normal``, or ``request_config_reload`` is counted exactly
+        once — no signal is ever silently dropped by a race between
+        ``.wait()`` returning and a subsequent ``.clear()``.
         """
-        result = self._mode_changed.wait(timeout=timeout)
-        self._mode_changed.clear()
-        return result
+        with self._wake:
+            seq = self._wake_seq
+            return self._wake.wait_for(lambda: self._wake_seq != seq, timeout=timeout)
 
     def push_event(self, event: dict[str, Any]) -> None:
         self._event_queue.put_nowait(event)
@@ -70,8 +95,37 @@ class AgentController:
                 break
         return events
 
+    def push_gui_event(self, event: dict[str, Any]) -> None:
+        """Push an event destined for the GUI (separate from the portal queue)."""
+        self._gui_event_queue.put_nowait(event)
+
+    def pop_gui_events(self) -> list[dict[str, Any]]:
+        """Drain and return all pending GUI events."""
+        events: list[dict[str, Any]] = []
+        while True:
+            try:
+                events.append(self._gui_event_queue.get_nowait())
+            except queue.Empty:
+                return events
+
+    def set_discovered_miners(self, miners: list[dict[str, Any]]) -> None:
+        """Called by ScanManager after each scan to share results with the scheduler."""
+        with self._miners_lock:
+            self._discovered_miners = list(miners)
+
+    def get_discovered_miners(self) -> list[dict[str, Any]]:
+        """Called by the scheduler to read the latest GUI discovery results."""
+        with self._miners_lock:
+            return list(self._discovered_miners)
+
     def request_config_reload(self) -> None:
-        """Signal the scheduler to reload config from disk."""
+        """Flag the scheduler to reload config on its next poll tick.
+
+        Intentionally does *not* wake the scheduler early.  The poll loop
+        runs on a fixed interval and picks up this flag at the top of each
+        tick.  Only fan-detection mode changes (request_fan_detection /
+        request_normal) are allowed to interrupt the sleep.
+        """
         self._config_reload.set()
 
     def check_config_reload(self) -> bool:
@@ -102,8 +156,23 @@ class WebSocketClient:
 
     @staticmethod
     def _build_ws_url(api_url: str) -> str:
-        """Map HTTP API base to ``ws(s)://`` ``/api/v2/ws/agent``."""
-        http_url = wright_api_url(api_url, "ws", "agent")
+        """Convert an HTTP(S) api_url to its WebSocket equivalent.
+
+        Priority:
+        1. ``WRIGHT_WS_URL`` env var — used as-is when set (allows pointing
+           the WebSocket gateway to a different host/port than the REST API).
+        2. *api_url* argument (from ``wright_api_url`` in the config file).
+        3. The ``WS_URL`` settings default.
+        """
+        import os
+        from wright_telemetry.settings import WS_URL
+        ws_env = os.environ.get("WRIGHT_WS_URL", "").strip()
+        if ws_env:
+            base = ws_env.rstrip("/")
+        else:
+            base = (api_url.rstrip("/") if api_url.strip() else WS_URL.rstrip("/"))
+        tail = "/api/v2/ws/agent" if not base.endswith("/api") else "/v2/ws/agent"
+        http_url = base + tail
         if http_url.startswith("https://"):
             return "wss://" + http_url[len("https://"):]
         if http_url.startswith("http://"):
@@ -159,8 +228,9 @@ class WebSocketClient:
             })
             return
 
-        consent = cfg.get("consent", {})
-        if not consent.get("remote_config", False):
+        from wright_telemetry.consent import DEFAULT_CONSENT
+        consent = cfg.get("consent", DEFAULT_CONSENT)
+        if not consent.get("remote_config", True):
             self.controller.push_event({
                 "event": "config_error",
                 "error": (
@@ -274,16 +344,17 @@ class WebSocketClient:
         import websockets
 
         consecutive_failures = 0
-        # TODO: Re-enable TLS verification before shipping production builds.
         connect_kw: dict[str, Any] = {}
         if self._ws_url.startswith("wss://"):
-            _ctx = ssl.create_default_context()
-            _ctx.check_hostname = False
-            _ctx.verify_mode = ssl.CERT_NONE
-            connect_kw["ssl"] = _ctx
+            try:
+                import certifi
+                connect_kw["ssl"] = ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                connect_kw["ssl"] = ssl.create_default_context()
 
         while True:
             try:
+                self.controller.push_gui_event({"event": "ws_status", "status": "connecting"})
                 logger.info("Connecting to portal WebSocket: %s", self._ws_url)
                 async with websockets.connect(self._ws_url, **connect_kw) as ws:
                     await self._send_json(ws, {
@@ -295,11 +366,13 @@ class WebSocketClient:
                     resp = json.loads(response)
                     if resp.get("error"):
                         logger.error("Portal auth failed: %s", resp["error"])
+                        self.controller.push_gui_event({"event": "ws_status", "status": "disconnected"})
                         await asyncio.sleep(30)
                         continue
 
                     logger.info("Connected to portal WebSocket")
                     consecutive_failures = 0
+                    self.controller.push_gui_event({"event": "ws_status", "status": "connected"})
 
                     forwarder = asyncio.create_task(self._event_forwarder(ws))
                     try:
@@ -314,6 +387,7 @@ class WebSocketClient:
                             self.controller.request_normal()
 
             except asyncio.CancelledError:
+                self.controller.push_gui_event({"event": "ws_status", "status": "disconnected"})
                 break
             except Exception as exc:
                 consecutive_failures += 1
@@ -322,6 +396,11 @@ class WebSocketClient:
                     "WebSocket connection failed (attempt #%d): %s. Retrying in %ds...",
                     consecutive_failures, exc, backoff,
                 )
+                self.controller.push_gui_event({
+                    "event": "ws_status",
+                    "status": "reconnecting",
+                    "backoff": backoff,
+                })
                 await asyncio.sleep(backoff)
 
     # ------------------------------------------------------------------
@@ -330,11 +409,24 @@ class WebSocketClient:
 
     def start(self) -> None:
         """Start the WebSocket client in a background daemon thread."""
+        self._loop: asyncio.AbstractEventLoop | None = None
+
         def _run() -> None:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            self._loop = loop
             loop.run_until_complete(self._connect_loop())
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
         logger.info("WebSocket client started (target: %s)", self._ws_url)
+
+    def stop(self) -> None:
+        """Signal the WebSocket event loop to stop.
+
+        Safe to call from any thread (including the Qt main thread).
+        The background daemon thread will exit on the next asyncio iteration.
+        """
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            logger.info("WebSocket client stop requested")

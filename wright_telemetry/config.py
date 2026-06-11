@@ -25,12 +25,11 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-from wright_telemetry.consent import DEFAULT_CONSENT, _WIZARD_STYLE, run_consent_wizard
+from wright_telemetry.consent import DEFAULT_CONSENT, WIZARD_STYLE as _WIZARD_STYLE, run_consent_wizard
 from wright_telemetry.discovery import (
     DiscoveredMiner,
     default_subnet,
     default_subnets,
-    discovered_to_miner_cfgs,
     firmware_types_for_collector,
     load_subnets_file,
     parse_ip_target,
@@ -53,18 +52,30 @@ def _portable_config() -> Optional[Path]:
     return candidate if candidate.is_file() else None
 
 
-if "WRIGHT_CONFIG" in os.environ:
-    CONFIG_DIR = Path(os.environ["WRIGHT_CONFIG"]).parent
-    CONFIG_FILE = Path(os.environ["WRIGHT_CONFIG"])
-elif (portable := _portable_config()) is not None:
-    CONFIG_FILE = portable
-    CONFIG_DIR = portable.parent
-elif _CONFIG_POINTER.exists():
-    CONFIG_FILE = Path(_CONFIG_POINTER.read_text().strip())
-    CONFIG_DIR = CONFIG_FILE.parent
-else:
-    CONFIG_DIR = _DEFAULT_CONFIG_DIR
-    CONFIG_FILE = CONFIG_DIR / "config.json"
+def _resolve_config_paths() -> tuple[Path, Path]:
+    """Resolve the active config file and directory without raising.
+
+    Filesystem I/O (reading the pointer file) is isolated here so that
+    importing this module never crashes due to a missing or unreadable
+    pointer, and the rest of the module only works with in-memory values.
+    """
+    if "WRIGHT_CONFIG" in os.environ:
+        p = Path(os.environ["WRIGHT_CONFIG"])
+        return p.parent, p
+    if (portable := _portable_config()) is not None:
+        return portable.parent, portable
+    try:
+        if _CONFIG_POINTER.exists():
+            text = _CONFIG_POINTER.read_text().strip()
+            if text:
+                p = Path(text)
+                return p.parent, p
+    except OSError:
+        pass  # Treat a broken pointer as if it doesn't exist
+    return _DEFAULT_CONFIG_DIR, _DEFAULT_CONFIG_DIR / "config.json"
+
+
+CONFIG_DIR, CONFIG_FILE = _resolve_config_paths()
 
 
 console = Console()
@@ -150,7 +161,7 @@ def prompt_config_location(force: bool = False) -> None:
 
 SENSITIVE_MASK = "********"
 
-_DEFAULT_WRIGHT_API_URL = "https://api.wrightfan.com/api"
+from wright_telemetry.settings import API_URL as _DEFAULT_WRIGHT_API_URL  # noqa: E402
 _DEFAULT_POLL_INTERVAL = 30
 _DEFAULT_COLLECTOR_TYPES = ["braiins"]
 _DEFAULT_SCAN_INTERVAL = 30   # seconds between runtime re-scans
@@ -171,12 +182,36 @@ _REQUIRED_FIELD_LABELS: dict[str, str] = {
     "consent":               "Data Sharing Preferences",
 }
 
+def ensure_config_file() -> dict[str, Any]:
+    """Shared bootstrap used by both the CLI and GUI.
+
+    Guarantees that ``~/.wright-telemetry/`` and ``config.json`` exist,
+    creating them when this is the first run.  Returns the loaded config
+    dict (empty ``{}`` if newly created, so callers never get ``None``).
+    """
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if not CONFIG_FILE.exists():
+        save_config({})
+        print(f"[WRIGHT] Created config at {CONFIG_FILE}")
+    return load_config() or {}
+
+
 def load_config() -> Optional[dict[str, Any]]:
-    """Load config from disk. Returns None if the file doesn't exist."""
+    """Load config from disk.  Returns None if the file is absent or unreadable."""
     if not CONFIG_FILE.exists():
         return None
-    with open(CONFIG_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError as exc:
+        console.print(
+            f"[red]Config file {CONFIG_FILE} contains invalid JSON: {exc}[/]\n"
+            "The file may be corrupted. Run [cyan bold]wright-telemetry --setup[/] to reconfigure."
+        )
+        return None
+    except OSError as exc:
+        console.print(f"[red]Could not read config file {CONFIG_FILE}: {exc}[/]")
+        return None
 
 
 def save_config(cfg: dict[str, Any]) -> None:
@@ -344,6 +379,11 @@ def _encode_password(pw: str) -> str:
     return base64.b64encode(pw.encode("utf-8")).decode("utf-8")
 
 
+def encode_password(pw: str) -> str:
+    """Base64-encode a plaintext password for storage in config."""
+    return _encode_password(pw)
+
+
 def decode_password(b64: str) -> str:
     return base64.b64decode(b64.encode("utf-8")).decode("utf-8")
 
@@ -363,14 +403,14 @@ def _print_miners_table(found: list) -> None:
 def _wizard_discovery(
     existing_discovery: Optional[dict[str, Any]] = None,
     collector_types: list[str] = _DEFAULT_COLLECTOR_TYPES,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+) -> dict[str, Any]:
     """Unified miner discovery wizard.
 
     Shows an overview, lets the user choose how to supply subnet targets,
     collects credentials, runs a Rich progress-bar scan, shows results, and
     loops until the user accepts or skips.
 
-    Returns ``(miners, discovery_cfg)``.
+    Returns ``discovery_cfg``.
     """
     from rich.progress import (
         BarColumn, Progress, SpinnerColumn,
@@ -437,7 +477,7 @@ def _wizard_discovery(
         if method is None:
             sys.exit(0)
         if method == "skip":
-            return [], disc
+            return disc
 
         # ── Collect targets ───────────────────────────────────────────────────
         subnets = []
@@ -615,7 +655,7 @@ def _wizard_discovery(
         if action == "accept":
             break
         if action == "skip":
-            return [], disc
+            return disc
         # action == "retry" → loop back to Step 1
 
     # ── Build config ──────────────────────────────────────────────────────────
@@ -628,8 +668,7 @@ def _wizard_discovery(
     if default_pw_b64:
         discovery_cfg["default_password_b64"] = default_pw_b64
 
-    miners = discovered_to_miner_cfgs(found, default_user, default_pw_b64)
-    return miners, discovery_cfg
+    return discovery_cfg
 
 
 def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -637,39 +676,57 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
     cfg: dict[str, Any] = dict(existing) if existing else {}
 
     console.print()
+    from wright_telemetry.settings import API_URL
+    from wright_telemetry.portal_client import redeem_access_key_sync
+
     console.print(Panel(
         "[bold]WRIGHT TELEMETRY COLLECTOR — SETUP[/]\n\n"
         "This wizard will walk you through connecting your miners\n"
         "to your Wright Fan dashboard.  You'll need:\n\n"
-        "  [bold]1.[/] Your Wright Fan API key   [dim](from the customer portal)[/]\n"
-        "  [bold]2.[/] Your Facility ID          [dim](from the customer portal)[/]",
+        "  [bold]1.[/] Your access key  [dim](from the Wright One customer portal)[/]\n\n"
+        f"  [dim]API endpoint: [cyan]{API_URL}[/]\n"
+        "  To use a different environment set [cyan]WRIGHT_API_URL[/] before running.[/]",
         style="cyan",
         expand=False,
     ))
     console.print()
-    console.rule("[bold]Wright Fan API Credentials[/]")
+    console.rule("[bold]Activate with Access Key[/]")
     console.print()
 
-    # -- Wright Fan API credentials --
-    cfg["wright_api_key"] = _ask(
-        "Wright Fan API Key",
-        default=cfg.get("wright_api_key", ""),
-        validate=_require_nonempty,
-    )
-    console.print()
-    console.print("  Wright Fan API URL: use the API base from the portal")
-    console.print("  e.g. [cyan]https://api.wrightfan.com/api[/] or [cyan]https://api.dev.wrightfan.com/api[/]")
-    console.print("  [dim]Telemetry/WebSocket use /v2/... by default (data pipeline).[/]")
-    cfg["wright_api_url"] = _ask(
-        "Wright Fan API URL",
-        default=cfg.get("wright_api_url", _DEFAULT_WRIGHT_API_URL),
-        validate=_require_nonempty,
-    )
-    cfg["facility_id"] = _ask(
-        "Facility ID",
-        default=cfg.get("facility_id", ""),
-        validate=_require_nonempty,
-    )
+    # -- Redeem access key → api_key + facility_id --------------------------------
+    # Loop until the user supplies a valid key or cancels (Ctrl-C / empty).
+    while True:
+        # If the config already has credentials, offer to skip re-provisioning.
+        if cfg.get("wright_api_key") and cfg.get("facility_id"):
+            console.print("  [dim]Credentials already present in config.[/]")
+            if _confirm("Re-provision with a new access key?", default=False):
+                cfg.pop("wright_api_key", None)
+                cfg.pop("facility_id", None)
+            else:
+                break
+
+        access_key = _ask(
+            "Access Key",
+            default="",
+            validate=_require_nonempty,
+        )
+        console.print("  [dim]Contacting Wright One…[/]")
+        result = redeem_access_key_sync(access_key=access_key)
+
+        if result["success"]:
+            cfg["wright_api_key"] = result["apiKey"]
+            cfg["facility_id"]    = result["facilityId"]
+            cfg["email"]          = result.get("email", "")
+            cfg["wright_api_url"] = API_URL
+            console.print()
+            console.print(f"  [green]✓[/] Activated — Facility ID: [cyan]{result['facilityId']}[/]")
+            console.print()
+            break
+        else:
+            raw_err = result.get("error", "Unknown error")
+            console.print(f"\n  [red]✗[/] {raw_err}\n")
+            if not _confirm("Try a different access key?", default=True):
+                sys.exit(0)
     cfg["poll_interval_seconds"] = cfg.get("poll_interval_seconds", _DEFAULT_POLL_INTERVAL)
     # Backwards-compat: old configs stored a single string in collector_type
     existing_types: list[str] = (
@@ -720,15 +777,11 @@ def run_setup_wizard(existing: Optional[dict[str, Any]] = None) -> dict[str, Any
 
 def run_setup_wizard_miners(cfg: dict[str, Any]) -> dict[str, Any]:
     """Phase 2 of setup: miner discovery and final save."""
-    discovered_miners, discovery_cfg = _wizard_discovery(
+    discovery_cfg = _wizard_discovery(
         cfg.get("discovery"),
         collector_types=cfg.get("collector_types", _DEFAULT_COLLECTOR_TYPES),
     )
     cfg["discovery"] = discovery_cfg
-    # Discovered miners are NOT written to the config file.
-    # The scheduler will POST them to the API via metric_type='mark_miner'
-    # on startup, and re-discover them on every scan cycle using the
-    # subnets stored in cfg["discovery"].
 
     save_config(cfg)
     console.print(f"\n  [green]\u2713[/] Configuration saved to [cyan]{CONFIG_FILE}[/]")
