@@ -2,7 +2,7 @@
 dmgbuild settings for WrightData.
 
 Used by build_mac.sh:
-    dmgbuild -s installer/dmg_settings.py "WrightData" dist/WrightData-Installer-1.0.0.dmg
+    dmgbuild -s installer/dmg_settings.py "WrightData" dist/WrightData-Installer.dmg
 
 Pass overrides via -D:
     dmgbuild -s installer/dmg_settings.py -D version=1.0.0 "WrightData" out.dmg

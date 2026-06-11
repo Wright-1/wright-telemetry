@@ -84,7 +84,7 @@ jobs:
         run: |
           cd dist
           shasum -a 256 wright-telemetry-macos.zip > wright-telemetry-macos.zip.sha256
-          shasum -a 256 "WrightData-Installer-${{ steps.version.outputs.ver }}.dmg" > "WrightData-Installer-${{ steps.version.outputs.ver }}.dmg.sha256"
+          shasum -a 256 "WrightData-Installer.dmg" > "WrightData-Installer.dmg.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -93,8 +93,8 @@ jobs:
           path: |
             dist/wright-telemetry-macos.zip
             dist/wright-telemetry-macos.zip.sha256
-            dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg
-            dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg.sha256
+            dist/WrightData-Installer.dmg
+            dist/WrightData-Installer.dmg.sha256
           if-no-files-found: error
 
       - name: Upload release asset
@@ -105,7 +105,7 @@ jobs:
           files: |
             dist/wright-telemetry-macos.zip
             dist/wright-telemetry-macos.zip.sha256
-            dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg
-            dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg.sha256
+            dist/WrightData-Installer.dmg
+            dist/WrightData-Installer.dmg.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
