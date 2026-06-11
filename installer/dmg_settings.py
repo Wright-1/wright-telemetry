@@ -2,7 +2,7 @@
 dmgbuild settings for WrightData.
 
 Used by build_mac.sh:
-    dmgbuild -s installer/dmg_settings.py "WrightData" dist/WrightData-Installer-0.7.3.dmg
+    dmgbuild -s installer/dmg_settings.py "WrightData" dist/WrightData-Installer-1.0.0.dmg
 
 Pass overrides via -D:
     dmgbuild -s installer/dmg_settings.py -D version=1.0.0 "WrightData" out.dmg
@@ -16,7 +16,7 @@ from pathlib import Path
 REPO = Path(os.getcwd())
 DIST = REPO / "dist"
 
-version = defines.get("version", "0.7.3")  # noqa: F821  (injected by dmgbuild)
+version = defines.get("version", "1.0.0")  # noqa: F821  (injected by dmgbuild)
 
 # ── Volume name (shown in Finder title bar and Spotlight) ────────────────────
 volume_name = f"WrightData {version}"

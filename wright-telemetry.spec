@@ -19,6 +19,9 @@ import importlib
 from pathlib import Path
 import pyfiglet
 
+sys.path.insert(0, str(Path(SPECPATH).resolve()))
+from wright_telemetry import __version__ as _VERSION
+
 # block_cipher was removed in PyInstaller 6 — do not use cipher= in PYZ/EXE.
 
 # ── shared data files ─────────────────────────────────────────────────────
@@ -179,13 +182,13 @@ app = BUNDLE(
     name="WrightData.app",
     icon=_icon_arg,
     bundle_identifier="com.wrightone.wrightdata",
-    version="0.7.3",
+    version=_VERSION,
     info_plist={
         # Human-readable name shown in Finder / Dock / menu bar
         "CFBundleName":            "WrightData",
         "CFBundleDisplayName":     "WrightData",
-        "CFBundleVersion":         "0.7.3",
-        "CFBundleShortVersionString": "0.7.3",
+        "CFBundleVersion":         _VERSION,
+        "CFBundleShortVersionString": _VERSION,
         "CFBundleIdentifier":      "com.wrightone.wrightdata",
         "CFBundleExecutable":      "wright-telemetry-gui",
 

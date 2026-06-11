@@ -25,6 +25,7 @@ from wright_telemetry.gui.pages.discovery import DiscoveryPage
 from wright_telemetry.gui.pages.overview import OverviewPage
 from wright_telemetry.gui.pages.portal import PortalPage
 from wright_telemetry.gui.security_panel import SecurityPanel
+from wright_telemetry import __version__
 from wright_telemetry.gui.sidebar import Sidebar
 
 if TYPE_CHECKING:
@@ -48,7 +49,7 @@ class MainWindow(QWidget):
 
     def __init__(
         self,
-        version: str = "0.7.3",
+        version: str = __version__,
         engine: "ScanningEngine | None" = None,
         needs_provisioning: bool = False,
     ):
