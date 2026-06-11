@@ -50,7 +50,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller pytest responses
+          pip install pyinstaller pytest responses dmgbuild
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
@@ -66,8 +66,25 @@ jobs:
       - name: Create zip
         run: cd dist && zip wright-telemetry-macos.zip wright-telemetry
 
-      - name: Generate SHA256 checksum
-        run: cd dist && shasum -a 256 wright-telemetry-macos.zip > wright-telemetry-macos.zip.sha256
+      - name: Get version
+        id: version
+        run: |
+          VER=$(python -c "from wright_telemetry import __version__; print(__version__)")
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Build DMG
+        run: |
+          python -m dmgbuild \
+            -s installer/dmg_settings.py \
+            -D "version=${{ steps.version.outputs.ver }}" \
+            "WrightData ${{ steps.version.outputs.ver }}" \
+            "dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg"
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist
+          shasum -a 256 wright-telemetry-macos.zip > wright-telemetry-macos.zip.sha256
+          shasum -a 256 "WrightData-Installer-${{ steps.version.outputs.ver }}.dmg" > "WrightData-Installer-${{ steps.version.outputs.ver }}.dmg.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -76,14 +93,19 @@ jobs:
           path: |
             dist/wright-telemetry-macos.zip
             dist/wright-telemetry-macos.zip.sha256
+            dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg
+            dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg.sha256
           if-no-files-found: error
 
       - name: Upload release asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          overwrite_files: true
           files: |
             dist/wright-telemetry-macos.zip
             dist/wright-telemetry-macos.zip.sha256
+            dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg
+            dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
