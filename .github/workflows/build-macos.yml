@@ -78,7 +78,7 @@ jobs:
             -s installer/dmg_settings.py \
             -D "version=${{ steps.version.outputs.ver }}" \
             "WrightData ${{ steps.version.outputs.ver }}" \
-            "dist/WrightData-Installer-${{ steps.version.outputs.ver }}.dmg"
+            "dist/WrightData-Installer.dmg"
 
       - name: Generate SHA256 checksums
         run: |
