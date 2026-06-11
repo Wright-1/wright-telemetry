@@ -34,7 +34,7 @@ def _redeem(access_key: str) -> dict[str, Any]:
         print(f"[WRIGHT] POST {url} → {r.status_code}")
         if r.status_code == 200 and payload.get("success"):
             data = payload.get("data", {})
-            print(f"[WRIGHT] Provisioned — facilityId: {data['facilityId']}  apiKey: {data['apiKey']}")
+            print(f"[WRIGHT] Provisioned — facilityId: {data['facilityId']}")
             return {"success": True, "apiKey": data["apiKey"], "facilityId": data["facilityId"], "email": data.get("email", "")}
         err = payload.get("error") or payload.get("message") or f"HTTP {r.status_code}"
         logger.warning("access-key redeem failed: %s", err)
