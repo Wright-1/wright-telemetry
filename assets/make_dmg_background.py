@@ -21,6 +21,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from wright_telemetry import __version__
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import (
     QColor, QFont, QImage, QLinearGradient,
@@ -87,7 +90,7 @@ def render(scale: int) -> QImage:
     p.setPen(QPen(TEXT_LIGHT))
     p.drawText(QRectF(0, 40, LW, 20),
                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-               "Miner telemetry collector  ·  v0.7.3")
+               f"Miner telemetry collector  ·  v{__version__}")
 
     p.setPen(QPen(DIVIDER, 1))
     p.drawLine(QPointF(0, HEADER_H), QPointF(LW, HEADER_H))

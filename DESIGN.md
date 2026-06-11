@@ -68,7 +68,7 @@ Fallback stack: `Roboto, -apple-system, Segoe UI, sans-serif`
 | Nav header | 14 | 700 | "Setup" |
 | Nav subheader | 11 | 400 | "Configuration Wizard" |
 | Button label | 13 | 600 | "Next: Discover Miners" |
-| Version label | 11 | 400 | "v0.7.3 / LOCAL INSTANCE" |
+| Version label | 11 | 400 | "v1.0.0 / LOCAL INSTANCE" |
 | Body small | 12 | 400 | Helper text, links |
 
 ---

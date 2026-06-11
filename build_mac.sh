@@ -19,11 +19,9 @@ set -euo pipefail
 APP_NAME="WrightData"
 APP_BUNDLE="WrightData.app"
 DMG_BASENAME="WrightData-Installer"
-VERSION="0.7.3"
 SPEC_FILE="wright-telemetry.spec"
 DIST_DIR="dist"
 BUILD_DIR="build"
-OUTPUT_DMG="${DIST_DIR}/${DMG_BASENAME}-${VERSION}.dmg"
 
 # ── macOS deployment target ───────────────────────────────────────────────────
 # Build with Python 3.9 (compiled for macOS 12) so the app runs on Monterey+.
@@ -49,7 +47,7 @@ die()  { printf '  \033[31m✘\033[0m  %s\n' "$*" >&2; exit 1; }
 hr()   { printf '\033[90m'; printf '%0.s─' {1..70}; printf '\033[0m\n'; }
 
 hr
-printf '  \033[1mWRIGHT TELEMETRY\033[0m — macOS Build Script  \033[90m(v%s)\033[0m\n' "${VERSION}"
+printf '  \033[1mWRIGHT TELEMETRY\033[0m — macOS Build Script\n'
 hr
 
 # ── Guard: macOS only ─────────────────────────────────────────────────────────
@@ -67,6 +65,12 @@ else
 fi
 
 PIP="${PYTHON} -m pip"
+
+# ── Derive version from the package ──────────────────────────────────────────
+VERSION=$(PYTHONPATH="$(dirname "$0")" "${PYTHON}" -c \
+  "from wright_telemetry import __version__; print(__version__)")
+OUTPUT_DMG="${DIST_DIR}/${DMG_BASENAME}-${VERSION}.dmg"
+info "Version: ${VERSION}"
 
 # ── Verify required packages are present in the build venv ───────────────────
 info "Checking Python dependencies in venv-build…"

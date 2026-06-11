@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from wright_telemetry import __version__
 from wright_telemetry.gui.fonts import make_font
 from wright_telemetry.gui import theme as T
 from wright_telemetry.gui.widgets import NavItem
@@ -30,7 +31,7 @@ class Sidebar(QWidget):
         ("logs",        "≡", "Logs"),
     ]
 
-    def __init__(self, version: str = "0.7.3", parent: QWidget | None = None):
+    def __init__(self, version: str = __version__, parent: QWidget | None = None):
         super().__init__(parent)
         self.setFixedWidth(T.SIDEBAR_W)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
