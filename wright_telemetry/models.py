@@ -17,6 +17,7 @@ class MinerIdentity:
     wright_fans: Optional[bool] = None
     ip_address: str = ""
     firmware: Optional[str] = None
+    nominal_hashrate_ghs: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -158,8 +159,10 @@ class HashrateData:
         summary_raw: dict[str, Any],
         pools_raw: dict[str, Any],
         power_raw: dict[str, Any],
+        devs_raw: dict[str, Any] | None = None,
     ) -> HashrateData:
         summary = (summary_raw.get("SUMMARY") or [{}])[0]
+        devs = (devs_raw or {}).get("DEVS") or []
         miner_stats = {
             "ghs_5s": summary.get("GHS 5s", 0),
             "ghs_30m": summary.get("GHS 30m", 0),
@@ -168,6 +171,7 @@ class HashrateData:
             "hardware_errors": summary.get("Hardware Errors", 0),
             "utility": summary.get("Utility", 0),
             "work_utility": summary.get("Work Utility", 0),
+            "nominal_ghs": sum(d.get("Nominal MHS", 0) for d in devs) / 1000,
         }
         pools = pools_raw.get("POOLS", [])
         pool_stats = {
@@ -200,6 +204,7 @@ class HashrateData:
             "ghs_5s": miner.get("instant_hashrate", 0),
             "ghs_av": miner.get("average_hashrate", 0),
             "hardware_errors": miner.get("hardware_errors", 0),
+            "hr_nominal": miner.get("hr_nominal", 0),
         }
         pools = raw.get("pools", [])
         pool_stats = {
@@ -261,6 +266,18 @@ class HashrateData:
             "efficiency": stats.get("jt", 0),
         }
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
+
+    def get_nominal_ghs(self) -> float:
+        ms = self.miner_stats
+        if "rate_ideal" in ms:
+            return float(ms["rate_ideal"])
+        if "nominal_hashrate" in ms:
+            return float((ms["nominal_hashrate"] or {}).get("gigahash_per_second", 0))
+        if "nominal_ghs" in ms:
+            return float(ms["nominal_ghs"])
+        if "hr_nominal" in ms:
+            return float(ms["hr_nominal"])
+        return 0.0
 
 
 @dataclass

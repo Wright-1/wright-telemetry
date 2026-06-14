@@ -25,9 +25,14 @@ from wright_telemetry.models import (
     UptimeData,
 )
 
+BITMAIN_DIR = Path(__file__).parent / "fixtures" / "bitmain"
 BRAIINS_DIR = Path(__file__).parent / "fixtures" / "braiins"
 LUXOS_DIR = Path(__file__).parent / "fixtures" / "luxos"
 VNISH_DIR = Path(__file__).parent / "fixtures" / "vnish"
+
+
+def _bm(name: str) -> dict[str, Any]:
+    return json.loads((BITMAIN_DIR / name).read_text())
 
 
 def _b(name: str) -> dict[str, Any]:
@@ -612,6 +617,52 @@ class TestMinerIdentity:
             wright_fans=True,
         )
         assert mi.to_dict()["wright_fans"] is True
+
+    def test_nominal_hashrate_ghs_defaults_to_zero(self):
+        mi = MinerIdentity(uid="x", serial_number="s", hostname="h", mac_address="m")
+        assert mi.nominal_hashrate_ghs == 0.0
+        assert mi.to_dict()["nominal_hashrate_ghs"] == 0.0
+
+    def test_nominal_hashrate_ghs_in_to_dict(self):
+        mi = MinerIdentity(
+            uid="x", serial_number="s", hostname="h", mac_address="m",
+            nominal_hashrate_ghs=147000.0,
+        )
+        assert mi.to_dict()["nominal_hashrate_ghs"] == 147000.0
+
+
+# ---------------------------------------------------------------
+# HashrateData.get_nominal_ghs
+# ---------------------------------------------------------------
+
+class TestHashrateDataGetNominalGhs:
+
+    def test_bitmain_uses_rate_ideal(self):
+        hr = HashrateData.from_bitmain(_bm("stats.json"), _bm("pools.json"))
+        assert hr.get_nominal_ghs() == pytest.approx(232866.0)
+
+    def test_braiins_uses_nominal_hashrate(self):
+        hr = HashrateData.from_braiins(_b("miner_stats.json"))
+        assert hr.get_nominal_ghs() == pytest.approx(147000.0)
+
+    def test_luxos_sums_board_nominal_mhs(self):
+        hr = HashrateData.from_luxos(
+            _l("summary.json"), _l("pools.json"), _l("power.json"), _l("devs.json")
+        )
+        # 3 boards × 48500000 MHS each = 145500000 MHS = 145500.0 GHS
+        assert hr.get_nominal_ghs() == pytest.approx(145500.0)
+
+    def test_luxos_no_devs_returns_zero(self):
+        hr = HashrateData.from_luxos(_l("summary.json"), _l("pools.json"), _l("power.json"))
+        assert hr.get_nominal_ghs() == pytest.approx(0.0)
+
+    def test_vnish_uses_hr_nominal(self):
+        hr = HashrateData.from_vnish(_v("summary.json"))
+        assert hr.get_nominal_ghs() == pytest.approx(147000.0)
+
+    def test_empty_returns_zero(self):
+        hr = HashrateData(miner_stats={}, pool_stats={}, power_stats={})
+        assert hr.get_nominal_ghs() == 0.0
 
 
 # ---------------------------------------------------------------

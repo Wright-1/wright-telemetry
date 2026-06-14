@@ -121,7 +121,8 @@ class LuxOSCollector(MinerCollector):
         summary_raw = self._send_command("summary")
         pools_raw = self._send_command("pools")
         power_raw = self._send_command("power")
-        return HashrateData.from_luxos(summary_raw, pools_raw, power_raw)
+        devs_raw = self._send_command("devs")
+        return HashrateData.from_luxos(summary_raw, pools_raw, power_raw, devs_raw)
 
     def fetch_uptime(self) -> UptimeData:
         summary_raw = self._send_command("summary")
