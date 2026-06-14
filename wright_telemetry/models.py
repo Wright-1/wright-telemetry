@@ -17,7 +17,7 @@ class MinerIdentity:
     wright_fans: Optional[bool] = None
     ip_address: str = ""
     firmware: Optional[str] = None
-    nominal_hashrate_ghs: float = 0.0
+    nominal_hashrate_ghs: Optional[float] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -267,17 +267,18 @@ class HashrateData:
         }
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
-    def get_nominal_ghs(self) -> float:
+    def get_nominal_ghs(self) -> Optional[float]:
         ms = self.miner_stats
         if "rate_ideal" in ms:
             return float(ms["rate_ideal"])
         if "nominal_hashrate" in ms:
             return float((ms["nominal_hashrate"] or {}).get("gigahash_per_second", 0))
         if "nominal_ghs" in ms:
-            return float(ms["nominal_ghs"])
+            v = ms["nominal_ghs"]
+            return float(v) if v else None
         if "hr_nominal" in ms:
             return float(ms["hr_nominal"])
-        return 0.0
+        return None
 
 
 @dataclass

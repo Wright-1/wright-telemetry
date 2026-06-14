@@ -618,10 +618,10 @@ class TestMinerIdentity:
         )
         assert mi.to_dict()["wright_fans"] is True
 
-    def test_nominal_hashrate_ghs_defaults_to_zero(self):
+    def test_nominal_hashrate_ghs_defaults_to_none(self):
         mi = MinerIdentity(uid="x", serial_number="s", hostname="h", mac_address="m")
-        assert mi.nominal_hashrate_ghs == 0.0
-        assert mi.to_dict()["nominal_hashrate_ghs"] == 0.0
+        assert mi.nominal_hashrate_ghs is None
+        assert mi.to_dict()["nominal_hashrate_ghs"] is None
 
     def test_nominal_hashrate_ghs_in_to_dict(self):
         mi = MinerIdentity(
@@ -652,17 +652,17 @@ class TestHashrateDataGetNominalGhs:
         # 3 boards × 48500000 MHS each = 145500000 MHS = 145500.0 GHS
         assert hr.get_nominal_ghs() == pytest.approx(145500.0)
 
-    def test_luxos_no_devs_returns_zero(self):
+    def test_luxos_no_devs_returns_none(self):
         hr = HashrateData.from_luxos(_l("summary.json"), _l("pools.json"), _l("power.json"))
-        assert hr.get_nominal_ghs() == pytest.approx(0.0)
+        assert hr.get_nominal_ghs() is None
 
     def test_vnish_uses_hr_nominal(self):
         hr = HashrateData.from_vnish(_v("summary.json"))
         assert hr.get_nominal_ghs() == pytest.approx(147000.0)
 
-    def test_empty_returns_zero(self):
+    def test_empty_returns_none(self):
         hr = HashrateData(miner_stats={}, pool_stats={}, power_stats={})
-        assert hr.get_nominal_ghs() == 0.0
+        assert hr.get_nominal_ghs() is None
 
 
 # ---------------------------------------------------------------
