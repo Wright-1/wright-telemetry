@@ -355,6 +355,7 @@ class HashboardReading:
     id: str
     enabled: bool
     stats: dict[str, Any]
+    freq_mhz: Optional[float] = None
 
 
 @dataclass
@@ -374,6 +375,7 @@ class HashboardData:
                 id=b.get("id", ""),
                 enabled=b.get("enabled", False),
                 stats=b.get("stats", {}),
+                freq_mhz=None,
             )
             for b in raw.get("hashboards", [])
         ]
@@ -423,6 +425,7 @@ class HashboardData:
                     "nominal_mhs": dev.get("Nominal MHS", 0),
                     "profile": dev.get("Profile", ""),
                 },
+                freq_mhz=None,
             ))
         return cls(hashboards=boards)
 
@@ -452,6 +455,7 @@ class HashboardData:
                     "hardware_errors": chain.get("hw_errors", 0),
                     "serial_number": chain.get("serial", ""),
                 },
+                freq_mhz=chain.get("freq"),
             ))
         return cls(hashboards=boards)
 
@@ -477,6 +481,7 @@ class HashboardData:
             highest_chip: Optional[dict[str, Any]] = (
                 {"value": max(chip_temps), "unit": "C"} if chip_temps else None
             )
+            freq_avg = chain.get("freq_avg", 0)
             boards.append(HashboardReading(
                 board_name=f"Chain {board_id}",
                 board_temp=board_temp,
@@ -489,9 +494,10 @@ class HashboardData:
                 stats={
                     "ghs_real": chain.get("rate_real", 0),
                     "ghs_ideal": chain.get("rate_ideal", 0),
-                    "freq_avg": chain.get("freq_avg", 0),
+                    "freq_avg": freq_avg,
                     "serial_number": chain.get("sn", ""),
                 },
+                freq_mhz=float(freq_avg) if freq_avg else None,
             ))
         return cls(hashboards=boards)
 

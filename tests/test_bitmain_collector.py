@@ -236,6 +236,13 @@ class TestFetchHashboards:
         assert board.stats["serial_number"] == "JYZZYT0BEJCAH002M"
         assert board.stats["ghs_real"] == pytest.approx(77100.0)
         assert board.stats["freq_avg"] == 708
+        assert board.freq_mhz == pytest.approx(708.0)
+
+    def test_freq_mhz_all_boards(self, mock_bitmain_api, bitmain_collector):
+        hb = bitmain_collector.fetch_hashboards()
+        assert hb.hashboards[0].freq_mhz == pytest.approx(708.0)
+        assert hb.hashboards[1].freq_mhz == pytest.approx(710.0)
+        assert hb.hashboards[2].freq_mhz == pytest.approx(710.0)
 
     def test_board_temps(self, mock_bitmain_api, bitmain_collector):
         hb = bitmain_collector.fetch_hashboards()
