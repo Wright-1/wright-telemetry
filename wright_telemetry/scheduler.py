@@ -221,6 +221,8 @@ def _poll_cycle(
                 data_obj = fetcher()
                 if metric == "cooling":
                     cooling_data_obj = data_obj
+                if metric == "hashrate" and identity is not None:
+                    identity.nominal_hashrate_ghs = data_obj.get_nominal_ghs()
                 payload = TelemetryPayload(
                     metric_type=metric,
                     facility_id=facility_id,
