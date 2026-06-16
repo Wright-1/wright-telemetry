@@ -33,7 +33,6 @@ from wright_telemetry.discovery import (
 from wright_telemetry.models import (
     CoolingData,
     MinerIdentity,
-    MinerScanEntry,
     SubnetScanSummary,
     ScanSummaryData,
     TelemetryPayload,
@@ -225,9 +224,14 @@ def _build_scan_summary(
         except ValueError:
             logger.warning("Invalid subnet CIDR in discovery config: %s", cidr)
 
-    subnet_miners: dict[str, list[MinerScanEntry]] = {cidr: [] for cidr, _ in networks}
+    subnet_miners: dict[str, list[str]] = {cidr: [] for cidr, _ in networks}
 
     for miner_cfg, _ in collectors:
+        mac = miner_cfg.get("mac_address", "")
+        uid = f"{facility_id}:{mac.lower()}" if mac else miner_cfg.get("uid", "")
+        if not uid:
+            continue
+
         ip = miner_cfg.get("ip_address") or (
             miner_cfg["url"]
             .removeprefix("http://")
@@ -235,23 +239,16 @@ def _build_scan_summary(
             .split("/")[0]
             .split(":")[0]
         )
-        entry = MinerScanEntry(
-            ip=ip,
-            firmware=miner_cfg.get("firmware", ""),
-            hostname=miner_cfg.get("hostname", ""),
-            mac_address=miner_cfg.get("mac_address", ""),
-        )
         try:
             addr = ipaddress.ip_address(ip)
             matched = False
             for cidr, net in networks:
                 if addr in net:
-                    subnet_miners[cidr].append(entry)
+                    subnet_miners[cidr].append(uid)
                     matched = True
                     break
             if not matched and networks:
-                # Shouldn't happen (miners come from subnet scans), but be safe.
-                subnet_miners[networks[0][0]].append(entry)
+                subnet_miners[networks[0][0]].append(uid)
         except ValueError:
             pass
 

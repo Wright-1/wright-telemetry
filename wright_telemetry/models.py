@@ -585,17 +585,9 @@ class ErrorData:
 
 
 @dataclass
-class MinerScanEntry:
-    ip: str
-    firmware: str
-    hostname: str
-    mac_address: str
-
-
-@dataclass
 class SubnetScanSummary:
     cidr: str
-    miners: list[MinerScanEntry]
+    miners: list[str]  # canonical miner UIDs: "<facility_id>:<normalized_mac>"
 
 
 @dataclass
