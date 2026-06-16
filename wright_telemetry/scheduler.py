@@ -972,6 +972,26 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         known_urls.discard(old_url)
                         known_urls.add(new_cfg["url"])
 
+                    # Remove miners that are no longer in the refreshed list
+                    refreshed_urls = {m["url"] for m in refreshed}
+                    refreshed_macs = {m["mac_address"] for m in refreshed if m.get("mac_address")}
+                    to_remove = [
+                        i for i, (miner_cfg, _) in enumerate(collectors)
+                        if miner_cfg["url"] not in refreshed_urls
+                        and (not miner_cfg.get("mac_address") or miner_cfg["mac_address"] not in refreshed_macs)
+                    ]
+                    for i in reversed(to_remove):
+                        miner_cfg, c = collectors[i]
+                        logger.info("Miner removed from discovery: %s", miner_cfg["url"])
+                        try:
+                            c.close()
+                        except Exception:
+                            pass
+                        identities.pop(miner_cfg["url"], None)
+                        known_urls.discard(miner_cfg["url"])
+                        known_macs.discard(miner_cfg.get("mac_address", ""))
+                        collectors.pop(i)
+
                     # Genuinely new miners (new URL and new or absent MAC)
                     new_urls = {m["url"] for m in refreshed} - known_urls
                     new_miner_cfgs = [
