@@ -287,6 +287,10 @@ class TestHashboardDataFromBraiins:
         assert b.enabled is False
         assert b.stats == {}
 
+    def test_freq_mhz_is_none(self):
+        hbd = HashboardData.from_braiins(_b("hashboards.json"))
+        assert all(b.freq_mhz is None for b in hbd.hashboards)
+
 
 class TestHashboardDataFromLuxos:
 
@@ -311,6 +315,10 @@ class TestHashboardDataFromLuxos:
         hbd = HashboardData.from_luxos({"DEVS": []}, {"TEMPS": []})
         assert hbd.hashboards == []
 
+    def test_freq_mhz_is_none(self):
+        hbd = HashboardData.from_luxos(_l("devs.json"), _l("temps.json"))
+        assert all(b.freq_mhz is None for b in hbd.hashboards)
+
 
 class TestHashboardDataFromVnish:
 
@@ -334,6 +342,14 @@ class TestHashboardDataFromVnish:
     def test_empty_chains(self):
         hbd = HashboardData.from_vnish({"chains": []})
         assert hbd.hashboards == []
+
+    def test_freq_mhz_none_when_absent(self):
+        hbd = HashboardData.from_vnish(_v("status.json"))
+        assert all(b.freq_mhz is None for b in hbd.hashboards)
+
+    def test_freq_mhz_populated_when_present(self):
+        hbd = HashboardData.from_vnish(_v("status_with_freq.json"))
+        assert all(b.freq_mhz == 700.0 for b in hbd.hashboards)
 
 
 # ---------------------------------------------------------------
