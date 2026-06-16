@@ -22,7 +22,7 @@ from typing import Any
 import requests
 
 from wright_telemetry.encryption import encrypt_payload
-from wright_telemetry.models import TelemetryPayload
+from wright_telemetry.models import ScanSummaryData, TelemetryPayload
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +162,23 @@ class WrightAPIClient(ApiClient):
                 payload.miner_identity.hostname or payload.miner_identity.uid,
                 exc,
             )
+            return False
+
+    def send_scan_summary(self, data: ScanSummaryData) -> bool:
+        """Encrypt and POST a scan snapshot to the pipeline."""
+        from dataclasses import asdict
+        url = self.endpoint("scan-summary")
+        try:
+            wire = encrypt_payload(asdict(data), self.api_key)
+            resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)
+            resp.raise_for_status()
+            logger.info(
+                "Sent scan summary for facility %s: %d subnet(s), %d miner(s) (HTTP %d)",
+                data.facility_id, len(data.subnets), data.total_miners, resp.status_code,
+            )
+            return True
+        except requests.RequestException as exc:
+            logger.warning("Failed to send scan summary: %s", exc)
             return False
 
     def send_agent_config(self, config: dict[str, Any], agent_version: str) -> bool:
