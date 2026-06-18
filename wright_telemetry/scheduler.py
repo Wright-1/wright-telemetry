@@ -30,7 +30,13 @@ from wright_telemetry.discovery import (
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
 )
-from wright_telemetry.models import CoolingData, MinerIdentity, TelemetryPayload
+from wright_telemetry.models import (
+    CoolingData,
+    MinerIdentity,
+    SubnetScanSummary,
+    ScanSummaryData,
+    TelemetryPayload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +202,67 @@ def _print_baseline_dashboard(name: str, baseline: Any) -> None:
         f"  Baseline End Time:    {baseline.baseline_end_time}\n"
         f"  Avg RPM:              {baseline.baseline_rpm:.2f} ± {baseline.baseline_rpm_stddev:.2f}"
         f"{temp_line}"
+    )
+
+
+def _build_scan_summary(
+    collectors: list[tuple[dict[str, Any], Any]],
+    facility_id: str,
+    subnets: list[str],
+) -> ScanSummaryData:
+    """Build a facility-level topology snapshot from the current collector list.
+
+    Miners are grouped into their matching configured CIDR. Subnets with no
+    miners are omitted from the result.
+    """
+    import ipaddress
+
+    networks = []
+    for cidr in subnets:
+        try:
+            networks.append((cidr, ipaddress.ip_network(cidr, strict=False)))
+        except ValueError:
+            logger.warning("Invalid subnet CIDR in discovery config: %s", cidr)
+
+    subnet_miners: dict[str, list[str]] = {cidr: [] for cidr, _ in networks}
+
+    for miner_cfg, _ in collectors:
+        mac = miner_cfg.get("mac_address", "")
+        uid = f"{facility_id}:{mac.lower()}" if mac else miner_cfg.get("uid", "")
+        if not uid:
+            continue
+
+        ip = miner_cfg.get("ip_address") or (
+            miner_cfg["url"]
+            .removeprefix("http://")
+            .removeprefix("https://")
+            .split("/")[0]
+            .split(":")[0]
+        )
+        try:
+            addr = ipaddress.ip_address(ip)
+            matched = False
+            for cidr, net in networks:
+                if addr in net:
+                    subnet_miners[cidr].append(uid)
+                    matched = True
+                    break
+            if not matched and networks:
+                subnet_miners[networks[0][0]].append(uid)
+        except ValueError:
+            pass
+
+    result_subnets = [
+        SubnetScanSummary(cidr=cidr, miners=miners)
+        for cidr, miners in subnet_miners.items()
+        if miners
+    ]
+
+    return ScanSummaryData(
+        facility_id=facility_id,
+        timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        subnets=result_subnets,
+        total_miners=sum(len(s.miners) for s in result_subnets),
     )
 
 
@@ -905,6 +972,26 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         known_urls.discard(old_url)
                         known_urls.add(new_cfg["url"])
 
+                    # Remove miners that are no longer in the refreshed list
+                    refreshed_urls = {m["url"] for m in refreshed}
+                    refreshed_macs = {m["mac_address"] for m in refreshed if m.get("mac_address")}
+                    to_remove = [
+                        i for i, (miner_cfg, _) in enumerate(collectors)
+                        if miner_cfg["url"] not in refreshed_urls
+                        and (not miner_cfg.get("mac_address") or miner_cfg["mac_address"] not in refreshed_macs)
+                    ]
+                    for i in reversed(to_remove):
+                        miner_cfg, c = collectors[i]
+                        logger.info("Miner removed from discovery: %s", miner_cfg["url"])
+                        try:
+                            c.close()
+                        except Exception:
+                            pass
+                        identities.pop(miner_cfg["url"], None)
+                        known_urls.discard(miner_cfg["url"])
+                        known_macs.discard(miner_cfg.get("mac_address", ""))
+                        collectors.pop(i)
+
                     # Genuinely new miners (new URL and new or absent MAC)
                     new_urls = {m["url"] for m in refreshed} - known_urls
                     new_miner_cfgs = [
@@ -942,6 +1029,14 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         logger.warning("Failed to send agent config after reload: %s", exc)
 
                 _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
+
+                try:
+                    scan_summary = _build_scan_summary(
+                        collectors, facility_id, discovery_cfg.get("subnets") or []
+                    )
+                    api_client.send_scan_summary(scan_summary)
+                except Exception as exc:
+                    logger.warning("Failed to send scan summary: %s", exc)
 
                 if controller:
                     controller.push_gui_event({"event": "poll_cycle_complete", "miner_count": len(collectors)})

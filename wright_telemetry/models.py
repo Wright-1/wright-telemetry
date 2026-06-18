@@ -583,3 +583,22 @@ class ErrorData:
             for w in raw.get("WARNINGS", [])
         ]
         return cls(errors=entries)
+
+
+# ---------------------------------------------------------------------------
+# Scan snapshot — facility-level topology sent once per poll cycle
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SubnetScanSummary:
+    cidr: str
+    miners: list[str]  # canonical miner UIDs: "<facility_id>:<normalized_mac>"
+
+
+@dataclass
+class ScanSummaryData:
+    facility_id: str
+    timestamp: str
+    subnets: list[SubnetScanSummary]
+    total_miners: int
