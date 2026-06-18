@@ -167,7 +167,7 @@ class WrightAPIClient(ApiClient):
     def send_scan_summary(self, data: ScanSummaryData) -> bool:
         """Encrypt and POST a scan snapshot to the pipeline."""
         from dataclasses import asdict
-        url = self.endpoint("telemetry/scan_summary")
+        url = self.endpoint("telemetry/scan-summary")
         try:
             wire = encrypt_payload(asdict(data), self.api_key)
             resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)
