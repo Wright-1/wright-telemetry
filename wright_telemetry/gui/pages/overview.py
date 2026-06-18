@@ -244,12 +244,14 @@ _FW_COLORS = {
     "vnish":   "#555C68",
     "luxos":   "#C8CDD5",
     "bitmain": "#8B95A3",
+    "sealminer": "#2D5A8E",
 }
 _FW_LABELS = {
     "braiins": "Braiins OS",
     "vnish":   "Vnish",
     "luxos":   "LuxOS",
     "bitmain": "Bitmain",
+    "sealminer": "Sealminer",
 }
 
 
@@ -288,7 +290,7 @@ class _FirmwareBar(QWidget):
         total = sum(v for _, v in items)
         for i, (key, count) in enumerate(items):
             bg = _FW_COLORS.get(key, "#9CA3AF")
-            text_color = "white" if key in ("braiins", "vnish") else T.TEXT_PRIMARY
+            text_color = "white" if key in ("braiins", "vnish", "sealminer") else T.TEXT_PRIMARY
 
             radius = ""
             if i == 0:

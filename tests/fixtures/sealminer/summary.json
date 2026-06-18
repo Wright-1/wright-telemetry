@@ -1,0 +1,26 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1693206129, "Code": 11, "Msg": "Summary", "Description": "bdminer 4.11.1"}],
+  "SUMMARY": [{
+    "Elapsed": 27784,
+    "MHS av": 206852501.39,
+    "MHS 5s": 22683116.68,
+    "MHS 1m": 124393409.77,
+    "MHS 5m": 215309002.47,
+    "MHS 15m": 215820922.90,
+    "Found Blocks": 0,
+    "Getworks": 762,
+    "Accepted": 893,
+    "Rejected": 7,
+    "Hardware Errors": 1,
+    "Utility": 3.46,
+    "Discarded": 9037,
+    "Stale": 0,
+    "Total MH": 3203193072389.0,
+    "Difficulty Accepted": 570927998.996,
+    "Difficulty Rejected": 4012762.087,
+    "Pool Rejected%": 0.6979,
+    "Pool Stale%": 0.0,
+    "Last getwork": 1693206129
+  }],
+  "id": 1
+}

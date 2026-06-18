@@ -172,6 +172,7 @@ class _ProgressEntryCard(QWidget):
         ("luxos",   "LuxOS"),
         ("vnish",   "Vnish"),
         ("bitmain", "Bitmain"),
+        ("sealminer", "Sealminer"),
     ]
 
     def __init__(self, engine: Optional["ScanningEngine"], parent=None):
