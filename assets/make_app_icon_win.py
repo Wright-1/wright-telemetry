@@ -80,14 +80,14 @@ PNG_OUT = ASSETS / "wright-telemetry.png"
 ICO_OUT = ASSETS / "wright-telemetry.ico"
 
 if not img.save(str(PNG_OUT)):
-    print(f"✘  Failed to save {PNG_OUT}", file=sys.stderr)
+    print("FAILED  Failed to save {PNG_OUT}", file=sys.stderr)
     sys.exit(1)
-print(f"✔  Master PNG saved: {PNG_OUT}")
+print(f"OK  Master PNG saved: {PNG_OUT}")
 
 try:
     from PIL import Image as PILImage
 except ImportError:
-    print("✘  Pillow not installed. Run: pip install Pillow", file=sys.stderr)
+    print("ERROR  Pillow not installed. Run: pip install Pillow", file=sys.stderr)
     sys.exit(1)
 
 src = PILImage.open(PNG_OUT).convert("RGBA")
@@ -95,4 +95,4 @@ sizes = [16, 24, 32, 48, 64, 128, 256]
 frames = [src.resize((s, s), PILImage.LANCZOS) for s in sizes]
 frames[0].save(str(ICO_OUT), format="ICO", sizes=[(s, s) for s in sizes],
                append_images=frames[1:])
-print(f"✔  Windows icon saved: {ICO_OUT}")
+print(f"OK  Windows icon saved: {ICO_OUT}")
