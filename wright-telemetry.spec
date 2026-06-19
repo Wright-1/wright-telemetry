@@ -1,16 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for wright-telemetry.
+PyInstaller spec for wright-telemetry — cross-platform.
 
-Produces two artefacts:
-  1. wright-telemetry          — single-file CLI binary (console=True)
-  2. WrightData.app      — macOS double-clickable GUI bundle (windowed)
+Produces:
+  macOS:   wright-telemetry (CLI) + WrightData.app (GUI .app bundle)
+  Windows: wright-telemetry.exe (CLI) + wright-telemetry-gui/ (GUI directory)
+  Linux:   wright-telemetry (CLI) + wright-telemetry-gui/ (GUI directory)
 
 Run with:
     pyinstaller wright-telemetry.spec
 
-Or use the helper script which also wraps everything into a DMG:
-    ./build_mac.sh
+Or use the platform helper scripts:
+    macOS:   ./build_mac.sh
+    Windows: build_windows.bat
+    Linux:   ./build_linux.sh
 """
 
 import os
@@ -143,7 +146,18 @@ gui_a = Analysis(
 
 gui_pyz = PYZ(gui_a.pure, gui_a.zipped_data)
 
-# The inner Unix executable that lives inside the .app bundle
+# ── Platform-specific icon resolution ────────────────────────────────────────
+_is_mac = sys.platform == "darwin"
+_is_win = sys.platform == "win32"
+
+if _is_mac:
+    _gui_icon = str(Path("assets/wright-telemetry.icns")) if Path("assets/wright-telemetry.icns").exists() else None
+elif _is_win:
+    _gui_icon = str(Path("assets/wright-telemetry.ico")) if Path("assets/wright-telemetry.ico").exists() else None
+else:
+    _gui_icon = None
+
+# GUI executable — COLLECT layout (works on all platforms; macOS wraps in BUNDLE below)
 gui_exe = EXE(
     gui_pyz,
     gui_a.scripts,
@@ -153,10 +167,11 @@ gui_exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,              # skip UPX for the GUI bundle — macOS notarisation dislikes it
+    upx=False,
     console=False,          # windowed — no Terminal window on launch
     disable_windowed_traceback=False,
-    argv_emulation=True,    # required for macOS .app open-file events
+    argv_emulation=_is_mac,  # only meaningful on macOS (.app open-file events)
+    icon=_gui_icon,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
@@ -173,46 +188,27 @@ gui_coll = COLLECT(
     name="wright-telemetry-gui",
 )
 
-# Resolve optional icon — skip gracefully if the file doesn't exist yet
-_icon_path = Path("assets/wright-telemetry.icns")
-_icon_arg  = str(_icon_path) if _icon_path.exists() else None
-
-app = BUNDLE(
-    gui_coll,
-    name="WrightData.app",
-    icon=_icon_arg,
-    bundle_identifier="com.wrightone.wrightdata",
-    version=_VERSION,
-    info_plist={
-        # Human-readable name shown in Finder / Dock / menu bar
-        "CFBundleName":            "WrightData",
-        "CFBundleDisplayName":     "WrightData",
-        "CFBundleVersion":         _VERSION,
-        "CFBundleShortVersionString": _VERSION,
-        "CFBundleIdentifier":      "com.wrightone.wrightdata",
-        "CFBundleExecutable":      "wright-telemetry-gui",
-
-        # macOS category — shown in Launchpad / App Store searches
-        "LSApplicationCategoryType": "public.app-category.utilities",
-
-        # Allow the app to be launched from a read-only DMG without
-        # macOS complaining about writing into the bundle directory.
-        "LSEnvironment": {},
-
-        # Don't show a Dock icon before the first window appears
-        "LSUIElement": False,
-
-        # High-resolution Retina display support
-        "NSHighResolutionCapable": True,
-
-        # Microphone / camera / network — not used; listed to silence
-        # macOS privacy prompts that can appear on first launch
-        "NSLocalNetworkUsageDescription":
-            "WrightData scans your local network to discover miners.",
-
-        # Allow the app to open immediately without Gatekeeper blocking
-        # the whole process on first run (user still gets the one-time
-        # right-click → Open prompt if unsigned)
-        "LSMinimumSystemVersion": "12.0",
-    },
-)
+# macOS: wrap the COLLECT into a .app bundle
+if _is_mac:
+    app = BUNDLE(
+        gui_coll,
+        name="WrightData.app",
+        icon=_gui_icon,
+        bundle_identifier="com.wrightone.wrightdata",
+        version=_VERSION,
+        info_plist={
+            "CFBundleName":            "WrightData",
+            "CFBundleDisplayName":     "WrightData",
+            "CFBundleVersion":         _VERSION,
+            "CFBundleShortVersionString": _VERSION,
+            "CFBundleIdentifier":      "com.wrightone.wrightdata",
+            "CFBundleExecutable":      "wright-telemetry-gui",
+            "LSApplicationCategoryType": "public.app-category.utilities",
+            "LSEnvironment": {},
+            "LSUIElement": False,
+            "NSHighResolutionCapable": True,
+            "NSLocalNetworkUsageDescription":
+                "WrightData scans your local network to discover miners.",
+            "LSMinimumSystemVersion": "12.0",
+        },
+    )
