@@ -50,7 +50,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller pytest responses dmgbuild
+          pip install pyinstaller pytest responses PyQt6 pyfiglet dmgbuild
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
