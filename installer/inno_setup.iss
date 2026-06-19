@@ -31,7 +31,6 @@ AllowNoIcons=yes
 OutputDir={#SourcePath}\..\dist
 OutputBaseFilename=WrightData-Windows
 SetupIconFile={#SourcePath}\..\assets\wright-telemetry.ico
-InfoBeforeFile={#SourcePath}\windows_security_notice.rtf
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
