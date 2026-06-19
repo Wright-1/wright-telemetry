@@ -92,10 +92,10 @@ class PermissionsPage(QWidget):
 
         legal_text = QLabel(
             "By enabling data collection you agree to the "
-            f'<a href="https://placeholder.wrightone.io/privacy" '
+            f'<a href="https://www.wrightfan.com/legal/privacy" '
             f'style="color: {T.ACCENT_BLUE}; text-decoration: none;">Privacy Policy</a>'
             " and "
-            f'<a href="https://placeholder.wrightone.io/terms" '
+            f'<a href="https://www.wrightfan.com/legal/terms" '
             f'style="color: {T.ACCENT_BLUE}; text-decoration: none;">Terms of Service</a>.'
             " Data never leaves your local network without your consent."
         )

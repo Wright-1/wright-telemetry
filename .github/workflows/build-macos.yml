@@ -50,7 +50,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller pytest responses dmgbuild
+          pip install pyinstaller pytest responses PyQt6 pyfiglet dmgbuild
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
@@ -78,13 +78,13 @@ jobs:
             -s installer/dmg_settings.py \
             -D "version=${{ steps.version.outputs.ver }}" \
             "WrightData ${{ steps.version.outputs.ver }}" \
-            "dist/WrightData-Installer.dmg"
+            "dist/WrightData-macOS.dmg"
 
       - name: Generate SHA256 checksums
         run: |
           cd dist
           shasum -a 256 wright-telemetry-macos.zip > wright-telemetry-macos.zip.sha256
-          shasum -a 256 "WrightData-Installer.dmg" > "WrightData-Installer.dmg.sha256"
+          shasum -a 256 "WrightData-macOS.dmg" > "WrightData-macOS.dmg.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -93,8 +93,8 @@ jobs:
           path: |
             dist/wright-telemetry-macos.zip
             dist/wright-telemetry-macos.zip.sha256
-            dist/WrightData-Installer.dmg
-            dist/WrightData-Installer.dmg.sha256
+            dist/WrightData-macOS.dmg
+            dist/WrightData-macOS.dmg.sha256
           if-no-files-found: error
 
       - name: Upload release asset
@@ -105,7 +105,7 @@ jobs:
           files: |
             dist/wright-telemetry-macos.zip
             dist/wright-telemetry-macos.zip.sha256
-            dist/WrightData-Installer.dmg
-            dist/WrightData-Installer.dmg.sha256
+            dist/WrightData-macOS.dmg
+            dist/WrightData-macOS.dmg.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

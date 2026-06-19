@@ -237,7 +237,7 @@ def _discord_card(parent: QWidget | None = None) -> QWidget:
         }}
     """)
     join_btn.clicked.connect(
-        lambda: QDesktopServices.openUrl(QUrl("https://discord.gg/wrightone"))
+        lambda: QDesktopServices.openUrl(QUrl("https://discord.gg/N9pc7yRCwK"))
     )
     layout.addWidget(join_btn)
 

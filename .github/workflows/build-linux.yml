@@ -46,27 +46,112 @@ jobs:
           print(f"Set __version__ to {ver!r}")
           PY
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libxkbcommon-x11-0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 \
+            dpkg
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller pytest responses
+          pip install pyinstaller pytest responses PyQt6 pyfiglet
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
 
-      - name: Build binary
+      - name: Build binaries
         env:
           WRIGHT_LOKI_AUTH: ${{ secrets.WRIGHT_LOKI_AUTH }}
         run: pyinstaller wright-telemetry.spec
 
-      - name: Verify binary runs
+      - name: Verify CLI runs
         run: ./dist/wright-telemetry --version
 
-      - name: Name Linux release binary (distinct from macOS dist/wright-telemetry)
+      - name: Get version
+        id: version
+        run: |
+          VER=$(python -c "from wright_telemetry import __version__; print(__version__)")
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Name Linux CLI binary and create tar.gz
         run: |
           cp dist/wright-telemetry dist/wright-telemetry-linux
-          cd dist && sha256sum wright-telemetry-linux > wright-telemetry-linux.sha256
+          tar -czf dist/WrightData-Linux.tar.gz \
+            -C dist wright-telemetry-gui wright-telemetry
+
+      - name: Build .deb package
+        run: |
+          VER=${{ steps.version.outputs.ver }}
+          DEB_ROOT=dist/deb-staging
+          DEB_INSTALL=$DEB_ROOT/opt/wrightdata
+          DEB_BIN=$DEB_ROOT/usr/local/bin
+          DEB_APPS=$DEB_ROOT/usr/share/applications
+          DEB_ICONS=$DEB_ROOT/usr/share/pixmaps
+          DEB_CTRL=$DEB_ROOT/DEBIAN
+
+          mkdir -p $DEB_INSTALL $DEB_BIN $DEB_APPS $DEB_ICONS $DEB_CTRL
+
+          cp -r dist/wright-telemetry-gui/. $DEB_INSTALL/
+          cp dist/wright-telemetry $DEB_BIN/wright-telemetry
+          chmod +x $DEB_BIN/wright-telemetry
+
+          # Copy icon if present, else skip desktop icon line
+          if [ -f assets/wright-telemetry.png ]; then
+            cp assets/wright-telemetry.png $DEB_ICONS/wrightdata.png
+          fi
+
+          cat > $DEB_BIN/wrightdata <<'WRAPPER'
+          #!/usr/bin/env bash
+          exec /opt/wrightdata/wright-telemetry-gui "$@"
+          WRAPPER
+          chmod +x $DEB_BIN/wrightdata
+
+          cat > $DEB_APPS/wrightdata.desktop <<DESKTOP
+          [Desktop Entry]
+          Type=Application
+          Name=WrightData
+          GenericName=Mining Telemetry
+          Comment=Monitor and manage Bitcoin miners
+          Exec=/usr/local/bin/wrightdata
+          Icon=wrightdata
+          Terminal=false
+          Categories=Utility;Network;
+          StartupWMClass=wrightdata
+          DESKTOP
+
+          cat > $DEB_CTRL/control <<CTRL
+          Package: wrightdata
+          Version: $VER
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Wright One <support@wrightone.io>
+          Homepage: https://wrightone.io
+          Description: WrightData Mining Telemetry
+           Monitor and manage Bitcoin miners from a single desktop app.
+          CTRL
+
+          cat > $DEB_CTRL/postinst <<'POSTINST'
+          #!/bin/sh
+          update-desktop-database -q /usr/share/applications 2>/dev/null || true
+          exit 0
+          POSTINST
+          chmod 755 $DEB_CTRL/postinst
+
+          dpkg-deb --build $DEB_ROOT dist/WrightData-Linux.deb
+          rm -rf $DEB_ROOT
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist
+          sha256sum wright-telemetry-linux > wright-telemetry-linux.sha256
+          sha256sum WrightData-Linux.tar.gz > WrightData-Linux.tar.gz.sha256
+          sha256sum WrightData-Linux.deb > WrightData-Linux.deb.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -75,14 +160,23 @@ jobs:
           path: |
             dist/wright-telemetry-linux
             dist/wright-telemetry-linux.sha256
+            dist/WrightData-Linux.tar.gz
+            dist/WrightData-Linux.tar.gz.sha256
+            dist/WrightData-Linux.deb
+            dist/WrightData-Linux.deb.sha256
           if-no-files-found: error
 
-      - name: Upload release asset
+      - name: Upload release assets
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          overwrite_files: true
           files: |
             dist/wright-telemetry-linux
             dist/wright-telemetry-linux.sha256
+            dist/WrightData-Linux.tar.gz
+            dist/WrightData-Linux.tar.gz.sha256
+            dist/WrightData-Linux.deb
+            dist/WrightData-Linux.deb.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
