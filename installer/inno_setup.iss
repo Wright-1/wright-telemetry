@@ -29,8 +29,9 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 ; Produce a single-file installer EXE in dist\ (relative to repo root, not this .iss file)
 OutputDir={#SourcePath}\..\dist
-OutputBaseFilename=WrightData-Installer-{#MyAppVersion}
+OutputBaseFilename=WrightData-Windows
 SetupIconFile={#SourcePath}\..\assets\wright-telemetry.ico
+InfoBeforeFile={#SourcePath}\windows_security_notice.rtf
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern

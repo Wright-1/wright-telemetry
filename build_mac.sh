@@ -18,7 +18,7 @@ set -euo pipefail
 # ── Config ────────────────────────────────────────────────────────────────────
 APP_NAME="WrightData"
 APP_BUNDLE="WrightData.app"
-DMG_BASENAME="WrightData-Installer"
+DMG_BASENAME="WrightData-macOS"
 SPEC_FILE="wright-telemetry.spec"
 DIST_DIR="dist"
 BUILD_DIR="build"
@@ -69,7 +69,7 @@ PIP="${PYTHON} -m pip"
 # ── Derive version from the package ──────────────────────────────────────────
 VERSION=$(PYTHONPATH="$(dirname "$0")" "${PYTHON}" -c \
   "from wright_telemetry import __version__; print(__version__)")
-OUTPUT_DMG="${DIST_DIR}/${DMG_BASENAME}-${VERSION}.dmg"
+OUTPUT_DMG="${DIST_DIR}/${DMG_BASENAME}.dmg"
 info "Version: ${VERSION}"
 
 # ── Verify required packages are present in the build venv ───────────────────

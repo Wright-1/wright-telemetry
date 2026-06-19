@@ -81,7 +81,7 @@ jobs:
       - name: Name Linux CLI binary and create tar.gz
         run: |
           cp dist/wright-telemetry dist/wright-telemetry-linux
-          tar -czf dist/WrightData-${{ steps.version.outputs.ver }}-linux-x86_64.tar.gz \
+          tar -czf dist/WrightData-Linux.tar.gz \
             -C dist wright-telemetry-gui wright-telemetry
 
       - name: Build .deb package
@@ -143,17 +143,15 @@ jobs:
           POSTINST
           chmod 755 $DEB_CTRL/postinst
 
-          dpkg-deb --build $DEB_ROOT dist/wrightdata_${VER}_amd64.deb
+          dpkg-deb --build $DEB_ROOT dist/WrightData-Linux.deb
           rm -rf $DEB_ROOT
 
       - name: Generate SHA256 checksums
         run: |
           cd dist
           sha256sum wright-telemetry-linux > wright-telemetry-linux.sha256
-          sha256sum WrightData-${{ steps.version.outputs.ver }}-linux-x86_64.tar.gz \
-            > WrightData-${{ steps.version.outputs.ver }}-linux-x86_64.tar.gz.sha256
-          sha256sum wrightdata_${{ steps.version.outputs.ver }}_amd64.deb \
-            > wrightdata_${{ steps.version.outputs.ver }}_amd64.deb.sha256
+          sha256sum WrightData-Linux.tar.gz > WrightData-Linux.tar.gz.sha256
+          sha256sum WrightData-Linux.deb > WrightData-Linux.deb.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -162,22 +160,23 @@ jobs:
           path: |
             dist/wright-telemetry-linux
             dist/wright-telemetry-linux.sha256
-            dist/WrightData-*-linux-x86_64.tar.gz
-            dist/WrightData-*-linux-x86_64.tar.gz.sha256
-            dist/wrightdata_*_amd64.deb
-            dist/wrightdata_*_amd64.deb.sha256
+            dist/WrightData-Linux.tar.gz
+            dist/WrightData-Linux.tar.gz.sha256
+            dist/WrightData-Linux.deb
+            dist/WrightData-Linux.deb.sha256
           if-no-files-found: error
 
       - name: Upload release assets
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          overwrite_files: true
           files: |
             dist/wright-telemetry-linux
             dist/wright-telemetry-linux.sha256
-            dist/WrightData-*-linux-x86_64.tar.gz
-            dist/WrightData-*-linux-x86_64.tar.gz.sha256
-            dist/wrightdata_*_amd64.deb
-            dist/wrightdata_*_amd64.deb.sha256
+            dist/WrightData-Linux.tar.gz
+            dist/WrightData-Linux.tar.gz.sha256
+            dist/WrightData-Linux.deb
+            dist/WrightData-Linux.deb.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
