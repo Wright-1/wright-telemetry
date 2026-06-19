@@ -27,10 +27,10 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
-; Produce a single-file installer EXE in dist\
-OutputDir=dist
+; Produce a single-file installer EXE in dist\ (relative to repo root, not this .iss file)
+OutputDir={#SourcePath}\..\dist
 OutputBaseFilename=WrightData-Installer-{#MyAppVersion}
-SetupIconFile=assets\wright-telemetry.ico
+SetupIconFile={#SourcePath}\..\assets\wright-telemetry.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -48,9 +48,9 @@ Name: "startmenuicon";  Description: "Create a Start Menu shortcut"; GroupDescri
 
 [Files]
 ; The entire PyInstaller output directory
-Source: "dist\wright-telemetry-gui\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourcePath}\..\dist\wright-telemetry-gui\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; CLI binary (single-file EXE)
-Source: "dist\wright-telemetry.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourcePath}\..\dist\wright-telemetry.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}";          Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
