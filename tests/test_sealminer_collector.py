@@ -195,6 +195,19 @@ class TestFetchErrors:
             assert len(errs.errors) == 1
             assert errs.errors[0].error_codes[0]["code"] == "E001"
 
+    def test_both_chip_and_code_combined_in_message(self, sealminer_collector):
+        with patch.object(
+            sealminer_collector, "_send_command",
+            return_value={"STATS": [{"Error Chip": "chip_addr_0x0A", "Error Code": "E001"}]},
+        ):
+            errs = sealminer_collector.fetch_errors()
+            assert len(errs.errors) == 1
+            msg = errs.errors[0].message
+            assert "chip_addr_0x0A" in msg
+            assert "E001" in msg
+            assert errs.errors[0].components[0]["chips"] == "chip_addr_0x0A"
+            assert errs.errors[0].error_codes[0]["code"] == "E001"
+
     def test_missing_error_fields(self, sealminer_collector):
         with patch.object(
             sealminer_collector, "_send_command",
@@ -223,8 +236,8 @@ class TestSocketErrors:
     def test_send_command_socket_error(self):
         """Verify _send_command surfaces socket.error from a real connection failure."""
         from wright_telemetry.collectors.sealminer import SealminerCollector
-        collector = SealminerCollector(url="192.168.255.254")
-        collector._port = 1  # unreachable port
+        collector = SealminerCollector(url="127.0.0.1")
+        collector._port = 1  # unbound — gives immediate ECONNREFUSED
         with pytest.raises(socket.error):
             collector._send_command("stats")
 
