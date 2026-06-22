@@ -304,6 +304,9 @@ class HashrateData:
         stats = (stats_raw.get("STATS") or [{}])[0]
         miner_stats = {
             "ghs_5s": summary.get("MHS 5s", 0) / 1000,
+            "ghs_1m": summary.get("MHS 1m", 0) / 1000,
+            "ghs_5m": summary.get("MHS 5m", 0) / 1000,
+            "ghs_15m": summary.get("MHS 15m", 0) / 1000,
             "ghs_av": summary.get("MHS av", 0) / 1000,
             "hardware_errors": summary.get("Hardware Errors", 0),
             "nominal_ghs": stats.get("MHS(Ideal)", 0) / 1000,
@@ -713,7 +716,12 @@ class ErrorData:
         error_code = str(stats.get("Error Code", "")).strip()
         if not error_chip and not error_code:
             return cls(errors=[])
-        msg = f"Error chip: {error_chip}" if error_chip else f"Error code: {error_code}"
+        parts = []
+        if error_chip:
+            parts.append(f"Error chip: {error_chip}")
+        if error_code:
+            parts.append(f"Error code: {error_code}")
+        msg = " | ".join(parts)
         return cls(errors=[ErrorEntry(
             message=msg,
             timestamp="",
