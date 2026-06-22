@@ -138,6 +138,32 @@ class CoolingData:
         )
         return cls(fans=fans, highest_temperature=highest_temp)
 
+    @classmethod
+    def from_sealminer(cls, stats_raw: dict[str, Any]) -> CoolingData:
+        stats = (stats_raw.get("STATS") or [{}])[0]
+        fan_count = int(stats.get("Fan Count", 0))
+        fans = [
+            FanReading(
+                position=i,
+                rpm=int(stats.get(f"{i} Speed", 0)),
+                target_speed_ratio=round(int(stats.get(f"{i} PWM", 0)) / 255.0, 4),
+            )
+            for i in range(fan_count)
+        ]
+        all_temps: list[float] = []
+        board_count = int(stats.get("Board Count", 0))
+        for i in range(board_count):
+            t = stats.get(f"{i} Temp")
+            if isinstance(t, (int, float)) and t > 0:
+                all_temps.append(float(t))
+        psu_hot = stats.get("PSU Temp HOT")
+        if isinstance(psu_hot, (int, float)) and psu_hot > 0:
+            all_temps.append(float(psu_hot))
+        highest_temp: Optional[dict[str, Any]] = (
+            {"value": max(all_temps), "unit": "C"} if all_temps else None
+        )
+        return cls(fans=fans, highest_temperature=highest_temp)
+
 
 @dataclass
 class HashrateData:
@@ -267,6 +293,44 @@ class HashrateData:
         }
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
+    @classmethod
+    def from_sealminer(
+        cls,
+        summary_raw: dict[str, Any],
+        pools_raw: dict[str, Any],
+        stats_raw: dict[str, Any],
+    ) -> HashrateData:
+        summary = (summary_raw.get("SUMMARY") or [{}])[0]
+        stats = (stats_raw.get("STATS") or [{}])[0]
+        miner_stats = {
+            "ghs_5s": summary.get("MHS 5s", 0) / 1000,
+            "ghs_av": summary.get("MHS av", 0) / 1000,
+            "hardware_errors": summary.get("Hardware Errors", 0),
+            "nominal_ghs": stats.get("MHS(Ideal)", 0) / 1000,
+        }
+        pools = pools_raw.get("POOLS", [])
+        pool_stats = {
+            "pools": [
+                {
+                    "url": p.get("URL", ""),
+                    "user": p.get("User", ""),
+                    "status": p.get("Status", ""),
+                    "accepted": p.get("Accepted", 0),
+                    "rejected": p.get("Rejected", 0),
+                    "stale": p.get("Stale", 0),
+                    "difficulty_accepted": p.get("Difficulty Accepted", 0),
+                    "pool_rejected_pct": p.get("Pool Rejected%", 0),
+                    "pool_stale_pct": p.get("Pool Stale%", 0),
+                }
+                for p in pools
+            ],
+        }
+        power_stats = {
+            "watts": stats.get("PSU Input Power", 0),
+            "efficiency": stats.get("PSU Efficiency", 0),
+        }
+        return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
+
     def get_nominal_ghs(self) -> Optional[float]:
         ms = self.miner_stats
         if "rate_ideal" in ms:
@@ -356,6 +420,30 @@ class UptimeData:
             bos_version={
                 "firmware": sysinfo_raw.get("system_filesystem_version", ""),
                 "firmware_type": sysinfo_raw.get("firmware_type", ""),
+            },
+            platform=0,
+            status=0,
+        )
+
+    @classmethod
+    def from_sealminer(
+        cls,
+        summary_raw: dict[str, Any],
+        stats_raw: dict[str, Any],
+    ) -> UptimeData:
+        summary = (summary_raw.get("SUMMARY") or [{}])[0]
+        stats = (stats_raw.get("STATS") or [{}])[0]
+        miner_elapsed = int(summary.get("Elapsed", 0))
+        system_elapsed = int(stats.get("System Uptime", miner_elapsed))
+        return cls(
+            bosminer_uptime_s=miner_elapsed,
+            system_uptime_s=system_elapsed,
+            hostname="",
+            bos_version={
+                "firmware": stats.get("Firmware", ""),
+                "software_version": stats.get("Software Version", ""),
+                "mining_mode": stats.get("Mining Mode", ""),
+                "pm_state": stats.get("PM State", ""),
             },
             platform=0,
             status=0,
@@ -519,6 +607,40 @@ class HashboardData:
             ))
         return cls(hashboards=boards)
 
+    @classmethod
+    def from_sealminer(cls, stats_raw: dict[str, Any]) -> HashboardData:
+        stats = (stats_raw.get("STATS") or [{}])[0]
+        board_count = int(stats.get("Board Count", 0))
+        boards: list[HashboardReading] = []
+        for i in range(board_count):
+            temp_val = stats.get(f"{i} Temp")
+            board_temp: Optional[dict[str, Any]] = (
+                {"value": float(temp_val), "unit": "C"} if temp_val is not None else None
+            )
+            freq = stats.get(f"{i} Freq")
+            boards.append(HashboardReading(
+                board_name=f"Board {i}",
+                board_temp=board_temp,
+                highest_chip_temp=None,
+                lowest_inlet_temp=None,
+                highest_outlet_temp=None,
+                chips_count=int(stats.get(f"{i} Chip Count", 0)),
+                id=str(i),
+                enabled=bool(stats.get(f"{i} Online", False)),
+                stats={
+                    "mhs_av": stats.get(f"{i} MHS(Avg)", 0),
+                    "mhs_1m": stats.get(f"{i} MHS(1m)", 0),
+                    "mhs_5m": stats.get(f"{i} MHS(5m)", 0),
+                    "hardware_errors": stats.get(f"{i} HW", 0),
+                    "serial_number": stats.get(f"{i} SN", ""),
+                    "low_hash": stats.get(f"{i} Low Hash", False),
+                    "tune_status": stats.get(f"{i} Tune Status", ""),
+                    "bad_chip_count": stats.get(f"{i} Bad Chip Count", 0),
+                },
+                freq_mhz=float(freq) if freq is not None else None,
+            ))
+        return cls(hashboards=boards)
+
 
 @dataclass
 class ErrorEntry:
@@ -583,6 +705,21 @@ class ErrorData:
             for w in raw.get("WARNINGS", [])
         ]
         return cls(errors=entries)
+
+    @classmethod
+    def from_sealminer(cls, stats_raw: dict[str, Any]) -> ErrorData:
+        stats = (stats_raw.get("STATS") or [{}])[0]
+        error_chip = str(stats.get("Error Chip", "")).strip()
+        error_code = str(stats.get("Error Code", "")).strip()
+        if not error_chip and not error_code:
+            return cls(errors=[])
+        msg = f"Error chip: {error_chip}" if error_chip else f"Error code: {error_code}"
+        return cls(errors=[ErrorEntry(
+            message=msg,
+            timestamp="",
+            error_codes=[{"code": error_code}] if error_code else [],
+            components=[{"chips": error_chip}] if error_chip else [],
+        )])
 
 
 # ---------------------------------------------------------------------------

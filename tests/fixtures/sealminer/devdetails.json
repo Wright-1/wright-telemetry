@@ -1,0 +1,5 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1693215535, "Code": 69, "Msg": "Device Details", "Description": "bdminer 4.11.1"}],
+  "DEVDETAILS": [{"DEVDETAILS": 0, "Name": "K10Pro", "ID": 0, "Driver": "Sealminer", "Kernel": "", "Model": "K10Pro", "Device Path": ""}],
+  "id": 1
+}

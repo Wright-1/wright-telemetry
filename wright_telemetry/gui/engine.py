@@ -95,6 +95,7 @@ class ScanningEngine:
         import wright_telemetry.collectors.bitmain  # noqa: F401
         import wright_telemetry.collectors.braiins  # noqa: F401
         import wright_telemetry.collectors.luxos    # noqa: F401
+        import wright_telemetry.collectors.sealminer  # noqa: F401
         import wright_telemetry.collectors.vnish    # noqa: F401
 
         # Mark GUI mode BEFORE starting the scheduler thread so it never

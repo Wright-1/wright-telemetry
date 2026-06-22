@@ -1,0 +1,5 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1693205317, "Code": 22, "Msg": "Bdminer versions", "Description": "bdminer 4.11.1"}],
+  "VERSION": [{"Bdminer": "4.11.1", "API": "3.7"}],
+  "id": 1
+}

@@ -51,10 +51,12 @@ BRAIINS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "braiins"
 LUXOS_FIXTURES_DIR   = Path(__file__).parent / "fixtures" / "luxos"
 VNISH_FIXTURES_DIR   = Path(__file__).parent / "fixtures" / "vnish"
 BITMAIN_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "bitmain"
+SEALMINER_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "sealminer"
 MINER_URL   = "http://192.168.1.100"
 LUXOS_HOST  = "192.168.1.200"
 VNISH_URL   = "http://192.168.1.150"
 BITMAIN_URL = "http://192.168.1.200"
+SEALMINER_HOST = "192.168.1.210"
 
 
 def _load_braiins(name: str) -> dict[str, Any]:
@@ -67,6 +69,10 @@ def _load_luxos(name: str) -> dict[str, Any]:
 
 def _load_vnish(name: str) -> dict[str, Any]:
     return json.loads((VNISH_FIXTURES_DIR / name).read_text())
+
+
+def _load_sealminer(name: str) -> dict[str, Any]:
+    return json.loads((SEALMINER_FIXTURES_DIR / name).read_text())
 
 
 def _load_bitmain(name: str) -> dict[str, Any]:
@@ -325,3 +331,42 @@ def bitmain_collector_no_auth():
     collector = BitmainCollector(url=BITMAIN_URL)
     yield collector
     collector.close()
+
+
+# ---------------------------------------------------------------------------
+# Sealminer fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def sealminer_fixtures() -> dict[str, Any]:
+    """All Sealminer fixture data keyed by CGMiner command name."""
+    return {
+        "version":    _load_sealminer("version.json"),
+        "summary":    _load_sealminer("summary.json"),
+        "pools":      _load_sealminer("pools.json"),
+        "devdetails": _load_sealminer("devdetails.json"),
+        "stats":      _load_sealminer("stats.json"),
+    }
+
+
+@pytest.fixture()
+def mock_sealminer_api(sealminer_fixtures):
+    """Patch ``SealminerCollector._send_command`` to return fixture data by command name."""
+    def _fake_send(self, command, parameter=""):
+        if command in sealminer_fixtures:
+            return sealminer_fixtures[command]
+        return {"STATUS": [{"STATUS": "E", "Msg": f"Unknown command: {command}"}]}
+
+    with patch(
+        "wright_telemetry.collectors.sealminer.SealminerCollector._send_command",
+        _fake_send,
+    ):
+        yield
+
+
+@pytest.fixture()
+def sealminer_collector():
+    """Return a SealminerCollector pointed at the test host."""
+    from wright_telemetry.collectors.sealminer import SealminerCollector
+    return SealminerCollector(url=SEALMINER_HOST)

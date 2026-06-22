@@ -319,11 +319,55 @@ def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
     return None
 
 
+def _probe_sealminer(ip: str) -> Optional[DiscoveredMiner]:
+    """Send a ``version`` command to port 4028; a ``Bdminer`` key confirms Sealminer."""
+    import json as _json
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(_PROBE_TIMEOUT)
+            sock.connect((ip, 4028))
+            sock.sendall(b'{"command": "version"}')
+            chunks: list[bytes] = []
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        body = b"".join(chunks).decode("utf-8").rstrip("\x00")
+        data = _json.loads(body)
+        version_list = data.get("VERSION", [])
+        if not version_list or "Bdminer" not in version_list[0]:
+            return None
+        mac = ""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock2:
+                sock2.settimeout(_PROBE_TIMEOUT)
+                sock2.connect((ip, 4028))
+                sock2.sendall(b'{"command": "stats"}')
+                stats_chunks: list[bytes] = []
+                while True:
+                    c = sock2.recv(4096)
+                    if not c:
+                        break
+                    stats_chunks.append(c)
+            stats_body = b"".join(stats_chunks).decode("utf-8").rstrip("\x00")
+            stats_data = _json.loads(stats_body)
+            stats = (stats_data.get("STATS") or [{}])[0]
+            mac = stats.get("MAC", "")
+        except Exception:
+            pass
+        return DiscoveredMiner(ip=ip, firmware="sealminer", hostname="", mac_address=mac)
+    except (socket.error, ValueError, _json.JSONDecodeError):
+        pass
+    return None
+
+
 _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
     "braiins": _probe_braiins,
     "luxos": _probe_luxos,
     "vnish": _probe_vnish,
     "bitmain": _probe_bitmain,
+    "sealminer": _probe_sealminer,
 }
 
 

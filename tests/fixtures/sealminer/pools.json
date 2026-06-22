@@ -1,0 +1,30 @@
+{
+  "STATUS": [{"STATUS": "S", "When": 1693208688, "Code": 7, "Msg": "3 Pool(s)", "Description": "bdminer 4.11.1"}],
+  "POOLS": [
+    {
+      "POOL": 0,
+      "URL": "stratum+tcp://pool.example.com:3333",
+      "Status": "Alive",
+      "Priority": 0,
+      "Quota": 1,
+      "Long Poll": "N",
+      "Getworks": 879,
+      "Accepted": 58432,
+      "Rejected": 8,
+      "Works": 1085882,
+      "Discarded": 10554,
+      "Stale": 2,
+      "Get Failures": 0,
+      "Remote Failures": 0,
+      "User": "TestWallet.K10Pro",
+      "Last Share Time": 1693208639,
+      "Difficulty Accepted": 693583365.787,
+      "Difficulty Rejected": 4710633.755,
+      "Difficulty Stale": 0.0,
+      "Pool Rejected%": 0.6746,
+      "Pool Stale%": 0.0,
+      "Current Block Height": 805141
+    }
+  ],
+  "id": 1
+}
