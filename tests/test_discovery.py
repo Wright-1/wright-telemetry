@@ -15,8 +15,10 @@ import pytest
 
 from wright_telemetry.discovery import (
     DiscoveredMiner,
+    _PROBES,
     _probe_braiins,
     _probe_vnish,
+    all_firmware_types,
     default_subnet,
     default_subnets,
     discovered_to_miner_cfgs,
@@ -180,6 +182,24 @@ class TestFirmwareTypesForCollector:
         assert firmware_types_for_collector(["braiins", "future-fw", ""]) == ["braiins"]
         assert firmware_types_for_collector(["future-fw"]) is None
         assert firmware_types_for_collector([]) is None
+
+
+# ---------------------------------------------------------------
+# all_firmware_types
+# ---------------------------------------------------------------
+
+class TestAllFirmwareTypes:
+
+    def test_matches_probe_registry(self):
+        # Single source of truth: the default scan list must cover every
+        # registered probe so newly added firmware is never silently omitted.
+        assert all_firmware_types() == list(_PROBES)
+
+    def test_includes_sealminer(self):
+        # Regression: the GUI engine's fallback firmware list once hardcoded
+        # four families and dropped sealminer, so auto-discovery never probed
+        # Sealminer miners even though the UI toggle showed it enabled.
+        assert "sealminer" in all_firmware_types()
 
 
 # ---------------------------------------------------------------

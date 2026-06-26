@@ -62,7 +62,8 @@ class ScanningEngine:
         self.controller = AgentController()
         self.signals = EngineSignals()
 
-        fw_types = cfg.get("collector_types") or ["braiins", "bitmain", "luxos", "vnish"]
+        from wright_telemetry.discovery import all_firmware_types
+        fw_types = cfg.get("collector_types") or all_firmware_types()
         self.scan_manager = ScanManager(self.controller, fw_types)
 
         self._scheduler_thread: threading.Thread | None = None

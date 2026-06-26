@@ -371,6 +371,17 @@ _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
 }
 
 
+def all_firmware_types() -> list[str]:
+    """Return every firmware family with a registered probe.
+
+    This is the single source of truth for "scan for everything".  Callers
+    that need a non-empty default firmware list (e.g. the GUI engine) should
+    use this instead of hardcoding names, so newly registered probes are
+    picked up automatically and never silently omitted from discovery.
+    """
+    return list(_PROBES)
+
+
 def firmware_types_for_collector(
     collector_type: "str | list[str]",
 ) -> Optional[list[str]]:
