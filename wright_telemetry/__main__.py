@@ -216,7 +216,9 @@ def main() -> None:
         disc.setdefault("enabled", True)
         save_config(cfg)
         print(f"Imported {len(subnets)} subnet(s) from {args.subnets_file}")
-        fw = firmware_types_for_collector(cfg.get("collector_type", "braiins"))
+        fw = firmware_types_for_collector(
+            cfg.get("collector_types") or cfg.get("collector_type", "braiins")
+        )
         print(f"\nScanning {len(subnets)} subnet(s) for miners…\n")
         found = run_interactive_discovery(subnets, firmware_types=fw)
         if not found:
