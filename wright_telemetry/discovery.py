@@ -425,14 +425,18 @@ def _probe_sealminer(ip: str) -> Optional[DiscoveredMiner]:
     if not data:
         return None
 
-    # A device answered on 4028 — record the raw reply so a field scan is
-    # diagnosable from collector.log even when the fingerprint doesn't match.
+    # A device answered on 4028.  Log this unconditionally at INFO: it is the
+    # single most useful discovery signal and is bounded by the number of hosts
+    # with the API port open (i.e. miner count), not subnet size — so it stays
+    # quiet on a normal network while making a failed field scan fully
+    # diagnosable from a downloaded collector.log (no debug flag to set).  When
+    # debug is enabled we widen the raw snippet for full-contract capture.
     matched = _looks_like_sealminer(data)
-    if _discovery_debug():
-        logger.info(
-            "discovery: %s:4028 answered 'version' (sealminer match=%s): %s",
-            ip, matched, json.dumps(data)[:400],
-        )
+    snippet = json.dumps(data)[: 2000 if _discovery_debug() else 400]
+    logger.info(
+        "discovery: %s:4028 answered 'version' (sealminer match=%s): %s",
+        ip, matched, snippet,
+    )
     if not matched:
         return None
 
@@ -578,10 +582,23 @@ def scan_hosts(
     breakdown: dict[str, int] = {}
     for m in discovered:
         breakdown[m.firmware] = breakdown.get(m.firmware, 0) + 1
-    logger.info(
-        "discovery: scan complete — %d miner(s) found across %d host(s): %s",
-        len(discovered), total, breakdown or "{}",
-    )
+    if discovered:
+        logger.info(
+            "discovery: scan complete — %d miner(s) found across %d host(s): %s",
+            len(discovered), total, breakdown,
+        )
+    else:
+        # No matches.  Combined with the per-host "answered on 4028" lines above,
+        # this pinpoints the cause from the log alone: if there are NO "answered
+        # on 4028" lines, nothing is reachable on the API port (firewall / wrong
+        # subnet / API not enabled); if there ARE such lines with match=False,
+        # it's a firmware-fingerprint problem to fix in the probe.
+        logger.warning(
+            "discovery: scan complete — 0 miners found across %d host(s) "
+            "(firmware probed: %s). If miners are present, check that they are "
+            "reachable on TCP port 4028 from this machine and on the right subnet.",
+            total, ", ".join(probes),
+        )
 
     discovered.sort(key=lambda m: tuple(int(p) for p in m.ip.split(".")))
     return discovered

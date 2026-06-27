@@ -338,6 +338,22 @@ class TestProbeSealminer:
         ):
             assert _probe_sealminer("10.0.0.5") is None
 
+    def test_answered_host_logs_at_info_without_debug(self, caplog):
+        # A Windows GUI user can't set a debug flag, so a device answering on
+        # 4028 must always be logged at INFO — that's what makes a downloaded
+        # collector.log diagnose a failed scan. Here the reply doesn't match, so
+        # the probe returns None but must still emit the diagnostic line.
+        with patch(
+            "wright_telemetry.discovery._cgminer_query",
+            return_value={"VERSION": [{"LUXminer": "x"}]},
+        ):
+            with caplog.at_level("INFO", logger="wright_telemetry.discovery"):
+                assert _probe_sealminer("10.0.0.7") is None
+        assert any(
+            "10.0.0.7" in r.message and "4028" in r.message and "match=False" in r.message
+            for r in caplog.records
+        )
+
 
 # ---------------------------------------------------------------
 # parse_ip_target
