@@ -409,7 +409,7 @@ def _looks_like_sealminer(version_data: dict[str, Any]) -> bool:
     is distinctive enough that this won't collide with LuxOS/Braiins/Vnish.
     """
     version_list = version_data.get("VERSION") or []
-    if version_list and "Bdminer" in version_list[0]:
+    if version_list and "BDMiner" in version_list[0]:
         return True
     blob = json.dumps(version_data).lower()
     return "bdminer" in blob

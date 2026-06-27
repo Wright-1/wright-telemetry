@@ -64,7 +64,18 @@ class ScanningEngine:
 
         from wright_telemetry.discovery import all_firmware_types, apply_discovery_debug
         apply_discovery_debug(cfg)
-        fw_types = cfg.get("collector_types") or all_firmware_types()
+        all_known = all_firmware_types()
+        saved = cfg.get("collector_types")
+        if saved:
+            # Merge in any probe types registered after the config was last saved
+            # (e.g. sealminer added after an existing install) so they are always
+            # included unless the user explicitly disables them via the GUI.
+            missing = [t for t in all_known if t not in saved]
+            if missing:
+                cfg["collector_types"] = saved + missing
+                from wright_telemetry.config import save_config
+                save_config(cfg)
+        fw_types = cfg.get("collector_types") or all_known
         self.scan_manager = ScanManager(self.controller, fw_types)
 
         self._scheduler_thread: threading.Thread | None = None
