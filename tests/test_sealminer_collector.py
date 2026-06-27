@@ -93,7 +93,10 @@ class TestFetchHashrate:
     def test_power_stats(self, mock_sealminer_api, sealminer_collector):
         hr = sealminer_collector.fetch_hashrate()
         assert hr.power_stats["watts"] == 3998
-        assert abs(hr.power_stats["efficiency"] - 0.936937) < 1e-4
+        # efficiency is W/T(Avg) (watts-per-terahash / J-per-TH) per the bdminer
+        # spec, not the 0-1 "PSU Efficiency" ratio (kept as psu_efficiency).
+        assert abs(hr.power_stats["efficiency"] - 24.084337) < 1e-4
+        assert abs(hr.power_stats["psu_efficiency"] - 0.936937) < 1e-4
 
     def test_empty_response_defaults(self, sealminer_collector):
         with patch.object(

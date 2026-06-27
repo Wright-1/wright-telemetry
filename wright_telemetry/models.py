@@ -330,7 +330,12 @@ class HashrateData:
         }
         power_stats = {
             "watts": stats.get("PSU Input Power", 0),
-            "efficiency": stats.get("PSU Efficiency", 0),
+            # bdminer reports true mining efficiency as W/T = watts-per-terahash
+            # (J/TH), matching what the pipeline stores as efficiency_j_per_th.
+            # "PSU Efficiency" is a 0-1 electrical ratio — a different metric —
+            # so it is exposed separately rather than as `efficiency`.
+            "efficiency": stats.get("W/T(Avg)", 0),
+            "psu_efficiency": stats.get("PSU Efficiency", 0),
         }
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
