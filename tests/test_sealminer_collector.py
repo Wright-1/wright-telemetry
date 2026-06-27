@@ -59,7 +59,7 @@ class TestFetchCooling:
 
     def test_highest_temperature_from_boards(self, mock_sealminer_api, sealminer_collector):
         cooling = sealminer_collector.fetch_cooling()
-        # Board temps are 62, 65, 67; PSU HOT is 55 — max is 67
+        # Board max temps are 62, 65, 67; PSU AMB is 38 — overall max is 67
         assert cooling.highest_temperature == {"value": 67.0, "unit": "C"}
 
     def test_no_fans(self, sealminer_collector):
@@ -189,14 +189,25 @@ class TestFetchErrors:
             assert "chip_addr_0x0A" in errs.errors[0].message
             assert errs.errors[0].components[0]["chips"] == "chip_addr_0x0A"
 
-    def test_error_code_creates_entry(self, sealminer_collector):
+    def test_error_code_with_bad_chips_creates_entry(self, sealminer_collector):
+        # Error code alone (e.g. 602 on a healthy machine) should not fire;
+        # it must be accompanied by a real hardware indicator.
         with patch.object(
             sealminer_collector, "_send_command",
-            return_value={"STATS": [{"Error Chip": "", "Error Code": "E001"}]},
+            return_value={"STATS": [{"Error Chip": "", "Error Code": "E001", "Bad Chip Count": 1, "Board Count": 0}]},
         ):
             errs = sealminer_collector.fetch_errors()
             assert len(errs.errors) == 1
             assert errs.errors[0].error_codes[0]["code"] == "E001"
+
+    def test_error_code_alone_no_entry(self, sealminer_collector):
+        # Bare error code with no chip/HW errors (e.g. status code 602) must not create a false entry.
+        with patch.object(
+            sealminer_collector, "_send_command",
+            return_value={"STATS": [{"Error Chip": "", "Error Code": "602", "Bad Chip Count": 0, "Board Count": 0}]},
+        ):
+            errs = sealminer_collector.fetch_errors()
+            assert len(errs.errors) == 0
 
     def test_both_chip_and_code_combined_in_message(self, sealminer_collector):
         with patch.object(

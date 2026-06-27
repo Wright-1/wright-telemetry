@@ -153,12 +153,16 @@ class CoolingData:
         all_temps: list[float] = []
         board_count = int(stats.get("Board Count", 0))
         for i in range(board_count):
-            t = stats.get(f"{i} Temp")
-            if isinstance(t, (int, float)) and t > 0:
-                all_temps.append(float(t))
-        psu_hot = stats.get("PSU Temp HOT")
-        if isinstance(psu_hot, (int, float)) and psu_hot > 0:
-            all_temps.append(float(psu_hot))
+            sensor_temps = [
+                float(stats[f"{i} Temp {j}"])
+                for j in range(4)
+                if isinstance(stats.get(f"{i} Temp {j}"), (int, float)) and stats[f"{i} Temp {j}"] > 0
+            ]
+            if sensor_temps:
+                all_temps.append(max(sensor_temps))
+        psu_amb = stats.get("PSU Temp AMB")
+        if isinstance(psu_amb, (int, float)) and psu_amb > 0:
+            all_temps.append(float(psu_amb))
         highest_temp: Optional[dict[str, Any]] = (
             {"value": max(all_temps), "unit": "C"} if all_temps else None
         )
@@ -621,9 +625,13 @@ class HashboardData:
         board_count = int(stats.get("Board Count", 0))
         boards: list[HashboardReading] = []
         for i in range(board_count):
-            temp_val = stats.get(f"{i} Temp")
+            sensor_temps = [
+                float(stats[f"{i} Temp {j}"])
+                for j in range(4)
+                if isinstance(stats.get(f"{i} Temp {j}"), (int, float)) and stats[f"{i} Temp {j}"] > 0
+            ]
             board_temp: Optional[dict[str, Any]] = (
-                {"value": float(temp_val), "unit": "C"} if temp_val is not None else None
+                {"value": max(sensor_temps), "unit": "C"} if sensor_temps else None
             )
             freq = stats.get(f"{i} Freq")
             boards.append(HashboardReading(
@@ -719,14 +727,20 @@ class ErrorData:
         stats = (stats_raw.get("STATS") or [{}])[0]
         error_chip = str(stats.get("Error Chip", "")).strip()
         error_code = str(stats.get("Error Code", "")).strip()
-        if not error_chip and not error_code:
+        board_count = int(stats.get("Board Count", 0))
+        hw_errors = sum(int(stats.get(f"{i} HW", 0)) for i in range(board_count))
+        bad_chips = int(stats.get("Bad Chip Count", 0))
+        # Only surface an error entry when there are real hardware failures.
+        # "Error Code" is always populated (e.g. 602 on healthy machines) so
+        # it is included as metadata only, not used as the trigger.
+        if not error_chip and hw_errors == 0 and bad_chips == 0:
             return cls(errors=[])
         parts = []
         if error_chip:
             parts.append(f"Error chip: {error_chip}")
         if error_code:
             parts.append(f"Error code: {error_code}")
-        msg = " | ".join(parts)
+        msg = " | ".join(parts) if parts else f"HW errors: {hw_errors}, bad chips: {bad_chips}"
         return cls(errors=[ErrorEntry(
             message=msg,
             timestamp="",
