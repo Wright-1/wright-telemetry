@@ -53,7 +53,6 @@ class FanReading:
     position: int
     rpm: int
     target_speed_ratio: float
-    chip_temp: Optional[float] = None
 
 
 @dataclass
@@ -63,104 +62,80 @@ class CoolingData:
 
     @classmethod
     def from_braiins(cls, raw: dict[str, Any]) -> CoolingData:
-        highest_temp = raw.get("highest_temperature")
-        chip_temp: Optional[float] = (
-            float(highest_temp["value"]) if isinstance(highest_temp, dict) and "value" in highest_temp else None
-        )
         fans = [
             FanReading(
                 position=f.get("position", 0),
                 rpm=f.get("rpm", 0),
                 target_speed_ratio=f.get("target_speed_ratio", 0.0),
-                chip_temp=chip_temp,
             )
             for f in raw.get("fans", [])
         ]
-        return cls(fans=fans, highest_temperature=highest_temp)
+        return cls(fans=fans, highest_temperature=raw.get("highest_temperature"))
 
     @classmethod
     def from_luxos(cls, fans_raw: dict[str, Any], temps_raw: dict[str, Any]) -> CoolingData:
-        highest_temp: Optional[dict[str, Any]] = None
-        chip_temp: Optional[float] = None
-        temps_list = temps_raw.get("TEMPS", [])
-        if temps_list:
-            all_temps: list[float] = []
-            chip_temps: list[float] = []
-            for t in temps_list:
-                for key in ("Board", "Chip", "TopLeft", "TopRight", "BottomLeft", "BottomRight"):
-                    val = t.get(key)
-                    if isinstance(val, (int, float)) and val > 0:
-                        all_temps.append(float(val))
-                chip_val = t.get("Chip")
-                if isinstance(chip_val, (int, float)) and chip_val > 0:
-                    chip_temps.append(float(chip_val))
-            if all_temps:
-                highest_temp = {"value": max(all_temps), "unit": "C"}
-            if chip_temps:
-                chip_temp = max(chip_temps)
         fans = [
             FanReading(
                 position=f.get("ID", 0),
                 rpm=f.get("RPM", 0),
                 target_speed_ratio=f.get("Speed", 0) / 100.0,
-                chip_temp=chip_temp,
             )
             for f in fans_raw.get("FANS", [])
         ]
+        highest_temp: Optional[dict[str, Any]] = None
+        temps_list = temps_raw.get("TEMPS", [])
+        if temps_list:
+            all_temps: list[float] = []
+            for t in temps_list:
+                for key in ("Board", "Chip", "TopLeft", "TopRight", "BottomLeft", "BottomRight"):
+                    val = t.get(key)
+                    if isinstance(val, (int, float)) and val > 0:
+                        all_temps.append(float(val))
+            if all_temps:
+                highest_temp = {"value": max(all_temps), "unit": "C"}
         return cls(fans=fans, highest_temperature=highest_temp)
 
     @classmethod
     def from_vnish(cls, raw: dict[str, Any]) -> CoolingData:
-        highest_temp: Optional[dict[str, Any]] = None
-        chip_temp: Optional[float] = None
-        chains = raw.get("chains", [])
-        if chains:
-            all_temps: list[float] = []
-            chip_temps: list[float] = []
-            for c in chains:
-                for key in ("temp_board", "temp_chip"):
-                    val = c.get(key)
-                    if isinstance(val, (int, float)) and val > 0:
-                        all_temps.append(float(val))
-                chip_val = c.get("temp_chip")
-                if isinstance(chip_val, (int, float)) and chip_val > 0:
-                    chip_temps.append(float(chip_val))
-            if all_temps:
-                highest_temp = {"value": max(all_temps), "unit": "C"}
-            if chip_temps:
-                chip_temp = max(chip_temps)
         fans = [
             FanReading(
                 position=f.get("id", 0),
                 rpm=f.get("rpm", 0),
                 target_speed_ratio=f.get("speed_pct", 0) / 100.0,
-                chip_temp=chip_temp,
             )
             for f in raw.get("fans", [])
         ]
+        highest_temp: Optional[dict[str, Any]] = None
+        chains = raw.get("chains", [])
+        if chains:
+            all_temps: list[float] = []
+            for c in chains:
+                for key in ("temp_board", "temp_chip"):
+                    val = c.get(key)
+                    if isinstance(val, (int, float)) and val > 0:
+                        all_temps.append(float(val))
+            if all_temps:
+                highest_temp = {"value": max(all_temps), "unit": "C"}
         return cls(fans=fans, highest_temperature=highest_temp)
 
     @classmethod
     def from_bitmain(cls, raw: dict[str, Any]) -> CoolingData:
         stats = (raw.get("STATS") or [{}])[0]
+        # Fan RPMs are a flat integer array — synthesize FanReading objects.
+        fans = [
+            FanReading(position=i, rpm=rpm, target_speed_ratio=0.0)
+            for i, rpm in enumerate(stats.get("fan", []))
+        ]
+        # Highest temp (board or chip) across all chains.
         all_temps: list[float] = []
-        chip_temps: list[float] = []
         for chain in stats.get("chain", []):
-            for t in chain.get("temp_pcb", []):
-                if isinstance(t, (int, float)) and t > 0:
-                    all_temps.append(float(t))
-            for t in chain.get("temp_chip", []):
-                if isinstance(t, (int, float)) and t > 0:
-                    all_temps.append(float(t))
-                    chip_temps.append(float(t))
+            for key in ("temp_pcb", "temp_chip"):
+                for t in chain.get(key, []):
+                    if isinstance(t, (int, float)) and t > 0:
+                        all_temps.append(float(t))
         highest_temp: Optional[dict[str, Any]] = (
             {"value": max(all_temps), "unit": "C"} if all_temps else None
         )
-        chip_temp: Optional[float] = max(chip_temps) if chip_temps else None
-        fans = [
-            FanReading(position=i, rpm=rpm, target_speed_ratio=0.0, chip_temp=chip_temp)
-            for i, rpm in enumerate(stats.get("fan", []))
-        ]
         return cls(fans=fans, highest_temperature=highest_temp)
 
     @classmethod
