@@ -306,12 +306,22 @@ class HashrateData:
     ) -> HashrateData:
         summary = (summary_raw.get("SUMMARY") or [{}])[0]
         stats = (stats_raw.get("STATS") or [{}])[0]
+        # bdminer's "MHS av" is a since-boot lifetime average: it stays high
+        # after a miner goes idle/suspended, and the pipeline maps ghs_av to the
+        # actual-hashrate ("1h") metric that drives billing — so a stopped miner
+        # would over-report. Use the best recent rolling window instead
+        # (15m -> 5m -> 1m); a present-but-zero window is honest (miner idle).
+        # Fall back to the lifetime average only if no rolling window is reported.
+        rolling_avg_mhs: Optional[float] = next(
+            (summary[w] for w in ("MHS 15m", "MHS 5m", "MHS 1m") if summary.get(w) is not None),
+            summary.get("MHS av"),
+        )
         miner_stats = {
             "ghs_5s": summary.get("MHS 5s", 0) / 1000,
             "ghs_1m": summary.get("MHS 1m", 0) / 1000,
             "ghs_5m": summary.get("MHS 5m", 0) / 1000,
             "ghs_15m": summary.get("MHS 15m", 0) / 1000,
-            "ghs_av": summary.get("MHS av", 0) / 1000,
+            "ghs_av": (rolling_avg_mhs or 0) / 1000,
             "hardware_errors": summary.get("Hardware Errors", 0),
             "nominal_ghs": stats.get("MHS(Ideal)", 0) / 1000,
         }
@@ -630,14 +640,19 @@ class HashboardData:
                 for j in range(4)
                 if isinstance(stats.get(f"{i} Temp {j}"), (int, float)) and stats[f"{i} Temp {j}"] > 0
             ]
-            board_temp: Optional[dict[str, Any]] = (
+            # bdminer's per-board "{i} Temp {j}" sensors are on-die chip temps; it
+            # exposes no separate board sensor, so the hottest of them is both the
+            # board_temp and the highest_chip_temp. Populating highest_chip_temp is
+            # required for analytics.miner_monthly_thermal (keyed on chip temp).
+            hottest: Optional[dict[str, Any]] = (
                 {"value": max(sensor_temps), "unit": "C"} if sensor_temps else None
             )
+            board_temp = hottest
             freq = stats.get(f"{i} Freq")
             boards.append(HashboardReading(
                 board_name=f"Board {i}",
                 board_temp=board_temp,
-                highest_chip_temp=None,
+                highest_chip_temp=hottest,
                 lowest_inlet_temp=None,
                 highest_outlet_temp=None,
                 chips_count=int(stats.get(f"{i} Chip Count", 0)),
@@ -647,6 +662,10 @@ class HashboardData:
                     "mhs_av": stats.get(f"{i} MHS(Avg)", 0),
                     "mhs_1m": stats.get(f"{i} MHS(1m)", 0),
                     "mhs_5m": stats.get(f"{i} MHS(5m)", 0),
+                    # Per-board nominal (bdminer "{i} MHS(Ideal)"), emitted as
+                    # nominal_mhs so the pipeline's boardNominalGhs picks it up
+                    # (matches LuxOS). Feeds the hashboard nominal fallback.
+                    "nominal_mhs": stats.get(f"{i} MHS(Ideal)", 0),
                     "hardware_errors": stats.get(f"{i} HW", 0),
                     "serial_number": stats.get(f"{i} SN", ""),
                     "low_hash": stats.get(f"{i} Low Hash", False),
