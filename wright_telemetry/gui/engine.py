@@ -62,7 +62,8 @@ class ScanningEngine:
         self.controller = AgentController()
         self.signals = EngineSignals()
 
-        from wright_telemetry.discovery import all_firmware_types
+        from wright_telemetry.discovery import all_firmware_types, apply_discovery_debug
+        apply_discovery_debug(cfg)
         fw_types = cfg.get("collector_types") or all_firmware_types()
         self.scan_manager = ScanManager(self.controller, fw_types)
 

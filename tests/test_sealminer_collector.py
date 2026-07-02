@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from wright_telemetry.models import HashboardData, HashrateData
+
 
 class TestAuthentication:
 
@@ -59,7 +61,7 @@ class TestFetchCooling:
 
     def test_highest_temperature_from_boards(self, mock_sealminer_api, sealminer_collector):
         cooling = sealminer_collector.fetch_cooling()
-        # Board temps are 62, 65, 67; PSU HOT is 55 — max is 67
+        # Board max temps are 62, 65, 67; PSU AMB is 38 — overall max is 67
         assert cooling.highest_temperature == {"value": 67.0, "unit": "C"}
 
     def test_no_fans(self, sealminer_collector):
@@ -77,8 +79,32 @@ class TestFetchHashrate:
     def test_miner_stats(self, mock_sealminer_api, sealminer_collector):
         hr = sealminer_collector.fetch_hashrate()
         assert abs(hr.miner_stats["ghs_5s"] - 22683116.68 / 1000) < 1
-        assert abs(hr.miner_stats["ghs_av"] - 206852501.39 / 1000) < 1
+        # ghs_av comes from the recent rolling window (MHS 15m), not the
+        # since-boot "MHS av" lifetime average.
+        assert abs(hr.miner_stats["ghs_av"] - 215820922.90 / 1000) < 1
         assert hr.miner_stats["hardware_errors"] == 1
+
+    @staticmethod
+    def _hr(summary):
+        return HashrateData.from_sealminer({"SUMMARY": [summary]}, {"POOLS": []}, {"STATS": [{}]})
+
+    def test_ghs_av_prefers_15m_over_lifetime(self):
+        hr = self._hr({"MHS 15m": 200_000_000, "MHS 5m": 190_000_000, "MHS av": 380_000_000})
+        assert abs(hr.miner_stats["ghs_av"] - 200_000.0) < 1e-6
+
+    def test_ghs_av_falls_back_to_shorter_windows(self):
+        hr = self._hr({"MHS 5m": 190_000_000, "MHS 1m": 180_000_000, "MHS av": 380_000_000})
+        assert abs(hr.miner_stats["ghs_av"] - 190_000.0) < 1e-6
+
+    def test_ghs_av_idle_miner_reports_zero_not_stale_lifetime(self):
+        # Suspended miner: rolling windows have decayed to 0 but lifetime avg
+        # is still high. A present-but-zero window must win over lifetime.
+        hr = self._hr({"MHS 15m": 0, "MHS 5m": 0, "MHS 1m": 0, "MHS av": 379_518_000})
+        assert hr.miner_stats["ghs_av"] == 0
+
+    def test_ghs_av_lifetime_only_when_no_rolling_window(self):
+        hr = self._hr({"MHS av": 167_000_000})
+        assert abs(hr.miner_stats["ghs_av"] - 167_000.0) < 1e-6
 
     def test_nominal_ghs(self, mock_sealminer_api, sealminer_collector):
         hr = sealminer_collector.fetch_hashrate()
@@ -93,7 +119,10 @@ class TestFetchHashrate:
     def test_power_stats(self, mock_sealminer_api, sealminer_collector):
         hr = sealminer_collector.fetch_hashrate()
         assert hr.power_stats["watts"] == 3998
-        assert abs(hr.power_stats["efficiency"] - 0.936937) < 1e-4
+        # efficiency is W/T(Avg) (watts-per-terahash / J-per-TH) per the bdminer
+        # spec, not the 0-1 "PSU Efficiency" ratio (kept as psu_efficiency).
+        assert abs(hr.power_stats["efficiency"] - 24.084337) < 1e-4
+        assert abs(hr.power_stats["psu_efficiency"] - 0.936937) < 1e-4
 
     def test_empty_response_defaults(self, sealminer_collector):
         with patch.object(
@@ -148,6 +177,15 @@ class TestFetchHashboards:
         assert board.enabled is True
         assert board.chips_count == 364
         assert board.board_temp == {"value": 62.0, "unit": "C"}
+        # bdminer's per-board sensors are chip temps; highest_chip_temp must be
+        # populated (not None) so the pipeline's thermal MV picks them up.
+        assert board.highest_chip_temp == {"value": 62.0, "unit": "C"}
+
+    def test_board_highest_chip_temp_none_without_sensors(self, sealminer_collector):
+        stats = {"STATS": [{"Board Count": 1, "0 Online": True}]}
+        hb = HashboardData.from_sealminer(stats)
+        assert hb.hashboards[0].highest_chip_temp is None
+        assert hb.hashboards[0].board_temp is None
 
     def test_board_stats(self, mock_sealminer_api, sealminer_collector):
         hb = sealminer_collector.fetch_hashboards()
@@ -155,6 +193,10 @@ class TestFetchHashboards:
         assert board.stats["serial_number"] == "H0152730628KPA526T2BV00610011"
         assert board.stats["hardware_errors"] == 0
         assert board.stats["low_hash"] is False
+        # Per-board nominal (MHS(Ideal)) emitted as nominal_mhs; the pipeline's
+        # boardNominalGhs reads this (÷1000 → GH/s).
+        assert board.stats["nominal_mhs"] == 56020782
+        assert board.stats["mhs_5m"] == 55842655.026126
 
     def test_board_freq(self, mock_sealminer_api, sealminer_collector):
         hb = sealminer_collector.fetch_hashboards()
@@ -186,14 +228,25 @@ class TestFetchErrors:
             assert "chip_addr_0x0A" in errs.errors[0].message
             assert errs.errors[0].components[0]["chips"] == "chip_addr_0x0A"
 
-    def test_error_code_creates_entry(self, sealminer_collector):
+    def test_error_code_with_bad_chips_creates_entry(self, sealminer_collector):
+        # Error code alone (e.g. 602 on a healthy machine) should not fire;
+        # it must be accompanied by a real hardware indicator.
         with patch.object(
             sealminer_collector, "_send_command",
-            return_value={"STATS": [{"Error Chip": "", "Error Code": "E001"}]},
+            return_value={"STATS": [{"Error Chip": "", "Error Code": "E001", "Bad Chip Count": 1, "Board Count": 0}]},
         ):
             errs = sealminer_collector.fetch_errors()
             assert len(errs.errors) == 1
             assert errs.errors[0].error_codes[0]["code"] == "E001"
+
+    def test_error_code_alone_no_entry(self, sealminer_collector):
+        # Bare error code with no chip/HW errors (e.g. status code 602) must not create a false entry.
+        with patch.object(
+            sealminer_collector, "_send_command",
+            return_value={"STATS": [{"Error Chip": "", "Error Code": "602", "Bad Chip Count": 0, "Board Count": 0}]},
+        ):
+            errs = sealminer_collector.fetch_errors()
+            assert len(errs.errors) == 0
 
     def test_both_chip_and_code_combined_in_message(self, sealminer_collector):
         with patch.object(

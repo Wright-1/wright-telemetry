@@ -8,7 +8,9 @@ Currently supports Braiins OS and LuxOS; Vnish probes can be added to
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
+import os
 import socket
 import sys
 import threading
@@ -22,6 +24,30 @@ logger = logging.getLogger(__name__)
 
 _PROBE_TIMEOUT = 2  # seconds per host
 _MAX_WORKERS = 128
+
+# When enabled, the CGMiner-family probes (LuxOS, Sealminer) log the raw 4028
+# response and the match outcome for every device that answers — so a field
+# scan produces a diagnosable collector.log even without hardware access.
+# Toggle via config ("discovery": {"debug": true}) which the GUI/scheduler push
+# into this flag at startup, or the WRIGHT_DISCOVERY_DEBUG env var.
+DISCOVERY_DEBUG = False
+
+
+def _discovery_debug() -> bool:
+    return DISCOVERY_DEBUG or os.environ.get(
+        "WRIGHT_DISCOVERY_DEBUG", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+
+def apply_discovery_debug(cfg: dict[str, Any]) -> None:
+    """Set the module-level :data:`DISCOVERY_DEBUG` flag from a config dict.
+
+    Called by the GUI engine and scheduler at startup so a site can turn on
+    verbose discovery logging with ``"discovery": {"debug": true}`` in its
+    config, without an env var or code change.
+    """
+    global DISCOVERY_DEBUG
+    DISCOVERY_DEBUG = bool((cfg.get("discovery") or {}).get("debug", False))
 
 
 # ------------------------------------------------------------------
@@ -150,6 +176,60 @@ def load_subnets_file(path: str) -> list[str]:
                 continue
             subnets.append(stripped)
     return subnets
+
+
+# ------------------------------------------------------------------
+# CGMiner-style TCP API helpers (port 4028)
+# ------------------------------------------------------------------
+
+def _read_cgminer_response(
+    sock: socket.socket, timeout: float
+) -> Optional[dict[str, Any]]:
+    """Read a single CGMiner-style JSON reply from an open socket.
+
+    CGMiner-family APIs send one JSON object per command.  The classic server
+    closes the connection afterwards, but some firmware — bdminer (Sealminer)
+    in particular — leaves it open.  A naive read-until-EOF loop then blocks
+    until the timeout and the reply is lost, so the miner is never discovered.
+
+    We therefore return as soon as the accumulated buffer parses as JSON, and
+    only fall back to EOF/timeout when it never completes.
+
+    Returns the parsed dict, ``None`` if the peer sent nothing, and raises
+    ``json.JSONDecodeError`` if bytes arrived but never formed valid JSON.
+    """
+    sock.settimeout(timeout)
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = sock.recv(4096)
+        except socket.timeout:
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+        buf = b"".join(chunks).rstrip(b"\x00")
+        try:
+            # Stop as soon as we have a complete object — don't wait for EOF.
+            return json.loads(buf.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue  # reply not complete yet — keep reading
+
+    buf = b"".join(chunks).rstrip(b"\x00")
+    if not buf:
+        return None
+    return json.loads(buf.decode("utf-8"))
+
+
+def _cgminer_query(
+    ip: str, command: str, timeout: float = _PROBE_TIMEOUT
+) -> Optional[dict[str, Any]]:
+    """Open a fresh TCP connection to ``ip:4028`` and run one CGMiner command."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        sock.connect((ip, 4028))
+        sock.sendall(json.dumps({"command": command}).encode("utf-8"))
+        return _read_cgminer_response(sock, timeout)
 
 
 # ------------------------------------------------------------------
@@ -319,47 +399,55 @@ def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
     return None
 
 
+def _looks_like_sealminer(version_data: dict[str, Any]) -> bool:
+    """Return True if a ``version`` reply fingerprints as Sealminer (bdminer).
+
+    Older firmware (K10Pro) returns ``VERSION: [{"Bdminer": "4.11.1", ...}]``,
+    but the model/key naming varies across the Sealminer line, so we also accept
+    the ``bdminer`` marker that bdminer stamps into the STATUS ``Description``
+    (e.g. ``"bdminer 4.11.1"``) or anywhere in the version object.  ``bdminer``
+    is distinctive enough that this won't collide with LuxOS/Braiins/Vnish.
+    """
+    version_list = version_data.get("VERSION") or []
+    if version_list and "BDMiner" in version_list[0]:
+        return True
+    blob = json.dumps(version_data).lower()
+    return "bdminer" in blob
+
+
 def _probe_sealminer(ip: str) -> Optional[DiscoveredMiner]:
-    """Send a ``version`` command to port 4028; a ``Bdminer`` key confirms Sealminer."""
-    import json as _json
+    """Send a ``version`` command to port 4028; a ``bdminer`` marker confirms Sealminer."""
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(_PROBE_TIMEOUT)
-            sock.connect((ip, 4028))
-            sock.sendall(b'{"command": "version"}')
-            chunks: list[bytes] = []
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-        body = b"".join(chunks).decode("utf-8").rstrip("\x00")
-        data = _json.loads(body)
-        version_list = data.get("VERSION", [])
-        if not version_list or "Bdminer" not in version_list[0]:
-            return None
-        mac = ""
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock2:
-                sock2.settimeout(_PROBE_TIMEOUT)
-                sock2.connect((ip, 4028))
-                sock2.sendall(b'{"command": "stats"}')
-                stats_chunks: list[bytes] = []
-                while True:
-                    c = sock2.recv(4096)
-                    if not c:
-                        break
-                    stats_chunks.append(c)
-            stats_body = b"".join(stats_chunks).decode("utf-8").rstrip("\x00")
-            stats_data = _json.loads(stats_body)
-            stats = (stats_data.get("STATS") or [{}])[0]
-            mac = stats.get("MAC", "")
-        except Exception:
-            pass
-        return DiscoveredMiner(ip=ip, firmware="sealminer", hostname="", mac_address=mac)
-    except (socket.error, ValueError, _json.JSONDecodeError):
+        data = _cgminer_query(ip, "version")
+    except (socket.error, ValueError):
+        return None
+
+    if not data:
+        return None
+
+    # A device answered on 4028.  Log this unconditionally at INFO: it is the
+    # single most useful discovery signal and is bounded by the number of hosts
+    # with the API port open (i.e. miner count), not subnet size — so it stays
+    # quiet on a normal network while making a failed field scan fully
+    # diagnosable from a downloaded collector.log (no debug flag to set).  When
+    # debug is enabled we widen the raw snippet for full-contract capture.
+    matched = _looks_like_sealminer(data)
+    snippet = json.dumps(data)[: 2000 if _discovery_debug() else 400]
+    logger.info(
+        "discovery: %s:4028 answered 'version' (sealminer match=%s): %s",
+        ip, matched, snippet,
+    )
+    if not matched:
+        return None
+
+    mac = ""
+    try:
+        stats_data = _cgminer_query(ip, "stats")
+        stats = (stats_data.get("STATS") or [{}])[0] if stats_data else {}
+        mac = stats.get("MAC", "")
+    except (socket.error, ValueError):
         pass
-    return None
+    return DiscoveredMiner(ip=ip, firmware="sealminer", hostname="", mac_address=mac)
 
 
 _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
@@ -454,6 +542,11 @@ def scan_hosts(
     if not probes or not hosts:
         return []
 
+    logger.info(
+        "discovery: scanning %d host(s) for firmware %s",
+        len(hosts), ", ".join(probes),
+    )
+
     total = len(hosts)
     discovered: list[DiscoveredMiner] = []
     scanned = 0
@@ -485,6 +578,27 @@ def scan_hosts(
 
     if cancelled:
         return discovered   # return partial results; caller checks cancel_event
+
+    breakdown: dict[str, int] = {}
+    for m in discovered:
+        breakdown[m.firmware] = breakdown.get(m.firmware, 0) + 1
+    if discovered:
+        logger.info(
+            "discovery: scan complete — %d miner(s) found across %d host(s): %s",
+            len(discovered), total, breakdown,
+        )
+    else:
+        # No matches.  Combined with the per-host "answered on 4028" lines above,
+        # this pinpoints the cause from the log alone: if there are NO "answered
+        # on 4028" lines, nothing is reachable on the API port (firewall / wrong
+        # subnet / API not enabled); if there ARE such lines with match=False,
+        # it's a firmware-fingerprint problem to fix in the probe.
+        logger.warning(
+            "discovery: scan complete — 0 miners found across %d host(s) "
+            "(firmware probed: %s). If miners are present, check that they are "
+            "reachable on TCP port 4028 from this machine and on the right subnet.",
+            total, ", ".join(probes),
+        )
 
     discovered.sort(key=lambda m: tuple(int(p) for p in m.ip.split(".")))
     return discovered

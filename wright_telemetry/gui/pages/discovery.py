@@ -1154,6 +1154,8 @@ class DiscoveryPage(QWidget):
 
     def _on_total_changed(self, total: int) -> None:
         self._total_miners = total
+        if total > 0:
+            self._failed_scan_count = 0
         self._warning.setVisible(False)
         if total > 0:
             n = self._scans_card.row_count()

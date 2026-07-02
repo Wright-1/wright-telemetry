@@ -26,7 +26,7 @@ from wright_telemetry import __version__
 # a runtime call to set_config_location() is reflected in the log file path.
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
-_LOKI_DEFAULT_URL = "https://logs.wrightfan.com/loki/api/v1/push"
+_LOKI_DEFAULT_URL = "https://monitoring.wrightfan.com/loki/api/v1/push"
 _LOKI_FLUSH_INTERVAL = 10  # seconds
 _LOKI_BATCH_SIZE = 100
 
@@ -172,8 +172,9 @@ def configure_logging(
             "collector_version": __version__,
             "hostname": socket.gethostname(),
         }
+        loki_url = os.environ.get("WRIGHT_LOKI_URL", _LOKI_DEFAULT_URL)
         loki_handler = LokiHandler(
-            url=_LOKI_DEFAULT_URL,
+            url=loki_url,
             auth_value=loki_auth,
             labels=labels,
         )
@@ -181,7 +182,7 @@ def configure_logging(
         root.addHandler(loki_handler)
         logging.getLogger(__name__).info(
             "Diagnostic logs are being sent to Wright One for troubleshooting (%s)",
-            _LOKI_DEFAULT_URL,
+            loki_url,
         )
     else:
         logging.getLogger(__name__).debug("Loki log handler disabled (WRIGHT_LOKI_AUTH not set)")

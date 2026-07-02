@@ -153,12 +153,16 @@ class CoolingData:
         all_temps: list[float] = []
         board_count = int(stats.get("Board Count", 0))
         for i in range(board_count):
-            t = stats.get(f"{i} Temp")
-            if isinstance(t, (int, float)) and t > 0:
-                all_temps.append(float(t))
-        psu_hot = stats.get("PSU Temp HOT")
-        if isinstance(psu_hot, (int, float)) and psu_hot > 0:
-            all_temps.append(float(psu_hot))
+            sensor_temps = [
+                float(stats[f"{i} Temp {j}"])
+                for j in range(4)
+                if isinstance(stats.get(f"{i} Temp {j}"), (int, float)) and stats[f"{i} Temp {j}"] > 0
+            ]
+            if sensor_temps:
+                all_temps.append(max(sensor_temps))
+        psu_amb = stats.get("PSU Temp AMB")
+        if isinstance(psu_amb, (int, float)) and psu_amb > 0:
+            all_temps.append(float(psu_amb))
         highest_temp: Optional[dict[str, Any]] = (
             {"value": max(all_temps), "unit": "C"} if all_temps else None
         )
@@ -302,12 +306,22 @@ class HashrateData:
     ) -> HashrateData:
         summary = (summary_raw.get("SUMMARY") or [{}])[0]
         stats = (stats_raw.get("STATS") or [{}])[0]
+        # bdminer's "MHS av" is a since-boot lifetime average: it stays high
+        # after a miner goes idle/suspended, and the pipeline maps ghs_av to the
+        # actual-hashrate ("1h") metric that drives billing — so a stopped miner
+        # would over-report. Use the best recent rolling window instead
+        # (15m -> 5m -> 1m); a present-but-zero window is honest (miner idle).
+        # Fall back to the lifetime average only if no rolling window is reported.
+        rolling_avg_mhs: Optional[float] = next(
+            (summary[w] for w in ("MHS 15m", "MHS 5m", "MHS 1m") if summary.get(w) is not None),
+            summary.get("MHS av"),
+        )
         miner_stats = {
             "ghs_5s": summary.get("MHS 5s", 0) / 1000,
             "ghs_1m": summary.get("MHS 1m", 0) / 1000,
             "ghs_5m": summary.get("MHS 5m", 0) / 1000,
             "ghs_15m": summary.get("MHS 15m", 0) / 1000,
-            "ghs_av": summary.get("MHS av", 0) / 1000,
+            "ghs_av": (rolling_avg_mhs or 0) / 1000,
             "hardware_errors": summary.get("Hardware Errors", 0),
             "nominal_ghs": stats.get("MHS(Ideal)", 0) / 1000,
         }
@@ -330,7 +344,12 @@ class HashrateData:
         }
         power_stats = {
             "watts": stats.get("PSU Input Power", 0),
-            "efficiency": stats.get("PSU Efficiency", 0),
+            # bdminer reports true mining efficiency as W/T = watts-per-terahash
+            # (J/TH), matching what the pipeline stores as efficiency_j_per_th.
+            # "PSU Efficiency" is a 0-1 electrical ratio — a different metric —
+            # so it is exposed separately rather than as `efficiency`.
+            "efficiency": stats.get("W/T(Avg)", 0),
+            "psu_efficiency": stats.get("PSU Efficiency", 0),
         }
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
@@ -616,15 +635,24 @@ class HashboardData:
         board_count = int(stats.get("Board Count", 0))
         boards: list[HashboardReading] = []
         for i in range(board_count):
-            temp_val = stats.get(f"{i} Temp")
-            board_temp: Optional[dict[str, Any]] = (
-                {"value": float(temp_val), "unit": "C"} if temp_val is not None else None
+            sensor_temps = [
+                float(stats[f"{i} Temp {j}"])
+                for j in range(4)
+                if isinstance(stats.get(f"{i} Temp {j}"), (int, float)) and stats[f"{i} Temp {j}"] > 0
+            ]
+            # bdminer's per-board "{i} Temp {j}" sensors are on-die chip temps; it
+            # exposes no separate board sensor, so the hottest of them is both the
+            # board_temp and the highest_chip_temp. Populating highest_chip_temp is
+            # required for analytics.miner_monthly_thermal (keyed on chip temp).
+            hottest: Optional[dict[str, Any]] = (
+                {"value": max(sensor_temps), "unit": "C"} if sensor_temps else None
             )
+            board_temp = hottest
             freq = stats.get(f"{i} Freq")
             boards.append(HashboardReading(
                 board_name=f"Board {i}",
                 board_temp=board_temp,
-                highest_chip_temp=None,
+                highest_chip_temp=hottest,
                 lowest_inlet_temp=None,
                 highest_outlet_temp=None,
                 chips_count=int(stats.get(f"{i} Chip Count", 0)),
@@ -634,6 +662,10 @@ class HashboardData:
                     "mhs_av": stats.get(f"{i} MHS(Avg)", 0),
                     "mhs_1m": stats.get(f"{i} MHS(1m)", 0),
                     "mhs_5m": stats.get(f"{i} MHS(5m)", 0),
+                    # Per-board nominal (bdminer "{i} MHS(Ideal)"), emitted as
+                    # nominal_mhs so the pipeline's boardNominalGhs picks it up
+                    # (matches LuxOS). Feeds the hashboard nominal fallback.
+                    "nominal_mhs": stats.get(f"{i} MHS(Ideal)", 0),
                     "hardware_errors": stats.get(f"{i} HW", 0),
                     "serial_number": stats.get(f"{i} SN", ""),
                     "low_hash": stats.get(f"{i} Low Hash", False),
@@ -714,14 +746,20 @@ class ErrorData:
         stats = (stats_raw.get("STATS") or [{}])[0]
         error_chip = str(stats.get("Error Chip", "")).strip()
         error_code = str(stats.get("Error Code", "")).strip()
-        if not error_chip and not error_code:
+        board_count = int(stats.get("Board Count", 0))
+        hw_errors = sum(int(stats.get(f"{i} HW", 0)) for i in range(board_count))
+        bad_chips = int(stats.get("Bad Chip Count", 0))
+        # Only surface an error entry when there are real hardware failures.
+        # "Error Code" is always populated (e.g. 602 on healthy machines) so
+        # it is included as metadata only, not used as the trigger.
+        if not error_chip and hw_errors == 0 and bad_chips == 0:
             return cls(errors=[])
         parts = []
         if error_chip:
             parts.append(f"Error chip: {error_chip}")
         if error_code:
             parts.append(f"Error code: {error_code}")
-        msg = " | ".join(parts)
+        msg = " | ".join(parts) if parts else f"HW errors: {hw_errors}, bad chips: {bad_chips}"
         return cls(errors=[ErrorEntry(
             message=msg,
             timestamp="",

@@ -26,6 +26,7 @@ from wright_telemetry.config import decode_password, load_config, mask_config
 from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import DEFAULT_CONSENT, consented_metrics
 from wright_telemetry.discovery import (
+    apply_discovery_debug,
     discover_miners,
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
@@ -96,6 +97,7 @@ def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[st
     if not discovery_cfg.get("enabled", False):
         return []
 
+    apply_discovery_debug(cfg)
     subnets = discovery_cfg.get("subnets")
     collector_types = cfg.get("collector_types") or cfg.get("collector_type", "braiins")
     firmware_types = firmware_types_for_collector(collector_types)

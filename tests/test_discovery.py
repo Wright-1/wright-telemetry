@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import socket
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -16,8 +17,11 @@ import pytest
 from wright_telemetry.discovery import (
     DiscoveredMiner,
     _PROBES,
+    _looks_like_sealminer,
     _probe_braiins,
+    _probe_sealminer,
     _probe_vnish,
+    _read_cgminer_response,
     all_firmware_types,
     default_subnet,
     default_subnets,
@@ -26,6 +30,35 @@ from wright_telemetry.discovery import (
     load_subnets_file,
     parse_ip_target,
 )
+
+SEALMINER_FIXTURES = Path(__file__).parent / "fixtures" / "sealminer"
+
+
+def _load_seal(name: str) -> dict[str, Any]:
+    return json.loads((SEALMINER_FIXTURES / name).read_text())
+
+
+class _FakeSocket:
+    """Minimal socket stand-in for CGMiner read-loop tests.
+
+    Yields the given byte frames from successive ``recv`` calls.  When frames
+    are exhausted it either returns ``b""`` (server closed the connection) or
+    raises ``socket.timeout`` (bdminer-style: connection stays open).
+    """
+
+    def __init__(self, frames: list[bytes], close_after: bool = True):
+        self._frames = list(frames)
+        self._close_after = close_after
+
+    def settimeout(self, _t: float) -> None:
+        pass
+
+    def recv(self, _n: int) -> bytes:
+        if self._frames:
+            return self._frames.pop(0)
+        if self._close_after:
+            return b""
+        raise socket.timeout("timed out")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "braiins"
 
@@ -200,6 +233,126 @@ class TestAllFirmwareTypes:
         # four families and dropped sealminer, so auto-discovery never probed
         # Sealminer miners even though the UI toggle showed it enabled.
         assert "sealminer" in all_firmware_types()
+
+
+# ---------------------------------------------------------------
+# CGMiner response reader (port 4028)
+# ---------------------------------------------------------------
+
+class TestReadCgminerResponse:
+
+    PAYLOAD = b'{"VERSION":[{"Bdminer":"4.11.1","API":"3.7"}]}'
+
+    def test_parses_when_server_closes(self):
+        sock = _FakeSocket([self.PAYLOAD], close_after=True)
+        data = _read_cgminer_response(sock, 1)
+        assert data["VERSION"][0]["Bdminer"] == "4.11.1"
+
+    def test_parses_when_socket_stays_open(self):
+        # Regression: bdminer leaves the connection open. The reader must return
+        # as soon as the buffer parses, not block waiting for an EOF that never
+        # comes (the old read-until-empty loop dropped these miners entirely).
+        sock = _FakeSocket([self.PAYLOAD], close_after=False)
+        data = _read_cgminer_response(sock, 1)
+        assert data["VERSION"][0]["Bdminer"] == "4.11.1"
+
+    def test_handles_chunked_payload(self):
+        sock = _FakeSocket([b'{"VERSION":[{"Bdm', b'iner":"4.11.1"}]}'], close_after=False)
+        data = _read_cgminer_response(sock, 1)
+        assert data["VERSION"][0]["Bdminer"] == "4.11.1"
+
+    def test_strips_trailing_nulls(self):
+        sock = _FakeSocket([b'{"a":1}\x00\x00'], close_after=True)
+        assert _read_cgminer_response(sock, 1) == {"a": 1}
+
+    def test_returns_none_when_nothing_sent(self):
+        sock = _FakeSocket([], close_after=True)
+        assert _read_cgminer_response(sock, 1) is None
+
+    def test_incomplete_then_timeout_raises(self):
+        # Bytes arrived but never formed valid JSON, then the socket timed out:
+        # surface a JSONDecodeError rather than hanging or silently passing.
+        sock = _FakeSocket([b'{"partial":'], close_after=False)
+        with pytest.raises(json.JSONDecodeError):
+            _read_cgminer_response(sock, 1)
+
+
+# ---------------------------------------------------------------
+# Sealminer fingerprint + probe
+# ---------------------------------------------------------------
+
+class TestLooksLikeSealminer:
+
+    def test_bdminer_version_key(self):
+        assert _looks_like_sealminer(_load_seal("version.json"))
+
+    def test_bdminer_in_status_description(self):
+        # Model variant without the "Bdminer" key, but STATUS marks bdminer.
+        data = {
+            "STATUS": [{"Description": "bdminer 4.11.1"}],
+            "VERSION": [{"Type": "SealMiner A2"}],
+        }
+        assert _looks_like_sealminer(data)
+
+    def test_rejects_luxos(self):
+        assert not _looks_like_sealminer({"VERSION": [{"LUXminer": "2024.1.1"}]})
+
+    def test_rejects_empty(self):
+        assert not _looks_like_sealminer({"VERSION": []})
+
+
+class TestProbeSealminer:
+
+    def _fake_query(self):
+        version = _load_seal("version.json")
+        stats = _load_seal("stats.json")
+
+        def _q(ip, command, timeout=2):
+            return version if command == "version" else stats
+
+        return _q
+
+    def test_matches_fixture(self):
+        with patch("wright_telemetry.discovery._cgminer_query", side_effect=self._fake_query()):
+            miner = _probe_sealminer("10.0.0.5")
+        assert miner is not None
+        assert miner.firmware == "sealminer"
+        assert miner.ip == "10.0.0.5"
+        assert miner.mac_address == "32:26:ca:00:38:ea"
+
+    def test_non_sealminer_returns_none(self):
+        with patch(
+            "wright_telemetry.discovery._cgminer_query",
+            return_value={"VERSION": [{"LUXminer": "x"}]},
+        ):
+            assert _probe_sealminer("10.0.0.5") is None
+
+    def test_no_response_returns_none(self):
+        with patch("wright_telemetry.discovery._cgminer_query", return_value=None):
+            assert _probe_sealminer("10.0.0.5") is None
+
+    def test_connection_error_returns_none(self):
+        with patch(
+            "wright_telemetry.discovery._cgminer_query",
+            side_effect=socket.error("refused"),
+        ):
+            assert _probe_sealminer("10.0.0.5") is None
+
+    def test_answered_host_logs_at_info_without_debug(self, caplog):
+        # A Windows GUI user can't set a debug flag, so a device answering on
+        # 4028 must always be logged at INFO — that's what makes a downloaded
+        # collector.log diagnose a failed scan. Here the reply doesn't match, so
+        # the probe returns None but must still emit the diagnostic line.
+        with patch(
+            "wright_telemetry.discovery._cgminer_query",
+            return_value={"VERSION": [{"LUXminer": "x"}]},
+        ):
+            with caplog.at_level("INFO", logger="wright_telemetry.discovery"):
+                assert _probe_sealminer("10.0.0.7") is None
+        assert any(
+            "10.0.0.7" in r.message and "4028" in r.message and "match=False" in r.message
+            for r in caplog.records
+        )
 
 
 # ---------------------------------------------------------------

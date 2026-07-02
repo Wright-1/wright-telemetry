@@ -66,13 +66,25 @@ class SealminerCollector(MinerCollector):
                 sock.connect((self._host, self._port))
                 sock.sendall(raw.encode("utf-8"))
 
+                # bdminer leaves the connection open after replying, so read
+                # until the buffer parses as a complete JSON object rather than
+                # waiting for an EOF that never arrives (which would time out).
                 chunks: list[bytes] = []
+                parsed: Optional[dict[str, Any]] = None
                 while True:
                     chunk = sock.recv(_RECV_BUF)
                     if not chunk:
                         break
                     chunks.append(chunk)
+                    buf = b"".join(chunks).rstrip(b"\x00")
+                    try:
+                        parsed = json.loads(buf.decode("utf-8"))
+                        break
+                    except (ValueError, UnicodeDecodeError):
+                        continue  # reply not complete yet — keep reading
 
+            if parsed is not None:
+                return parsed
             body = b"".join(chunks).decode("utf-8").rstrip("\x00")
             return json.loads(body)
         except (socket.error, json.JSONDecodeError) as exc:
