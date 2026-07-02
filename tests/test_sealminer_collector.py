@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from wright_telemetry.models import HashboardData
+
 
 class TestAuthentication:
 
@@ -151,6 +153,15 @@ class TestFetchHashboards:
         assert board.enabled is True
         assert board.chips_count == 364
         assert board.board_temp == {"value": 62.0, "unit": "C"}
+        # bdminer's per-board sensors are chip temps; highest_chip_temp must be
+        # populated (not None) so the pipeline's thermal MV picks them up.
+        assert board.highest_chip_temp == {"value": 62.0, "unit": "C"}
+
+    def test_board_highest_chip_temp_none_without_sensors(self, sealminer_collector):
+        stats = {"STATS": [{"Board Count": 1, "0 Online": True}]}
+        hb = HashboardData.from_sealminer(stats)
+        assert hb.hashboards[0].highest_chip_temp is None
+        assert hb.hashboards[0].board_temp is None
 
     def test_board_stats(self, mock_sealminer_api, sealminer_collector):
         hb = sealminer_collector.fetch_hashboards()

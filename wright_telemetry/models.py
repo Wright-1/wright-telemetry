@@ -630,14 +630,19 @@ class HashboardData:
                 for j in range(4)
                 if isinstance(stats.get(f"{i} Temp {j}"), (int, float)) and stats[f"{i} Temp {j}"] > 0
             ]
-            board_temp: Optional[dict[str, Any]] = (
+            # bdminer's per-board "{i} Temp {j}" sensors are on-die chip temps; it
+            # exposes no separate board sensor, so the hottest of them is both the
+            # board_temp and the highest_chip_temp. Populating highest_chip_temp is
+            # required for analytics.miner_monthly_thermal (keyed on chip temp).
+            hottest: Optional[dict[str, Any]] = (
                 {"value": max(sensor_temps), "unit": "C"} if sensor_temps else None
             )
+            board_temp = hottest
             freq = stats.get(f"{i} Freq")
             boards.append(HashboardReading(
                 board_name=f"Board {i}",
                 board_temp=board_temp,
-                highest_chip_temp=None,
+                highest_chip_temp=hottest,
                 lowest_inlet_temp=None,
                 highest_outlet_temp=None,
                 chips_count=int(stats.get(f"{i} Chip Count", 0)),
