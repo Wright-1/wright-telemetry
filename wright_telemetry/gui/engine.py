@@ -167,24 +167,29 @@ class ScanningEngine:
 
         self.controller.request_config_reload()
 
-    def enqueue_subnet(self, subnet: str) -> None:
-        """Save subnet to config and add to the scan queue."""
-        subnet = subnet.strip()
-        if not subnet:
+    def enqueue_subnets(self, subnets: list[str]) -> None:
+        """Save subnets to config and add them all to the scan queue in one batch."""
+        cleaned = [s.strip() for s in subnets if s.strip()]
+        if not cleaned:
             return
         from wright_telemetry.config import load_config, save_config
         cfg = load_config() or {}
         disc = cfg.setdefault("discovery", {})
-        subnets: list[str] = disc.get("subnets", [])
-        if subnet not in subnets:
-            subnets.append(subnet)
-            disc["subnets"] = subnets
+        saved: list[str] = disc.get("subnets", [])
+        added = [s for s in cleaned if s not in saved]
+        if added:
+            saved.extend(added)
+            disc["subnets"] = saved
             disc.setdefault("enabled", True)
             cfg["discovery"] = disc
             save_config(cfg)
             self._cfg = cfg
             self.controller.request_config_reload()
-        self.scan_manager.enqueue([subnet])
+        self.scan_manager.enqueue(cleaned)
+
+    def enqueue_subnet(self, subnet: str) -> None:
+        """Save subnet to config and add to the scan queue."""
+        self.enqueue_subnets([subnet])
 
     def cancel_scan(self) -> None:
         """Cancel the currently running scan."""

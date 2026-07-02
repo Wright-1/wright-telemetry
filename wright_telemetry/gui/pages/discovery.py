@@ -167,6 +167,8 @@ class _FirmwareToggle(QWidget):
 class _ProgressEntryCard(QWidget):
     """Scan progress bar (top) and subnet entry form (bottom) in one card."""
 
+    subnets_queued = pyqtSignal(list)   # emitted from _on_add with the entered CIDRs
+
     FIRMWARE_OPTIONS = [
         ("braiins", "Braiins OS"),
         ("luxos",   "LuxOS"),
@@ -209,7 +211,7 @@ class _ProgressEntryCard(QWidget):
         prog.setSpacing(10)
 
         hdr = QHBoxLayout()
-        self._prog_title = _lbl("SCAN PROGRESS", 11, 700, T.TEXT_MUTED)
+        self._prog_title = _lbl("SCAN QUEUE", 11, 700, T.TEXT_MUTED)
         hdr.addWidget(self._prog_title)
         hdr.addStretch()
         self._pct_lbl = _lbl("—", 12, 700, T.TEXT_PRIMARY)
@@ -416,24 +418,40 @@ class _ProgressEntryCard(QWidget):
         add_btn.clicked.connect(self._on_add)
         entry.addWidget(add_btn)
 
-        # Subnet guidance — simple, no card chrome
-        entry.addSpacing(4)
-        guidance_title = QHBoxLayout()
-        guidance_title.setSpacing(6)
-        guidance_title.addWidget(_lbl("ⓘ", 12, 400, T.TEXT_MUTED))
-        guidance_title.addWidget(_lbl("What is a subnet?", 12, 600, T.TEXT_SECONDARY))
-        guidance_title.addStretch()
-        entry.addLayout(guidance_title)
+        # Format guidance
+        entry.addSpacing(6)
+        fmt_title = QHBoxLayout()
+        fmt_title.setSpacing(6)
+        fmt_title.addWidget(_lbl("ⓘ", 12, 400, T.TEXT_MUTED))
+        fmt_title.addWidget(_lbl("Accepted formats", 12, 600, T.TEXT_SECONDARY))
+        fmt_title.addStretch()
+        entry.addLayout(fmt_title)
 
-        guidance_body = _lbl(
-            "A subnet is the network range your devices share — "
-            "like a street address prefix (e.g. 192.168.1.0/24). "
-            "To find yours: check the IP label on your router or switch, "
-            "or open your network manager (Unifi, Sophos, Cisco) and look "
-            "for VLAN or LAN settings.",
-            11, 400, T.TEXT_MUTED, wrap=True,
-        )
-        entry.addWidget(guidance_body)
+        _fmt_style = f"color: {T.TEXT_MUTED}; background: transparent; font-family: monospace;"
+
+        _FORMATS = [
+            ("192.168.1.0/24",          "CIDR — all hosts in the range"),
+            ("10.0.0.1-10.0.0.100",     "IP range — start address to end address"),
+            ("192.168.1.50",            "Single host"),
+        ]
+        for fmt, desc in _FORMATS:
+            row = QHBoxLayout()
+            row.setContentsMargins(18, 0, 0, 0)
+            row.setSpacing(10)
+            fmt_lbl = QLabel(fmt)
+            fmt_lbl.setFont(make_font(11, 500))
+            fmt_lbl.setStyleSheet(_fmt_style)
+            fmt_lbl.setFixedWidth(180)
+            row.addWidget(fmt_lbl)
+            row.addWidget(_lbl(desc, 11, 400, T.TEXT_MUTED))
+            row.addStretch()
+            entry.addLayout(row)
+
+        entry.addSpacing(4)
+        entry.addWidget(_lbl(
+            "Separate multiple entries with commas or new lines.",
+            11, 400, T.TEXT_MUTED,
+        ))
 
         outer.addWidget(entry_widget)
 
@@ -449,38 +467,58 @@ class _ProgressEntryCard(QWidget):
 
     # ── Progress slots ────────────────────────────────────────────────────────
 
-    def set_scanning(self, subnet: str, total: int) -> None:
+    def set_scanning(self, subnet: str, completed_before: int,
+                     total_subnets: int) -> None:
+        """Called when a subnet starts scanning. Bar reflects queue-level progress."""
         self._scanning = True
         self._prog_title.setText("SCANNING")
-        self._status_lbl.setText(f"Scanning: {subnet}")
-        self._counts_lbl.setText(f"0 / {total} hosts")
-        self._bar.setMaximum(max(total, 1))
-        self._bar.setValue(0)
-        self._pct_lbl.setText("0%")
+        self._status_lbl.setText(f"Scanning {subnet}")
+        self._counts_lbl.setText("")
+        self._bar.setMaximum(max(total_subnets, 1))
+        self._bar.setValue(completed_before)
+        self._pct_lbl.setText(f"{completed_before} / {total_subnets}")
         self._next_scan_lbl.setVisible(False)
         self._style_cancel()
 
     def update_progress(self, subnet: str, scanned: int, total: int) -> None:
-        pct = int(scanned / total * 100) if total else 0
-        self._bar.setMaximum(max(total, 1))
-        self._bar.setValue(scanned)
-        self._pct_lbl.setText(f"{pct}%")
+        """Update per-host progress subtitle; bar is queue-level only."""
         self._counts_lbl.setText(f"{scanned} / {total} hosts")
 
-    def set_idle(self, last_scan_ts: Optional[float] = None) -> None:
+    def set_idle(self, completed: int = 0, total_subnets: int = 0,
+                 last_scan_ts: Optional[float] = None) -> None:
+        """Called when the queue is empty or no scan is running."""
         self._scanning = False
-        self._prog_title.setText("SCAN PROGRESS")
-        self._status_lbl.setText(f"Last scan: {_time_ago(last_scan_ts)}")
+        self._prog_title.setText("SCAN QUEUE")
         self._counts_lbl.setText("")
-        self._bar.setValue(0)
-        self._pct_lbl.setText("—")
+        self._bar.setMaximum(max(total_subnets, 1))
+        self._bar.setValue(completed)
+        if total_subnets > 0:
+            self._pct_lbl.setText(f"{completed} / {total_subnets}")
+            if completed == total_subnets and last_scan_ts is not None:
+                self._status_lbl.setText(f"Last scan: {_time_ago(last_scan_ts)}")
+            elif completed == total_subnets:
+                self._status_lbl.setText("Ready to scan")
+            else:
+                self._status_lbl.setText(f"{completed} / {total_subnets} subnets complete")
+        else:
+            self._pct_lbl.setText("—")
+            self._status_lbl.setText("No subnets configured")
         self._next_scan_lbl.setVisible(True)
         self._refresh_countdown()
         self._style_start()
 
-    def set_cancelled(self, subnet: str) -> None:
-        self.set_idle()
+    def set_cancelled(self, subnet: str, completed: int = 0,
+                      total_subnets: int = 0) -> None:
+        self._scanning = False
+        self._counts_lbl.setText("")
+        self._bar.setMaximum(max(total_subnets, 1))
+        self._bar.setValue(completed)
+        if total_subnets:
+            self._pct_lbl.setText(f"{completed} / {total_subnets}")
         self._status_lbl.setText(f"Cancelled: {subnet}")
+        self._next_scan_lbl.setVisible(True)
+        self._refresh_countdown()
+        self._style_start()
 
     def _refresh_countdown(self) -> None:
         """Update the 'Next auto scan in X:XX' label from the engine timer."""
@@ -558,9 +596,11 @@ class _ProgressEntryCard(QWidget):
         raw = self._cidr_input.toPlainText().strip()
         if not raw:
             return
-        for cidr in (c.strip() for c in raw.replace("\n", ",").split(",") if c.strip()):
-            self._engine.enqueue_subnet(cidr)
+        cidrs = [c.strip() for c in raw.replace("\n", ",").split(",") if c.strip()]
+        self._engine.enqueue_subnets(cidrs)
         self._cidr_input.clear()
+        # Notify immediately so the table updates without waiting for the drain timer
+        self.subnets_queued.emit(cidrs)
 
     def _on_action(self) -> None:
         if self._engine is None:
@@ -831,7 +871,7 @@ class _ActiveScansCard(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self._scroll.setStyleSheet("background: transparent;")
-        self._scroll.setMinimumHeight(120)
+        self._scroll.setMinimumHeight(320)
 
         self._rows_widget = QWidget()
         self._rows_widget.setStyleSheet("background: transparent;")
@@ -957,6 +997,7 @@ class DiscoveryPage(QWidget):
 
         # ── Combined progress + subnet entry card ─────────────────────────────
         self._progress_entry = _ProgressEntryCard(engine)
+        self._progress_entry.subnets_queued.connect(self._on_user_subnets_queued)
         layout.addWidget(self._progress_entry)
 
         # ── Active scans table ────────────────────────────────────────────────
@@ -974,7 +1015,8 @@ class DiscoveryPage(QWidget):
 
         # ── Populate from existing scan state ─────────────────────────────────
         if engine is not None:
-            for result in engine.scan_manager.get_all_results():
+            all_results = engine.scan_manager.get_all_results()
+            for result in all_results:
                 self._scans_card.add_or_update_row(result)
                 if result.status == "complete":
                     self._scan_completed = True
@@ -985,16 +1027,17 @@ class DiscoveryPage(QWidget):
                         self._last_scan_ts = result.last_scanned
 
             # Restore warning state from existing scan results
-            any_complete = any(
-                r.status == "complete"
-                for r in engine.scan_manager.get_all_results()
-            )
-            total = engine.scan_manager.total_miners()
-            self._warning.setVisible(any_complete and total == 0)
+            any_complete = any(r.status == "complete" for r in all_results)
+            total_miners = engine.scan_manager.total_miners()
+            self._warning.setVisible(any_complete and total_miners == 0)
 
+            # Initialise the queue progress bar
+            _total = len(all_results)
+            _completed = sum(1 for r in all_results if r.status == "complete")
             if engine.scan_manager.is_scanning():
                 self._set_status_scanning()
             else:
+                self._progress_entry.set_idle(_completed, _total, self._last_scan_ts)
                 self._set_status_idle()
 
             self._connect_signals(engine)
@@ -1028,8 +1071,20 @@ class DiscoveryPage(QWidget):
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
+    def _refresh_queue_progress(self) -> None:
+        """Recompute queue stats and update the top progress bar."""
+        if self._engine is None:
+            return
+        results = self._engine.scan_manager.get_all_results()
+        total = len(results)
+        completed = sum(1 for r in results if r.status == "complete")
+        scanning = next((r for r in results if r.status == "scanning"), None)
+        if scanning:
+            self._progress_entry.set_scanning(scanning.subnet, completed, total)
+        else:
+            self._progress_entry.set_idle(completed, total, self._last_scan_ts)
+
     def _on_scan_queued(self, subnet: str) -> None:
-        # Fetch the real result (which carries the local flag) if available
         is_local = False
         if self._engine is not None:
             for r in self._engine.scan_manager.get_all_results():
@@ -1039,13 +1094,14 @@ class DiscoveryPage(QWidget):
         self._scans_card.add_or_update_row(
             SubnetScanResult(subnet=subnet, status="queued", local=is_local)
         )
+        self._refresh_queue_progress()
         self._set_status_scanning()
 
     def _on_scan_started(self, subnet: str, total: int) -> None:
         self._scans_card.add_or_update_row(
             SubnetScanResult(subnet=subnet, status="scanning", total_hosts=total)
         )
-        self._progress_entry.set_scanning(subnet, total)
+        self._refresh_queue_progress()
         self._set_status_scanning()
 
     def _on_scan_progress(self, subnet: str, scanned: int, total: int) -> None:
@@ -1066,24 +1122,35 @@ class DiscoveryPage(QWidget):
             firmware_breakdown=firmware_breakdown,  # type: ignore[arg-type]
             last_scanned=now,
         ))
+        self._refresh_queue_progress()
 
     def _on_scan_cancelled(self, subnet: str) -> None:
         self._had_cancel = True
         self._scans_card.add_or_update_row(
             SubnetScanResult(subnet=subnet, status="cancelled")
         )
-        self._progress_entry.set_cancelled(subnet)
+        if self._engine:
+            results = self._engine.scan_manager.get_all_results()
+            total = len(results)
+            completed = sum(1 for r in results if r.status == "complete")
+            self._progress_entry.set_cancelled(subnet, completed, total)
+        else:
+            self._progress_entry.set_cancelled(subnet)
 
     def _on_queue_empty(self) -> None:
-        self._progress_entry.set_idle(self._last_scan_ts)
+        if self._engine:
+            results = self._engine.scan_manager.get_all_results()
+            total = len(results)
+            completed = sum(1 for r in results if r.status == "complete")
+            self._progress_entry.set_idle(completed, total, self._last_scan_ts)
+        else:
+            self._progress_entry.set_idle(0, 0, self._last_scan_ts)
         self._set_status_idle()
-        # Increment failure counter when scan completes with 0 miners
         if self._scan_completed and self._total_miners == 0 and not self._had_cancel:
             self._failed_scan_count += 1
-        # Show warning only after two consecutive empty scans
         show = self._failed_scan_count >= 2
         self._warning.setVisible(show)
-        self._had_cancel = False   # reset for next scan session
+        self._had_cancel = False
 
     def _on_total_changed(self, total: int) -> None:
         self._total_miners = total
@@ -1118,6 +1185,14 @@ class DiscoveryPage(QWidget):
             "Scan complete — no miners found"
             if self._scan_completed else "No active scan"
         )
+
+    def _on_user_subnets_queued(self, cidrs: list) -> None:
+        """Immediately add rows for user-submitted subnets without waiting for the drain timer."""
+        for s in cidrs:
+            if s not in self._scans_card._rows:
+                self._scans_card.add_or_update_row(SubnetScanResult(subnet=s, status="queued"))
+        self._set_status_scanning()
+        self._refresh_queue_progress()
 
     def _refresh_timestamps(self) -> None:
         if self._engine is None:
