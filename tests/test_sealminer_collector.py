@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from wright_telemetry.models import HashboardData
+from wright_telemetry.models import HashboardData, HashrateData
 
 
 class TestAuthentication:
@@ -79,8 +79,32 @@ class TestFetchHashrate:
     def test_miner_stats(self, mock_sealminer_api, sealminer_collector):
         hr = sealminer_collector.fetch_hashrate()
         assert abs(hr.miner_stats["ghs_5s"] - 22683116.68 / 1000) < 1
-        assert abs(hr.miner_stats["ghs_av"] - 206852501.39 / 1000) < 1
+        # ghs_av comes from the recent rolling window (MHS 15m), not the
+        # since-boot "MHS av" lifetime average.
+        assert abs(hr.miner_stats["ghs_av"] - 215820922.90 / 1000) < 1
         assert hr.miner_stats["hardware_errors"] == 1
+
+    @staticmethod
+    def _hr(summary):
+        return HashrateData.from_sealminer({"SUMMARY": [summary]}, {"POOLS": []}, {"STATS": [{}]})
+
+    def test_ghs_av_prefers_15m_over_lifetime(self):
+        hr = self._hr({"MHS 15m": 200_000_000, "MHS 5m": 190_000_000, "MHS av": 380_000_000})
+        assert abs(hr.miner_stats["ghs_av"] - 200_000.0) < 1e-6
+
+    def test_ghs_av_falls_back_to_shorter_windows(self):
+        hr = self._hr({"MHS 5m": 190_000_000, "MHS 1m": 180_000_000, "MHS av": 380_000_000})
+        assert abs(hr.miner_stats["ghs_av"] - 190_000.0) < 1e-6
+
+    def test_ghs_av_idle_miner_reports_zero_not_stale_lifetime(self):
+        # Suspended miner: rolling windows have decayed to 0 but lifetime avg
+        # is still high. A present-but-zero window must win over lifetime.
+        hr = self._hr({"MHS 15m": 0, "MHS 5m": 0, "MHS 1m": 0, "MHS av": 379_518_000})
+        assert hr.miner_stats["ghs_av"] == 0
+
+    def test_ghs_av_lifetime_only_when_no_rolling_window(self):
+        hr = self._hr({"MHS av": 167_000_000})
+        assert abs(hr.miner_stats["ghs_av"] - 167_000.0) < 1e-6
 
     def test_nominal_ghs(self, mock_sealminer_api, sealminer_collector):
         hr = sealminer_collector.fetch_hashrate()

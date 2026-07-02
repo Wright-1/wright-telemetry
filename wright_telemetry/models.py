@@ -306,12 +306,22 @@ class HashrateData:
     ) -> HashrateData:
         summary = (summary_raw.get("SUMMARY") or [{}])[0]
         stats = (stats_raw.get("STATS") or [{}])[0]
+        # bdminer's "MHS av" is a since-boot lifetime average: it stays high
+        # after a miner goes idle/suspended, and the pipeline maps ghs_av to the
+        # actual-hashrate ("1h") metric that drives billing — so a stopped miner
+        # would over-report. Use the best recent rolling window instead
+        # (15m -> 5m -> 1m); a present-but-zero window is honest (miner idle).
+        # Fall back to the lifetime average only if no rolling window is reported.
+        rolling_avg_mhs: Optional[float] = next(
+            (summary[w] for w in ("MHS 15m", "MHS 5m", "MHS 1m") if summary.get(w) is not None),
+            summary.get("MHS av"),
+        )
         miner_stats = {
             "ghs_5s": summary.get("MHS 5s", 0) / 1000,
             "ghs_1m": summary.get("MHS 1m", 0) / 1000,
             "ghs_5m": summary.get("MHS 5m", 0) / 1000,
             "ghs_15m": summary.get("MHS 15m", 0) / 1000,
-            "ghs_av": summary.get("MHS av", 0) / 1000,
+            "ghs_av": (rolling_avg_mhs or 0) / 1000,
             "hardware_errors": summary.get("Hardware Errors", 0),
             "nominal_ghs": stats.get("MHS(Ideal)", 0) / 1000,
         }
