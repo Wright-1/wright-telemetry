@@ -662,6 +662,10 @@ class HashboardData:
                     "mhs_av": stats.get(f"{i} MHS(Avg)", 0),
                     "mhs_1m": stats.get(f"{i} MHS(1m)", 0),
                     "mhs_5m": stats.get(f"{i} MHS(5m)", 0),
+                    # Per-board nominal (bdminer "{i} MHS(Ideal)"), emitted as
+                    # nominal_mhs so the pipeline's boardNominalGhs picks it up
+                    # (matches LuxOS). Feeds the hashboard nominal fallback.
+                    "nominal_mhs": stats.get(f"{i} MHS(Ideal)", 0),
                     "hardware_errors": stats.get(f"{i} HW", 0),
                     "serial_number": stats.get(f"{i} SN", ""),
                     "low_hash": stats.get(f"{i} Low Hash", False),

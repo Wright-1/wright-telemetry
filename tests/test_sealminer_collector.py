@@ -193,6 +193,10 @@ class TestFetchHashboards:
         assert board.stats["serial_number"] == "H0152730628KPA526T2BV00610011"
         assert board.stats["hardware_errors"] == 0
         assert board.stats["low_hash"] is False
+        # Per-board nominal (MHS(Ideal)) emitted as nominal_mhs; the pipeline's
+        # boardNominalGhs reads this (÷1000 → GH/s).
+        assert board.stats["nominal_mhs"] == 56020782
+        assert board.stats["mhs_5m"] == 55842655.026126
 
     def test_board_freq(self, mock_sealminer_api, sealminer_collector):
         hb = sealminer_collector.fetch_hashboards()
