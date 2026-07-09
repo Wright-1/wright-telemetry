@@ -521,6 +521,40 @@ def parse_ip_target(target: str) -> list[str]:
     return [target]
 
 
+class IPRangeMatcher:
+    """Membership test for an IP range (``start-end``), mirroring the
+    ``in`` support that :class:`ipaddress.IPv4Network` gives CIDRs."""
+
+    def __init__(self, start: "ipaddress.IPv4Address", end: "ipaddress.IPv4Address") -> None:
+        self._start = int(start)
+        self._end = int(end)
+
+    def __contains__(self, addr: "ipaddress.IPv4Address") -> bool:
+        return self._start <= int(addr) <= self._end
+
+
+def parse_subnet_matcher(spec: str) -> "ipaddress.IPv4Network | IPRangeMatcher":
+    """Parse a subnet *spec* (CIDR, range, or single IP) into an object
+    supporting ``addr in matcher``, for grouping hosts by configured subnet.
+
+    Raises ``ValueError`` if *spec* isn't a recognized format.
+    """
+    spec = spec.strip()
+
+    if "/" in spec:
+        return ipaddress.IPv4Network(spec, strict=False)
+
+    if "-" in spec:
+        start_str, end_str = spec.split("-", 1)
+        start = ipaddress.IPv4Address(start_str.strip())
+        end = ipaddress.IPv4Address(end_str.strip())
+        if end < start:
+            start, end = end, start
+        return IPRangeMatcher(start, end)
+
+    return ipaddress.IPv4Network(spec, strict=False)
+
+
 def scan_hosts(
     hosts: list[str],
     firmware_types: Optional[list[str]] = None,
