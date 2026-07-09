@@ -93,13 +93,6 @@ class ScanningEngine:
 
         Must be called after QApplication is running.
         """
-        # Register collector adapters (triggers @register decorators)
-        import wright_telemetry.collectors.bitmain  # noqa: F401
-        import wright_telemetry.collectors.braiins  # noqa: F401
-        import wright_telemetry.collectors.luxos    # noqa: F401
-        import wright_telemetry.collectors.sealminer  # noqa: F401
-        import wright_telemetry.collectors.vnish    # noqa: F401
-
         # Mark GUI mode BEFORE starting the scheduler thread so it never
         # races into the CLI discovery path on its very first _resolve_miners call.
 
