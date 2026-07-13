@@ -24,6 +24,7 @@ from wright_telemetry.models import (
 from wright_telemetry.scheduler import (
     _BASELINE_SAMPLES,
     _build_collectors,
+    _build_scan_summary,
     _detect_fan_dips,
     _poll_cycle,
     _resolve_miners,
@@ -354,6 +355,45 @@ class TestResolveMiners:
         }
         result = _resolve_miners(cfg)
         assert len(result) == 1
+
+
+class TestBuildScanSummary:
+
+    def test_cidr_subnet_groups_miner(self):
+        collectors = [
+            ({"url": "http://10.0.0.5", "mac_address": "AA:BB:CC:DD:EE:01"}, None),
+        ]
+        summary = _build_scan_summary(collectors, "facility-1", ["10.0.0.0/24"])
+        assert len(summary.subnets) == 1
+        assert summary.subnets[0].cidr == "10.0.0.0/24"
+        assert summary.subnets[0].miners == ["facility-1:aa:bb:cc:dd:ee:01"]
+
+    def test_ip_range_subnet_groups_miner(self):
+        # Regression: an IP-range subnet spec (not CIDR) previously produced
+        # "0 subnet(s), 0 miner(s)" because the summary builder used
+        # ipaddress.ip_network directly and rejected/mis-parsed ranges.
+        collectors = [
+            ({"url": "http://10.0.0.105", "mac_address": "AA:BB:CC:DD:EE:02"}, None),
+        ]
+        summary = _build_scan_summary(
+            collectors, "facility-1", ["10.0.0.100-10.0.0.200"],
+        )
+        assert len(summary.subnets) == 1
+        assert summary.subnets[0].cidr == "10.0.0.100-10.0.0.200"
+        assert summary.subnets[0].miners == ["facility-1:aa:bb:cc:dd:ee:02"]
+
+    def test_empty_subnets_omitted(self):
+        summary = _build_scan_summary([], "facility-1", ["10.0.0.0/24"])
+        assert summary.subnets == []
+
+    def test_invalid_subnet_spec_skipped_with_warning(self, caplog):
+        collectors = [
+            ({"url": "http://10.0.0.5", "mac_address": "AA:BB:CC:DD:EE:01"}, None),
+        ]
+        with caplog.at_level("WARNING", logger="wright_telemetry.scheduler"):
+            summary = _build_scan_summary(collectors, "facility-1", ["not-a-subnet"])
+        assert summary.subnets == []
+        assert any("not-a-subnet" in r.message for r in caplog.records)
 
 
 

@@ -16,6 +16,7 @@ import pytest
 
 from wright_telemetry.discovery import (
     DiscoveredMiner,
+    IPRangeMatcher,
     _PROBES,
     _looks_like_sealminer,
     _probe_braiins,
@@ -29,6 +30,7 @@ from wright_telemetry.discovery import (
     firmware_types_for_collector,
     load_subnets_file,
     parse_ip_target,
+    parse_subnet_matcher,
 )
 
 SEALMINER_FIXTURES = Path(__file__).parent / "fixtures" / "sealminer"
@@ -394,6 +396,74 @@ class TestParseIpTarget:
 
 
 # ---------------------------------------------------------------
+# parse_subnet_matcher
+# ---------------------------------------------------------------
+
+class TestParseSubnetMatcher:
+
+    def test_cidr_membership(self):
+        matcher = parse_subnet_matcher("192.168.1.0/24")
+        assert isinstance(matcher, ipaddress.IPv4Network)
+        assert ipaddress.IPv4Address("192.168.1.1") in matcher
+        assert ipaddress.IPv4Address("192.168.1.0") in matcher      # network addr included
+        assert ipaddress.IPv4Address("192.168.1.255") in matcher    # broadcast addr included
+        assert ipaddress.IPv4Address("192.168.2.1") not in matcher
+
+    def test_range_membership(self):
+        matcher = parse_subnet_matcher("10.0.0.100-10.0.0.200")
+        assert isinstance(matcher, IPRangeMatcher)
+        assert ipaddress.IPv4Address("10.0.0.100") in matcher
+        assert ipaddress.IPv4Address("10.0.0.200") in matcher
+        assert ipaddress.IPv4Address("10.0.0.99") not in matcher
+        assert ipaddress.IPv4Address("10.0.0.201") not in matcher
+
+    def test_single_ip_membership(self):
+        matcher = parse_subnet_matcher("192.168.1.50")
+        assert ipaddress.IPv4Address("192.168.1.50") in matcher
+        assert ipaddress.IPv4Address("192.168.1.51") not in matcher
+
+    def test_reversed_range_membership(self):
+        matcher = parse_subnet_matcher("10.0.0.9-10.0.0.1")
+        assert ipaddress.IPv4Address("10.0.0.1") in matcher
+        assert ipaddress.IPv4Address("10.0.0.9") in matcher
+        assert ipaddress.IPv4Address("10.0.0.10") not in matcher
+
+    def test_garbage_raises_value_error(self):
+        with pytest.raises(ValueError):
+            parse_subnet_matcher("not-an-ip-or-cidr")
+
+
+# ---------------------------------------------------------------
+# parse_ip_target / parse_subnet_matcher equivalence
+# ---------------------------------------------------------------
+
+class TestParseIpTargetMatchesTodaysOutput:
+    """parse_ip_target is now built on parse_subnet_matcher().hosts() — pin
+    down today's expansion for every format so that refactor can't silently
+    change behavior."""
+
+    def test_cidr_24(self):
+        assert parse_ip_target("192.168.1.0/24") == [
+            str(ip) for ip in ipaddress.IPv4Network("192.168.1.0/24").hosts()
+        ]
+
+    def test_cidr_30(self):
+        assert parse_ip_target("10.0.0.0/30") == ["10.0.0.1", "10.0.0.2"]
+
+    def test_range(self):
+        assert parse_ip_target("192.168.1.100-192.168.1.105") == [
+            f"192.168.1.{i}" for i in range(100, 106)
+        ]
+
+    def test_reversed_range(self):
+        assert parse_ip_target("192.168.1.105-192.168.1.100") == [
+            f"192.168.1.{i}" for i in range(100, 106)
+        ]
+
+    def test_single_ip(self):
+        assert parse_ip_target("192.168.1.50") == ["192.168.1.50"]
+
+
 # ---------------------------------------------------------------
 # discovered_to_miner_cfgs
 # ---------------------------------------------------------------

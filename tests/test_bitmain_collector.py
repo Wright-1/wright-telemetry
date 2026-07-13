@@ -346,3 +346,13 @@ class TestFactoryRegistration:
         c = CollectorFactory.create("bitmain", url=BITMAIN_URL, username="root", password="root")
         assert isinstance(c, BitmainCollector)
         c.close()
+
+    def test_package_import_registers_all_adapters(self):
+        """Importing wright_telemetry.collectors alone (no per-adapter imports)
+        must register every adapter — this is what the --subnets-file headless
+        path relies on instead of importing individual adapter modules."""
+        import wright_telemetry.collectors  # noqa: F401
+        from wright_telemetry.collectors.factory import CollectorFactory
+        available = CollectorFactory.available()
+        for name in ("bitmain", "braiins", "luxos", "sealminer", "vnish"):
+            assert name in available

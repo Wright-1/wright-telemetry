@@ -30,6 +30,7 @@ from wright_telemetry.discovery import (
     discover_miners,
     discovered_to_miner_cfgs,
     firmware_types_for_collector,
+    parse_subnet_matcher,
 )
 from wright_telemetry.models import (
     CoolingData,
@@ -214,17 +215,17 @@ def _build_scan_summary(
 ) -> ScanSummaryData:
     """Build a facility-level topology snapshot from the current collector list.
 
-    Miners are grouped into their matching configured CIDR. Subnets with no
-    miners are omitted from the result.
+    Miners are grouped into their matching configured subnet (CIDR or IP
+    range). Subnets with no miners are omitted from the result.
     """
     import ipaddress
 
     networks = []
     for cidr in subnets:
         try:
-            networks.append((cidr, ipaddress.ip_network(cidr, strict=False)))
+            networks.append((cidr, parse_subnet_matcher(cidr)))
         except ValueError:
-            logger.warning("Invalid subnet CIDR in discovery config: %s", cidr)
+            logger.warning("Invalid subnet spec in discovery config: %s", cidr)
 
     subnet_miners: dict[str, list[str]] = {cidr: [] for cidr, _ in networks}
 
