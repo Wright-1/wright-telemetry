@@ -82,8 +82,9 @@ def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[st
     default_user   = discovery_cfg.get("default_username",    "root")
     default_pw_b64 = discovery_cfg.get("default_password_b64", "")
 
-    #Controller already exists so just use the miners that it has found
-    if controller is not None:
+    # A GUI ScanManager is wired up: its scans already keep the shared store
+    # up to date, so just read from it instead of scanning again here.
+    if controller is not None and getattr(controller, "has_scan_manager", False):
         raw = controller.get_discovered_miners()
         return [
             {
@@ -906,7 +907,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
             collectors = _build_collectors(miners, default_collector_type)
 
             if not collectors:
-                if controller is None:
+                if controller is None or not getattr(controller, "has_scan_manager", False):
                     logger.error("No miners found (configured or discovered). Run --setup to add miners.")
                     time.sleep(poll_interval)
                     continue
@@ -934,7 +935,9 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 now = time.time()
 
                 # GUI always reads from the shared store (free); TUI scans on the interval.
-                if controller is not None or (discovery_enabled and (now - last_scan) >= scan_interval):
+                if (controller is not None and getattr(controller, "has_scan_manager", False)) or (
+                    discovery_enabled and (now - last_scan) >= scan_interval
+                ):
                     logger.info("Running periodic miner re-discovery…")
                     refreshed = _resolve_miners(cfg, controller)  # pass controller for GUI store
 
