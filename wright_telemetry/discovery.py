@@ -14,6 +14,7 @@ import os
 import socket
 import sys
 import threading
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -495,32 +496,6 @@ def firmware_types_for_collector(
 ProgressCallback = Callable[[int, int], None]
 
 
-def parse_ip_target(target: str) -> list[str]:
-    """Parse a target string into a list of individual IP addresses.
-
-    Accepted formats:
-        CIDR      – ``192.168.1.0/24``
-        Range     – ``192.168.1.100-192.168.1.200``
-        Single IP – ``192.168.1.50``
-    """
-    target = target.strip()
-
-    if "/" in target:
-        network = ipaddress.IPv4Network(target, strict=False)
-        return [str(ip) for ip in network.hosts()]
-
-    if "-" in target:
-        start_str, end_str = target.split("-", 1)
-        start = ipaddress.IPv4Address(start_str.strip())
-        end = ipaddress.IPv4Address(end_str.strip())
-        if end < start:
-            start, end = end, start
-        return [str(ipaddress.IPv4Address(i)) for i in range(int(start), int(end) + 1)]
-
-    ipaddress.IPv4Address(target)
-    return [target]
-
-
 class IPRangeMatcher:
     """Membership test for an IP range (``start-end``), mirroring the
     ``in`` support that :class:`ipaddress.IPv4Network` gives CIDRs."""
@@ -531,6 +506,10 @@ class IPRangeMatcher:
 
     def __contains__(self, addr: "ipaddress.IPv4Address") -> bool:
         return self._start <= int(addr) <= self._end
+
+    def hosts(self) -> "Iterator[ipaddress.IPv4Address]":
+        """Every address in the range, mirroring ``IPv4Network.hosts()``."""
+        return (ipaddress.IPv4Address(i) for i in range(self._start, self._end + 1))
 
 
 def parse_subnet_matcher(spec: str) -> "ipaddress.IPv4Network | IPRangeMatcher":
@@ -553,6 +532,17 @@ def parse_subnet_matcher(spec: str) -> "ipaddress.IPv4Network | IPRangeMatcher":
         return IPRangeMatcher(start, end)
 
     return ipaddress.IPv4Network(spec, strict=False)
+
+
+def parse_ip_target(target: str) -> list[str]:
+    """Parse a target string into a list of individual IP addresses.
+
+    Accepted formats:
+        CIDR      – ``192.168.1.0/24``
+        Range     – ``192.168.1.100-192.168.1.200``
+        Single IP – ``192.168.1.50``
+    """
+    return [str(ip) for ip in parse_subnet_matcher(target).hosts()]
 
 
 def scan_hosts(
