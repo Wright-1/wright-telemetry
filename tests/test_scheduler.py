@@ -9,8 +9,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from collections import deque
-
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.models import (
     CoolingData,
@@ -22,7 +20,6 @@ from wright_telemetry.models import (
     UptimeData,
 )
 from wright_telemetry.scheduler import (
-    _BASELINE_SAMPLES,
     _build_collectors,
     _detect_fan_dips,
     _poll_cycle,
@@ -175,8 +172,17 @@ class TestBuildCollectors:
 
 # ---------------------------------------------------------------
 # _detect_fan_dips
+# Baseline is a fixed snapshot (captured once at session start), not a
+# rolling window. A dip is an isolated single fan reading at or below
+# _DIP_RPM_MAX (a physical switch flip spins the fan down to near-zero,
+# not some percentage of baseline) — if more than one fan on the miner is
+# low at the same tick, it's ambiguous (power loss, hardware issue) and no
+# dip event fires for anyone that tick. Every tick the isolated fan stays
+# low fires its own "dip" record (so the shape of a multi-second dip is
+# visible), and a single "recovered" record fires once, on the tick it
+# crosses back above threshold — recovery is evaluated independently per
+# fan, not gated by isolation.
 # Real-world baseline: fans run ~6900 RPM (6780–6960 observed).
-# A 15% dip from 6960 peak = ~5916 RPM threshold.
 # ---------------------------------------------------------------
 
 MINER_URL = "http://10.0.1.9"
@@ -191,101 +197,106 @@ def _cooling(rpms: list[int]) -> CoolingData:
     )
 
 
-def _warm_up(url: str = MINER_URL, rpms: list[int] = _NORMAL_RPMS):
-    """Feed _BASELINE_SAMPLES normal readings to establish a baseline. Returns state dicts."""
-    fan_rpm_history: dict = {}
-    fan_dip_times: dict = {}
-    miner_last_detected: dict = {}
-    for _ in range(_BASELINE_SAMPLES):
-        _detect_fan_dips(url, _cooling(rpms), fan_rpm_history, fan_dip_times, miner_last_detected)
-    return fan_rpm_history, fan_dip_times, miner_last_detected
+def _baseline(rpms: list[int] = _NORMAL_RPMS, url: str = MINER_URL) -> dict[tuple[str, int], int]:
+    return {(url, i): rpm for i, rpm in enumerate(rpms)}
 
 
 class TestDetectFanDips:
 
-    def test_no_detection_before_baseline_full(self):
-        """Should never fire before the rolling window is full."""
-        fan_rpm_history, fan_dip_times, miner_last_detected = {}, {}, {}
-        dipped_rpm = [int(r * 0.80) for r in _NORMAL_RPMS]  # big drop
-        for _ in range(_BASELINE_SAMPLES - 1):
-            result = _detect_fan_dips(
-                MINER_URL, _cooling(dipped_rpm),
-                fan_rpm_history, fan_dip_times, miner_last_detected,
-            )
-            assert result == [], "Should not detect before baseline is established"
-
-    def test_no_false_positive_at_normal_rpm(self):
-        """Normal readings should never trigger detection."""
-        fan_rpm_history, fan_dip_times, miner_last_detected = _warm_up()
+    def test_no_false_positive_at_baseline_rpm(self):
+        """Readings that match the baseline should never trigger a dip."""
+        baseline = _baseline()
         for _ in range(10):
-            result = _detect_fan_dips(
-                MINER_URL, _cooling(_NORMAL_RPMS),
-                fan_rpm_history, fan_dip_times, miner_last_detected,
-            )
+            result = _detect_fan_dips(MINER_URL, _cooling(_NORMAL_RPMS), baseline, {})
             assert result == []
 
-    def test_single_fan_dip_recorded(self):
-        """A single fan dipping should update fan_dip_times but not trigger full detection."""
-        fan_rpm_history, fan_dip_times, miner_last_detected = _warm_up()
-
-        # Dip only fan 0 (~20% drop from 6960 peak → 5568 RPM)
-        rpms = [5568, 6900, 6900, 6900]
-        result = _detect_fan_dips(
-            MINER_URL, _cooling(rpms),
-            fan_rpm_history, fan_dip_times, miner_last_detected,
-        )
-        assert result == [], "Single fan dip should not trigger all-fans detection"
-        assert (MINER_URL, 0) in fan_dip_times, "Fan 0 dip time should be recorded"
-        assert (MINER_URL, 1) not in fan_dip_times, "Fan 1 should not have a dip time"
-
-    def test_all_fans_dip_triggers_detection(self):
-        """All fans dropping >15% simultaneously should return all positions."""
-        fan_rpm_history, fan_dip_times, miner_last_detected = _warm_up()
-
-        # ~20% drop across all fans (flip the switch scenario)
-        dipped_rpms = [int(r * 0.80) for r in _NORMAL_RPMS]
-        result = _detect_fan_dips(
-            MINER_URL, _cooling(dipped_rpms),
-            fan_rpm_history, fan_dip_times, miner_last_detected,
-        )
-        assert sorted(result) == [0, 1, 2, 3]
-
-    def test_detection_respects_cooldown(self):
-        """Second detection within cooldown window should not fire."""
-        fan_rpm_history, fan_dip_times, miner_last_detected = _warm_up()
-        dipped_rpms = [int(r * 0.80) for r in _NORMAL_RPMS]
-
-        first = _detect_fan_dips(
-            MINER_URL, _cooling(dipped_rpms),
-            fan_rpm_history, fan_dip_times, miner_last_detected,
-        )
-        assert first != [], "First detection should fire"
-
-        second = _detect_fan_dips(
-            MINER_URL, _cooling(dipped_rpms),
-            fan_rpm_history, fan_dip_times, miner_last_detected,
-        )
-        assert second == [], "Second detection within cooldown should be suppressed"
-
     def test_small_rpm_variation_no_false_positive(self):
-        """Natural variation seen in real data (6780–6960) should not trigger dip."""
-        fan_rpm_history, fan_dip_times, miner_last_detected = _warm_up(rpms=[6960, 6960, 6960, 6960])
+        """Natural oscillation (±4% in the real fleet) never approaches _DIP_RPM_MAX."""
+        baseline = _baseline([6960, 6960, 6960, 6960])
+        low_normal = [6700, 6700, 6700, 6700]  # normal jitter, nowhere near 1000 RPM
+        result = _detect_fan_dips(MINER_URL, _cooling(low_normal), baseline, {})
+        assert result == []
 
-        # Real observed low readings — only ~3% below peak
-        low_normal = [6780, 6780, 6900, 6840]
-        result = _detect_fan_dips(
-            MINER_URL, _cooling(low_normal),
-            fan_rpm_history, fan_dip_times, miner_last_detected,
-        )
-        assert result == [], "Natural RPM variation should not be flagged as a dip"
+    def test_isolated_single_fan_dip_emits_one_dip_event(self):
+        """One fan dropping to near-zero while the others hold steady triggers detection."""
+        baseline = _baseline()
+        rpms = [200, 6960, 6900, 6900]  # fan 0 switched off; others unchanged
+        dipped_state: dict = {}
+        result = _detect_fan_dips(MINER_URL, _cooling(rpms), baseline, dipped_state)
+        assert len(result) == 1
+        assert result[0]["fan_position"] == 0
+        assert result[0]["direction"] == "dip"
+        assert dipped_state[(MINER_URL, 0)] is True
+
+    def test_dip_refires_every_tick_while_down(self):
+        """Dips only last a few seconds — this is not edge-triggered/deduped, so we
+        can see the full shape of the RPM trace while the fan stays down."""
+        baseline = _baseline()
+        rpms = [200, 6960, 6900, 6900]
+        dipped_state: dict = {}
+        first = _detect_fan_dips(MINER_URL, _cooling(rpms), baseline, dipped_state)
+        second = _detect_fan_dips(MINER_URL, _cooling(rpms), baseline, dipped_state)
+        assert len(first) == 1
+        assert len(second) == 1
+        assert second[0]["direction"] == "dip"
+
+    def test_recovery_emits_single_deduped_event(self):
+        """The recovery edge (crossing back above threshold) fires exactly once."""
+        baseline = _baseline()
+        rpms = [200, 6960, 6900, 6900]
+        dipped_state: dict = {}
+        _detect_fan_dips(MINER_URL, _cooling(rpms), baseline, dipped_state)
+
+        recovered = _detect_fan_dips(MINER_URL, _cooling(_NORMAL_RPMS), baseline, dipped_state)
+        assert len(recovered) == 1
+        assert recovered[0]["fan_position"] == 0
+        assert recovered[0]["direction"] == "recovered"
+
+        # Staying at baseline afterward should not re-fire recovery
+        again = _detect_fan_dips(MINER_URL, _cooling(_NORMAL_RPMS), baseline, dipped_state)
+        assert again == []
+
+    def test_multiple_fans_low_at_once_is_suppressed(self):
+        """More than one fan low at the same tick isn't a valid switch-test
+        signature (power loss, hardware fault) — no dip event fires for anyone."""
+        baseline = _baseline()
+        rpms = [200, 200, 6900, 6900]  # two fans low simultaneously
+        result = _detect_fan_dips(MINER_URL, _cooling(rpms), baseline, {})
+        assert result == []
+
+    def test_all_fans_dip_together_is_suppressed(self):
+        """All fans dropping simultaneously is not a single-switch-flip signature."""
+        baseline = _baseline()
+        rpms = [200, 200, 200, 200]
+        result = _detect_fan_dips(MINER_URL, _cooling(rpms), baseline, {})
+        assert result == []
+
+    def test_second_fan_joining_an_existing_dip_suppresses_further_dip_events(self):
+        """An isolated dip fires normally; once a second fan also goes low,
+        further "dip" events stop (ambiguous), but the first fan's dipped
+        state is preserved so it resumes firing once isolation returns."""
+        baseline = _baseline()
+        dipped_state: dict = {}
+        first = _detect_fan_dips(MINER_URL, _cooling([200, 6960, 6900, 6900]), baseline, dipped_state)
+        assert len(first) == 1
+
+        ambiguous = _detect_fan_dips(MINER_URL, _cooling([200, 200, 6900, 6900]), baseline, dipped_state)
+        assert ambiguous == []
+        assert dipped_state[(MINER_URL, 0)] is True  # unchanged, not cleared
+
+        isolated_again = _detect_fan_dips(MINER_URL, _cooling([200, 6960, 6900, 6900]), baseline, dipped_state)
+        assert len(isolated_again) == 1
+        assert isolated_again[0]["fan_position"] == 0
+        assert isolated_again[0]["direction"] == "dip"
+
+    def test_missing_baseline_for_fan_is_skipped(self):
+        """A fan position with no recorded baseline is silently skipped, not crashed on."""
+        result = _detect_fan_dips(MINER_URL, _cooling([3000]), {}, {})
+        assert result == []
 
     def test_non_cooling_data_returns_empty(self):
         """Non-CoolingData input should return [] without crashing."""
-        fan_rpm_history, fan_dip_times, miner_last_detected = {}, {}, {}
-        result = _detect_fan_dips(
-            MINER_URL, object(),
-            fan_rpm_history, fan_dip_times, miner_last_detected,
-        )
+        result = _detect_fan_dips(MINER_URL, object(), _baseline(), {})
         assert result == []
 
 

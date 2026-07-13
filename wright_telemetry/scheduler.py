@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import asdict
 from typing import Any
 
@@ -23,7 +24,6 @@ from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
 from wright_telemetry.config import decode_password, load_config, mask_config
-from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import DEFAULT_CONSENT, consented_metrics
 from wright_telemetry.discovery import (
     apply_discovery_debug,
@@ -335,11 +335,9 @@ def _poll_cycle(
 
 
 _FAN_DETECTION_POLL_INTERVAL = 0.25  # seconds
-_DIP_THRESHOLD = 0.01               # RPM must drop >1% from rolling peak to count as a dip
-_DIP_WINDOW_S = 30                 # all fans must have dipped within this window
-_BASELINE_SAMPLES = 120            # rolling window size (30s at 0.25s poll)
-_DETECTION_COOLDOWN_S = 300        # min seconds between detections for the same miner
-_DETECTION_IDLE_TIMEOUT_S = 14400  # exit detection mode after 4 hours with no detections
+_DIP_RPM_MAX = 1000                # a genuine Wright Fan dip drops to (at most) this many RPM
+_BASELINE_SAMPLES = 120            # rolling window size (30s at 0.25s poll) — used by run_baseline_collection only
+_DETECTION_IDLE_TIMEOUT_S = 14400  # exit CLI detection mode after 4 hours with no detections
 _BASELINE_COLLECTION_TIMEOUT_S = 300  # max seconds to wait for baseline collection
 
 
@@ -453,128 +451,118 @@ def run_baseline_collection(cfg: dict[str, Any]) -> None:
         c.close()
 
 
+_WS_FAN_SWITCH_POLL_INTERVAL = 1.0
+
+# Per-miner cooling-fetch deadline during the 1s-cadence fan-detection loop.
+# Each collector's underlying `requests` call has its own ~15s socket
+# timeout, and miners are fetched sequentially — a single slow/unreachable
+# miner can otherwise stall a whole tick long enough that the gateway's
+# WebSocket ping/pong (15s period, 15s timeout) times out and disconnects the
+# agent mid-session. Fetches run concurrently and any miner that doesn't
+# respond within this deadline is skipped for that tick (it gets picked back
+# up next tick); the slow request itself is left to finish in the background.
+_WS_FAN_SWITCH_FETCH_TIMEOUT = 3.0
+
+
+def _capture_fan_baseline(
+    collectors: list[tuple[dict[str, Any], MinerCollector]],
+) -> dict[tuple[str, int], int]:
+    """Snapshot every fan's current RPM once, immediately.
+
+    Called right as a detection session starts so the baseline is the
+    freshest possible reading (not a rolling window, not a stale cached
+    value) — it stays fixed in RAM for the whole session.
+    """
+    baseline: dict[tuple[str, int], int] = {}
+    for miner_cfg, collector in collectors:
+        url = miner_cfg["url"]
+        name = miner_cfg.get("name", url)
+        fan_fetcher = collector.get_fetcher("cooling")
+        if fan_fetcher is None:
+            continue
+        try:
+            cooling_data = fan_fetcher()
+        except Exception as exc:
+            logger.warning("Error capturing fan baseline from '%s': %s", name, exc)
+            continue
+        if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
+            continue
+        for fan in cooling_data.fans:
+            baseline[(url, fan.position)] = fan.rpm
+    return baseline
+
+
 def _detect_fan_dips(
     miner_url: str,
     cooling_data: Any,
-    fan_rpm_history: dict[tuple[str, int], deque],
-    fan_dip_times: dict[tuple[str, int], float],
-    miner_last_detected: dict[str, float],
-) -> list[int]:
-    """Record fan RPMs and check if all fans have dipped within the window.
+    baseline: dict[tuple[str, int], int],
+    dipped_state: dict[tuple[str, int], bool],
+) -> list[dict[str, Any]]:
+    """Compare current fan RPM against the fixed session baseline.
 
-    A dip is defined as current RPM dropping more than _DIP_THRESHOLD below
-    the rolling peak of the last _BASELINE_SAMPLES readings for that fan.
-    Detection fires when every fan on the miner has a dip within the last
-    _DIP_WINDOW_S seconds, subject to per-miner cooldown.
+    A dip is an isolated single fan on the miner reading at or below
+    ``_DIP_RPM_MAX`` — that's what a physical switch flip looks like (the
+    fan spins down to near-zero, not baseline * some percentage). If more
+    than one fan on the same miner is low at the same tick, it isn't a
+    valid switch-test signature (could be a power loss or unrelated
+    hardware issue), so no dip event fires for anyone that tick.
 
-    Returns the list of fan positions that triggered the detection, or [].
+    Emits a "dip" record on every tick the isolated fan reads low (dips
+    only last a few seconds and we want the actual shape of the RPM trace,
+    not just an edge trigger), plus a single deduped "recovered" record on
+    the tick it crosses back above threshold. Recovery is evaluated
+    independently per fan — it isn't gated by isolation.
     """
     if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
         return []
 
-    now = time.time()
-
+    readings: list[tuple[tuple[str, int], int, int]] = []  # (key, position, rpm)
     for fan in cooling_data.fans:
         key = (miner_url, fan.position)
-        if key not in fan_rpm_history:
-            fan_rpm_history[key] = deque(maxlen=_BASELINE_SAMPLES)
-        fan_rpm_history[key].append(fan.rpm)
-
-        history = fan_rpm_history[key]
-        if len(history) < _BASELINE_SAMPLES:
-            continue  # not enough data yet to establish a baseline
-
-        peak = max(history)
-        if peak == 0:
+        if key not in baseline:
             continue
+        readings.append((key, fan.position, int(fan.rpm)))
 
-        if fan.rpm < peak * (1 - _DIP_THRESHOLD):
-            if fan_dip_times.get(key, 0.0) < now - 1:
-                print(
-                    f"[WRIGHT FAN] Fan dip detected on {miner_url} "
-                    f"fan #{fan.position}: {fan.rpm} RPM (peak {peak} RPM)"
-                )
-            fan_dip_times[key] = now
-
-    last_detected = miner_last_detected.get(miner_url, 0.0)
-    if now - last_detected < _DETECTION_COOLDOWN_S:
-        return []
-
-    all_positions = [fan.position for fan in cooling_data.fans]
-    cutoff = now - _DIP_WINDOW_S
-    dipped = [
-        pos for pos in all_positions
-        if fan_dip_times.get((miner_url, pos), 0.0) >= cutoff
-    ]
-
-    if dipped and len(dipped) == len(all_positions):
-        miner_last_detected[miner_url] = now
-        return dipped
-
-    return []
-
-
-# Portal / WebSocket fan-ID: physical switch (off → on), not rolling dip signature.
-_WS_FAN_SWITCH_POLL_INTERVAL = 1.0
-_WS_FAN_RPM_RUNNING_THRESHOLD = 500
-
-
-def _check_fan_rpm_changes(
-    _miner_name: str,
-    cooling_data: Any,
-    miner_url: str,
-    fan_prev_rpm: dict[tuple[str, int], int],
-    _fan_drop_events: list[dict],
-) -> list[dict[str, Any]]:
-    """Detect fan RPM crossing off/on vs *running* threshold (portal live detection).
-
-    Shared implementation: only :func:`_run_ws_fan_detection` calls this. CLI Wright Fan
-    mode uses :func:`_detect_fan_dips` instead.
-    """
-    if not isinstance(cooling_data, CoolingData) or not cooling_data.fans:
-        return []
+    currently_low = [r for r in readings if r[2] <= _DIP_RPM_MAX]
 
     events: list[dict[str, Any]] = []
-    for fan in cooling_data.fans:
-        key = (miner_url, fan.position)
-        curr = int(fan.rpm)
-        prev = fan_prev_rpm.get(key)
-        if prev is None:
-            fan_prev_rpm[key] = curr
-            continue
 
-        prev_running = prev >= _WS_FAN_RPM_RUNNING_THRESHOLD
-        curr_running = curr >= _WS_FAN_RPM_RUNNING_THRESHOLD
-        if prev_running and not curr_running:
-            events.append({
-                "fan_position": fan.position,
-                "prev_rpm": prev,
-                "curr_rpm": curr,
-                "transition_type": "off",
-            })
-        elif not prev_running and curr_running:
-            events.append({
-                "fan_position": fan.position,
-                "prev_rpm": prev,
-                "curr_rpm": curr,
-                "transition_type": "on",
-            })
+    if len(currently_low) == 1:
+        key, position, current_rpm = currently_low[0]
+        dipped_state[key] = True
+        events.append({
+            "fan_position": position,
+            "rpm": current_rpm,
+            "baseline_rpm": baseline[key],
+            "direction": "dip",
+        })
 
-        fan_prev_rpm[key] = curr
+    for key, position, current_rpm in readings:
+        if current_rpm > _DIP_RPM_MAX and dipped_state.get(key):
+            dipped_state[key] = False
+            events.append({
+                "fan_position": position,
+                "rpm": current_rpm,
+                "baseline_rpm": baseline[key],
+                "direction": "recovered",
+            })
 
     return events
 
 
-def _emit_ws_fan_switch_events(
+def _emit_fan_dip_events(
     name: str,
     miner_cfg: dict[str, Any],
     identity: Any,
     new_events: list[dict[str, Any]],
     api_client: WrightAPIClient,
     facility_id: str,
-    controller: Any,
+    controller: Any = None,
 ) -> None:
-    """Send telemetry + portal events for :func:`_check_fan_rpm_changes` results."""
+    """Send telemetry + (when running under the portal) live events for
+    :func:`_detect_fan_dips` results. Always logs locally too, so the CLI
+    path (no ``controller``) still gets visible output.
+    """
     if not new_events:
         return
 
@@ -586,54 +574,51 @@ def _emit_ws_fan_switch_events(
             data={"events": new_events},
         )
     )
-    mac_raw = (identity.mac_address if identity else "") or ""
-    mac_cfg = (miner_cfg.get("mac_address") or "").strip()
-    mac = normalize_mac_address(mac_raw) or normalize_mac_address(mac_cfg) or mac_raw.strip()
-
-    detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     for ev in new_events:
-        controller.push_event({
-            "event": "fan_transition",
-            "miner": name,
-            "miner_url": miner_cfg["url"],
-            "fan_position": ev["fan_position"],
-            "prev_rpm": ev["prev_rpm"],
-            "curr_rpm": ev["curr_rpm"],
-            "transition_type": ev["transition_type"],
-        })
-        if ev["transition_type"] == "on":
+        if ev["direction"] == "dip":
+            msg = (
+                f"[WRIGHT FAN] Fan dip on '{name}' fan #{ev['fan_position']}: "
+                f"{ev['rpm']} RPM (baseline {ev['baseline_rpm']} RPM)"
+            )
+            logger.info(msg)
+            print(msg)
+            if controller:
+                controller.push_event({
+                    "event": "fan_dip",
+                    "miner": name,
+                    "miner_url": miner_cfg["url"],
+                    "miner_uid": identity.uid if identity else None,
+                    "miner_mac": identity.mac_address if identity else None,
+                    "fan_position": ev["fan_position"],
+                    "rpm": ev["rpm"],
+                    "baseline_rpm": ev["baseline_rpm"],
+                })
+        else:  # "recovered"
+            msg = f"[WRIGHT FAN] Wright fan detected: miner '{name}' fan #{ev['fan_position']}"
+            logger.info(msg)
+            print(msg)
+            if controller:
+                controller.push_event({
+                    "event": "wright_fan_detected",
+                    "miner": name,
+                    "miner_url": miner_cfg["url"],
+                    "miner_uid": identity.uid if identity else None,
+                    "miner_mac": identity.mac_address if identity else None,
+                    "fan_position": ev["fan_position"],
+                })
+
+        if controller:
+            # NOTE: deprecated, needs to be removed — superseded by fan_dip / wright_fan_detected above
             controller.push_event({
-                "event": "wright_fan_detected",
+                "event": "fan_transition",
                 "miner": name,
                 "miner_url": miner_cfg["url"],
                 "fan_position": ev["fan_position"],
+                "prev_rpm": ev["baseline_rpm"],
+                "curr_rpm": ev["rpm"],
+                "transition_type": "off" if ev["direction"] == "dip" else "on",
             })
-            logger.info(
-                "Wright fan detected: miner '%s' fan #%d",
-                name,
-                ev["fan_position"],
-            )
-
-
-def _handle_wright_fan_dip_detection(
-    name: str,
-    miner_cfg: dict[str, Any],
-    identity: Any,
-    dipped: list[int],
-    api_client: WrightAPIClient,
-    facility_id: str,
-) -> None:
-    """After :func:`_detect_fan_dips` fires (CLI ``--detect-wright-fans`` only)."""
-    logger.info(
-        "All fans dipped on '%s' (positions=%s) — marking as Wright fans",
-        name,
-        dipped,
-    )
-    print(
-        f"[WRIGHT FAN] All fans dipped on '{name}' "
-        f"(positions {dipped}) — marking as Wright fans"
-    )
 
 
 def run_fan_detection(cfg: dict[str, Any]) -> bool:
@@ -700,11 +685,31 @@ def run_fan_detection(cfg: dict[str, Any]) -> bool:
             collectors = _build_collectors(all_miners, default_collector_type)
             _authenticate_all(collectors)
             identities = _fetch_identities(collectors)
+            fan_baseline = _capture_fan_baseline(collectors)
+
+            # Drop any miner with no baseline reading (auth failure,
+            # unreachable, etc.) from the poll loop — retrying it every
+            # _FAN_DETECTION_POLL_INTERVAL would just spam re-auth attempts
+            # and never detect anything. `collectors` itself is left intact
+            # so the `finally` block below still closes every connection.
+            baselined_urls = {url for (url, _pos) in fan_baseline}
+            skipped = [
+                miner_cfg.get("name", miner_cfg["url"])
+                for miner_cfg, _ in collectors
+                if miner_cfg["url"] not in baselined_urls
+            ]
+            if skipped:
+                logger.warning(
+                    "Excluding %d miner(s) from fan detection — no baseline reading (auth/fetch failed): %s",
+                    len(skipped), ", ".join(skipped),
+                )
+            active_collectors = [
+                (miner_cfg, collector) for miner_cfg, collector in collectors
+                if miner_cfg["url"] in baselined_urls
+            ]
 
             consecutive_crashes = 0
-            fan_rpm_history: dict[tuple[str, int], deque] = {}
-            fan_dip_times: dict[tuple[str, int], float] = {}
-            miner_last_detected: dict[str, float] = {}
+            dipped_state: dict[tuple[str, int], bool] = {}
 
             while not stop_event.is_set():
                 # Auto-exit if no detections in 4 hours
@@ -715,7 +720,7 @@ def run_fan_detection(cfg: dict[str, Any]) -> bool:
                     stop_event.set()
                     return True
 
-                for miner_cfg, collector in collectors:
+                for miner_cfg, collector in active_collectors:
                     name = miner_cfg.get("name", miner_cfg["url"])
                     identity = identities.get(miner_cfg["url"])
                     fan_fetcher = collector.get_fetcher("cooling")
@@ -730,18 +735,14 @@ def run_fan_detection(cfg: dict[str, Any]) -> bool:
                         continue
 
                     try:
-                        dipped = _detect_fan_dips(
+                        new_events = _detect_fan_dips(
                             miner_cfg["url"], cooling_data_obj,
-                            fan_rpm_history, fan_dip_times, miner_last_detected,
+                            fan_baseline, dipped_state,
                         )
-                        if dipped:
-                            _handle_wright_fan_dip_detection(
-                                name,
-                                miner_cfg,
-                                identity,
-                                dipped,
-                                api_client,
-                                facility_id,
+                        if new_events:
+                            _emit_fan_dip_events(
+                                name, miner_cfg, identity, new_events,
+                                api_client, facility_id,
                             )
                             last_detection_time = time.time()
                     except Exception as exc:
@@ -767,104 +768,177 @@ def run_fan_detection(cfg: dict[str, Any]) -> bool:
     return True
 
 
-_DEFAULT_FAN_DETECTION_IDLE_TIMEOUT = 15 * 60  # 15 minutes
-
-
 def _run_ws_fan_detection(
     cfg: dict[str, Any],
     controller: Any,
     api_client: WrightAPIClient,
 ) -> None:
-    """WebSocket-triggered fan detection using :func:`_check_fan_rpm_changes` (switch / RPM threshold).
+    """WebSocket-triggered fan detection using the shared baseline algorithm
+    (:func:`_capture_fan_baseline` + :func:`_detect_fan_dips`).
 
-    CLI ``--detect-wright-fans`` continues to use :func:`_detect_fan_dips` only.
-    Runs until the controller mode switches back to ``"normal"`` or no fan
-    transition events have been detected for ``fan_detection_idle_timeout``
-    seconds (configurable, default 15 min), whichever comes first.
+    Runs until the controller mode switches back to ``"normal"`` — either
+    because the portal sent ``stop_fan_detection`` or the WebSocket
+    connection dropped. There is no client-side idle timeout: the gateway
+    is the source of truth for stopping an idle session (10 minutes with no
+    ``fan_dip`` event), so this loop just runs until told to stop.
     """
-    idle_timeout = cfg.get(
-        "fan_detection_idle_timeout", _DEFAULT_FAN_DETECTION_IDLE_TIMEOUT
-    )
     facility_id = cfg.get("facility_id", "unknown")
     default_collector_type = cfg.get("collector_type", "braiins")
 
-    miners = _resolve_miners(cfg)
+    # Subnet scanning competes for the network with the tight 1s-cadence fan
+    # polling below and can make a miner miss its per-tick deadline — suspend
+    # it for the whole session and resume once detection stops (mode reverts
+    # to "normal" or the miner list comes back empty), regardless of exit path.
+    controller.request_discovery_pause()
+    try:
+        _run_ws_fan_detection_inner(cfg, controller, api_client, facility_id, default_collector_type)
+    finally:
+        controller.request_discovery_resume()
+
+
+def _run_ws_fan_detection_inner(
+    cfg: dict[str, Any],
+    controller: Any,
+    api_client: WrightAPIClient,
+    facility_id: str,
+    default_collector_type: str,
+) -> None:
+    miners = _resolve_miners(cfg, controller)  # pass controller for GUI store — avoid a live rescan
     if not miners:
         logger.warning("No miners found during fan detection re-discovery")
         controller.push_event({"event": "fan_detection_stopped", "reason": "no_miners"})
+        controller.push_gui_event({"event": "fan_detection_stopped", "reason": "no_miners"})
         return
 
     collectors = _build_collectors(miners, default_collector_type)
     _authenticate_all(collectors)
     identities = _fetch_identities(collectors)
 
+    controller.push_event({"event": "fan_detection_state", "state": "establishing_baseline"})
+    controller.push_gui_event({
+        "event": "fan_detection_state",
+        "state": "establishing_baseline",
+        "miner_count": len(collectors),
+        "dip_count": 0,
+    })
+    fan_baseline = _capture_fan_baseline(collectors)
+    dipped_state: dict[tuple[str, int], bool] = {}
+    dip_count = 0
+
+    # Drop any miner that produced no baseline reading at all (auth failure,
+    # unreachable, wrong fingerprint match, etc.) — polling it every 1s for
+    # the rest of the session would just spam re-auth attempts and never
+    # detect anything, since _detect_fan_dips has nothing to compare against.
+    baselined_urls = {url for (url, _pos) in fan_baseline}
+    skipped = [
+        miner_cfg.get("name", miner_cfg["url"])
+        for miner_cfg, _ in collectors
+        if miner_cfg["url"] not in baselined_urls
+    ]
+    if skipped:
+        logger.warning(
+            "Excluding %d miner(s) from fan detection — no baseline reading (auth/fetch failed): %s",
+            len(skipped), ", ".join(skipped),
+        )
+    collectors = [
+        (miner_cfg, collector) for miner_cfg, collector in collectors
+        if miner_cfg["url"] in baselined_urls
+    ]
+
+    if not collectors:
+        # Every miner failed to produce a baseline — there's nothing to poll,
+        # so don't pretend detection is running (it would sit in
+        # "toggle_ready" forever without ever being able to detect anything).
+        logger.warning("No miners left to monitor after baseline capture — stopping fan detection")
+        controller.push_event({"event": "fan_detection_stopped", "reason": "no_miners"})
+        controller.push_gui_event({"event": "fan_detection_stopped", "reason": "no_miners"})
+        return
+
     controller.push_event({
         "event": "fan_detection_started",
         "miner_count": len(collectors),
     })
+    controller.push_event({"event": "fan_detection_state", "state": "toggle_ready"})
+    controller.push_gui_event({
+        "event": "fan_detection_state",
+        "state": "toggle_ready",
+        "miner_count": len(collectors),
+        "dip_count": dip_count,
+    })
     logger.info(
-        "WebSocket fan detection started: %d miner(s), polling every %ss (switch RPM algorithm)",
+        "WebSocket fan detection started: %d miner(s), polling every %ss (baseline dip algorithm)",
         len(collectors),
         _WS_FAN_SWITCH_POLL_INTERVAL,
     )
 
-    fan_prev_rpm: dict[tuple[str, int], int] = {}
-    fan_drop_events: list[dict] = []
-    last_event_at = time.time()
+    try:
+        import psutil
+        fd_baseline = psutil.Process().num_fds()
+    except Exception:
+        fd_baseline = 0
+    fd_last_check = 0.0
 
-    while controller.mode == "fan_detection":
-        idle_secs = time.time() - last_event_at
-        if idle_secs >= idle_timeout:
-            logger.warning(
-                "Fan detection idle for %dm with no transition events. "
-                "Reverting to normal telemetry collection.",
-                int(idle_secs // 60),
-            )
-            controller.request_normal()
-            controller.push_event({
-                "event": "fan_detection_stopped",
-                "reason": "idle_timeout",
-            })
-            return
+    fetch_pool = ThreadPoolExecutor(
+        max_workers=max(1, len(collectors)), thread_name_prefix="fan-detect-fetch",
+    )
+    try:
+        while controller.mode == "fan_detection":
+            futures = {}
+            for miner_cfg, collector in collectors:
+                fan_fetcher = collector.get_fetcher("cooling")
+                if fan_fetcher is None:
+                    continue
+                futures[fetch_pool.submit(fan_fetcher)] = miner_cfg
 
-        for miner_cfg, collector in collectors:
-            name = miner_cfg.get("name", miner_cfg["url"])
-            identity = identities.get(miner_cfg["url"])
-            fan_fetcher = collector.get_fetcher("cooling")
-            if fan_fetcher is None:
-                continue
-            try:
-                cooling_data_obj = fan_fetcher()
-            except Exception as exc:
-                logger.warning("Error fetching cooling from '%s': %s", name, exc)
-                continue
-
-            try:
-                new_events = _check_fan_rpm_changes(
-                    name,
-                    cooling_data_obj,
-                    miner_cfg["url"],
-                    fan_prev_rpm,
-                    fan_drop_events,
-                )
-                if new_events:
-                    last_event_at = time.time()
-                    _emit_ws_fan_switch_events(
-                        name,
-                        miner_cfg,
-                        identity,
-                        new_events,
-                        api_client,
-                        facility_id,
-                        controller,
+            for future, miner_cfg in futures.items():
+                name = miner_cfg.get("name", miner_cfg["url"])
+                identity = identities.get(miner_cfg["url"])
+                try:
+                    cooling_data_obj = future.result(timeout=_WS_FAN_SWITCH_FETCH_TIMEOUT)
+                except FutureTimeoutError:
+                    logger.warning(
+                        "Timed out fetching cooling from '%s' (>%.0fs) — skipping this tick",
+                        name, _WS_FAN_SWITCH_FETCH_TIMEOUT,
                     )
-            except Exception as exc:
-                logger.warning("Error checking fan RPMs for '%s': %s", name, exc)
+                    continue
+                except Exception as exc:
+                    logger.warning("Error fetching cooling from '%s': %s", name, exc)
+                    continue
 
-        if controller.wait_for_mode_change(timeout=_WS_FAN_SWITCH_POLL_INTERVAL):
-            break
+                try:
+                    new_events = _detect_fan_dips(
+                        miner_cfg["url"], cooling_data_obj, fan_baseline, dipped_state,
+                    )
+                    if new_events:
+                        _emit_fan_dip_events(
+                            name, miner_cfg, identity, new_events,
+                            api_client, facility_id, controller,
+                        )
+                        dip_count += sum(1 for ev in new_events if ev["direction"] == "recovered")
+                        controller.push_gui_event({
+                            "event": "fan_detection_state",
+                            "state": "toggle_ready",
+                            "miner_count": len(collectors),
+                            "dip_count": dip_count,
+                        })
+                except Exception as exc:
+                    logger.warning("Error checking fan RPMs for '%s': %s", name, exc)
+
+            if fd_baseline:
+                fd_baseline, fd_last_check = _check_fd_growth(fd_baseline, fd_last_check)
+
+            # A wake signal doesn't necessarily mean "stop" — request_fan_detection()
+            # bumps the same wake_seq as request_normal(), so a redundant
+            # start_fan_detection while already in this mode would otherwise be
+            # mistaken for a stop and tear down an in-progress session. Only
+            # exit once the mode has actually changed away from fan_detection.
+            if controller.wait_for_mode_change(timeout=_WS_FAN_SWITCH_POLL_INTERVAL) and controller.mode != "fan_detection":
+                break
+    finally:
+        fetch_pool.shutdown(wait=False)
 
     controller.push_event({"event": "fan_detection_stopped"})
+    controller.push_gui_event({"event": "fan_detection_stopped"})
     logger.info("WebSocket fan detection stopped, returning to normal mode")
 
 

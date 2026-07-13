@@ -119,54 +119,105 @@ class FanState:
     Normal mode : slow sinusoidal oscillation (±4 %, 60 s period) around
                   each fan's base RPM; MINER_INDEX phase-shifts each container
                   so they don't all peak at the same moment.
-    Dip mode    : all fans drop to 0 RPM for *duration_s* seconds, then
-                  ramp back up linearly over ~2 s.
+    Dip mode    : simulates power getting cut to a fan — like a real fan, it
+                  doesn't stop instantly: it coasts down toward 0 RPM over
+                  *_SPIN_DOWN_S* seconds (clamped there if the cut outlasts
+                  that), then once power resumes it spins back up to full
+                  speed over *_SPIN_UP_S* seconds. Targets a single fan
+                  position (a real switch flip only ever affects one fan);
+                  pass ``position=None`` to dip every fan on the miner at
+                  once for whole-unit tests.
     """
 
-    _PERIOD_S  = 60.0   # sinusoidal period in seconds
-    _AMPLITUDE = 0.04   # ±4 % amplitude
+    _PERIOD_S    = 60.0   # sinusoidal period in seconds
+    _AMPLITUDE   = 0.04   # ±4 % amplitude
+    _SPIN_DOWN_S = 3.0    # coast-to-a-stop time once power is cut
+    _SPIN_UP_S   = 3.0    # time to return to full speed once power resumes
 
     def __init__(self, base_rpms: dict[int, int], idx: int) -> None:
         self._base      = dict(base_rpms)
         self._phase     = (idx * 0.37) % (2 * math.pi)
-        self._dip_until = 0.0
+        self._dip_start: dict[int, float] = {}  # when power was cut; missing/0 == never dipped
+        self._dip_until: dict[int, float] = {}  # when power resumes; may be in the past
         self._lock      = threading.Lock()
+
+    def _speed_fraction(self, position: int, now: float) -> float:
+        """1.0 == full speed, 0.0 == stopped; models the coast-down/spin-up ramp."""
+        with self._lock:
+            dip_start = self._dip_start.get(position, 0.0)
+            dip_until = self._dip_until.get(position, 0.0)
+        if not dip_start:
+            return 1.0
+        if now < dip_until:
+            elapsed = now - dip_start
+            return max(0.0, 1.0 - elapsed / self._SPIN_DOWN_S)
+        elapsed_up = now - dip_until
+        if elapsed_up >= self._SPIN_UP_S:
+            return 1.0
+        down_elapsed = max(0.0, dip_until - dip_start)
+        speed_at_cutoff = max(0.0, 1.0 - down_elapsed / self._SPIN_DOWN_S)
+        return speed_at_cutoff + (1.0 - speed_at_cutoff) * (elapsed_up / self._SPIN_UP_S)
 
     def current_rpm(self, position: int) -> int:
         base = self._base.get(position, 0)
         if base == 0:
             return 0
-        with self._lock:
-            dip_until = self._dip_until
         now = time.time()
-        if now < dip_until:
-            return 0
-        # Soft ramp-up over 2 s after a dip; at startup dip_until==0 → recovery==1
-        recovery = min(1.0, (now - dip_until) / 2.0) if dip_until > 0 else 1.0
+        speed = self._speed_fraction(position, now)
         osc = math.sin(now * 2 * math.pi / self._PERIOD_S + self._phase)
-        return max(0, round(base * recovery * (1.0 + osc * self._AMPLITUDE)))
+        return max(0, round(base * speed * (1.0 + osc * self._AMPLITUDE)))
 
-    def in_dip(self) -> bool:
+    def in_dip(self, position: int | None = None) -> bool:
+        now = time.time()
         with self._lock:
-            return time.time() < self._dip_until
+            if position is not None:
+                return now < self._dip_until.get(position, 0.0)
+            return any(now < until for until in self._dip_until.values())
 
-    def trigger_dip(self, duration_s: float = 8.0) -> None:
+    def trigger_dip(self, duration_s: float = 8.0, position: int | None = None) -> None:
+        positions = [position] if position is not None else list(self._base.keys())
+        now = time.time()
+        until = now + duration_s
         with self._lock:
-            self._dip_until = time.time() + duration_s
-        logger.info("FanState: dip triggered for %.0f s", duration_s)
+            for pos in positions:
+                self._dip_start[pos] = now
+                self._dip_until[pos] = until
+        logger.info(
+            "FanState: dip triggered for %.0f s on %s",
+            duration_s,
+            f"fan #{position}" if position is not None else "all fans",
+        )
 
-    def trigger_restore(self) -> None:
+    def trigger_restore(self, position: int | None = None) -> None:
+        now = time.time()
         with self._lock:
-            self._dip_until = 0.0
-        logger.info("FanState: restored to normal")
+            positions = [position] if position is not None else list(self._dip_until.keys())
+            for pos in positions:
+                # only cuts the outage short (starts the spin-up now); a no-op
+                # if this fan wasn't currently mid-dip.
+                if self._dip_until.get(pos, 0.0) > now:
+                    self._dip_until[pos] = now
+        logger.info(
+            "FanState: restored %s",
+            f"fan #{position}" if position is not None else "all fans",
+        )
 
     def status(self) -> dict[str, Any]:
+        now = time.time()
         with self._lock:
-            remaining = max(0.0, self._dip_until - time.time())
+            dip_until = dict(self._dip_until)
+        fans = {
+            str(pos): {
+                "mode": "dip" if dip_until.get(pos, 0.0) > now else "normal",
+                "dip_remaining_s": round(max(0.0, dip_until.get(pos, 0.0) - now), 1),
+                "rpm": self.current_rpm(pos),
+            }
+            for pos in self._base
+        }
         return {
-            "mode":            "dip" if remaining > 0 else "normal",
-            "dip_remaining_s": round(remaining, 1),
-            "base_rpms":       dict(self._base),
+            "mode": "dip" if any(f["mode"] == "dip" for f in fans.values()) else "normal",
+            "fans": fans,
+            "base_rpms": dict(self._base),
         }
 
 
@@ -1010,13 +1061,22 @@ def _dispatch_control(body: bytes, fan_state: FanState) -> tuple[int, dict[str, 
         return 400, {"error": "invalid JSON"}
 
     action = req.get("action", "")
+    position = req.get("fan_position")
+    if position is not None:
+        position = int(position)
+
     if action == "fan_dip":
         duration = float(req.get("duration_s", 8.0))
-        fan_state.trigger_dip(duration)
-        return 200, {"status": "ok", "action": "fan_dip", "duration_s": duration}
+        fan_state.trigger_dip(duration, position=position)
+        return 200, {
+            "status": "ok",
+            "action": "fan_dip",
+            "duration_s": duration,
+            "fan_position": position,
+        }
     if action == "fan_restore":
-        fan_state.trigger_restore()
-        return 200, {"status": "ok", "action": "fan_restore"}
+        fan_state.trigger_restore(position=position)
+        return 200, {"status": "ok", "action": "fan_restore", "fan_position": position}
     return 200, fan_state.status()
 
 

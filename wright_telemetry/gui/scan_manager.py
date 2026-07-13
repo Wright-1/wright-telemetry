@@ -48,6 +48,7 @@ class ScanManager:
         self._local_subnets: set[str] = set()
         self._lock = threading.Lock()
         self._cancel_event = threading.Event()
+        self._pause_event = threading.Event()
         self._worker: Optional[threading.Thread] = None
         self._current_subnet: Optional[str] = None
         # Per-subnet miner dicts (credential-free) shared with the scheduler.
@@ -88,6 +89,29 @@ class ScanManager:
         with self._lock:
             self._queue.clear()
         self._cancel_event.set()
+
+    def pause(self) -> None:
+        """Suspend scanning: interrupt any in-flight scan and stop draining
+        the queue until :meth:`resume` is called.
+
+        Unlike :meth:`cancel`, the queue (and the interrupted subnet, if any)
+        is preserved so scanning picks up exactly where it left off. Used to
+        quiet discovery's network probing while WebSocket fan-dip detection
+        needs the network free for its tight per-tick polling deadline.
+        """
+        with self._lock:
+            self._pause_event.set()
+            if self._current_subnet is not None:
+                # Re-queue the interrupted subnet so resume() re-scans it.
+                if self._current_subnet not in self._queue:
+                    self._queue.insert(0, self._current_subnet)
+        self._cancel_event.set()
+
+    def resume(self) -> None:
+        """Resume scanning after :meth:`pause`."""
+        with self._lock:
+            self._pause_event.clear()
+        self._ensure_worker()
 
     def remove(self, subnet: str) -> None:
         """Remove a subnet from results and queue. Cancels it if currently scanning."""
@@ -156,6 +180,8 @@ class ScanManager:
         # Keep the entire check-and-assign inside the lock so two concurrent
         # callers cannot both see already_running=False and both spawn a thread.
         with self._lock:
+            if self._pause_event.is_set():
+                return
             if self._worker is not None and self._worker.is_alive():
                 return
             if not self._queue:
@@ -169,6 +195,7 @@ class ScanManager:
             self._worker.start()
 
     def _run(self) -> None:
+        paused_exit = False
         while True:
             with self._lock:
                 if not self._queue:
@@ -177,7 +204,12 @@ class ScanManager:
                 # Check for a pending cancel *before* clearing it, so a
                 # cancel() call that arrived between two scans is honoured.
                 if self._cancel_event.is_set():
-                    self._current_subnet = None
+                    if self._pause_event.is_set():
+                        # pause() already re-queued the interrupted subnet —
+                        # leave the queue intact, just stop draining it.
+                        paused_exit = True
+                    else:
+                        self._current_subnet = None
                     break
                 subnet = self._queue.pop(0)
                 self._current_subnet = subnet
@@ -187,6 +219,9 @@ class ScanManager:
 
             self._scan_subnet(subnet)
 
+        if paused_exit:
+            logger.info("Scan queue paused (%d subnet(s) pending resume)", len(self._queue))
+            return
         self._controller.push_gui_event({"event": "scan_queue_empty"})
         logger.info("Scan queue exhausted")
 
@@ -221,6 +256,8 @@ class ScanManager:
         })
 
         if self._cancel_event.is_set():
+            if self._pause_event.is_set():
+                return  # paused, not cancelled — subnet stays queued for resume()
             self._finish_cancelled(subnet)
             return
 
@@ -247,6 +284,8 @@ class ScanManager:
         )
 
         if self._cancel_event.is_set():
+            if self._pause_event.is_set():
+                return  # paused, not cancelled — subnet stays queued for resume()
             self._finish_cancelled(subnet)
             return
 

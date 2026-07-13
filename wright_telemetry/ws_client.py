@@ -118,6 +118,20 @@ class AgentController:
         with self._miners_lock:
             return list(self._discovered_miners)
 
+    def request_discovery_pause(self) -> None:
+        """Ask the GUI's ScanManager to suspend subnet scanning.
+
+        Routed through the GUI event queue (like ``request_scan``) since the
+        scheduler thread has no direct handle on ScanManager — only
+        ScanningEngine, which drains this queue on the Qt main thread, does.
+        No-op in CLI/headless mode where no ScanManager is wired up.
+        """
+        self.push_gui_event({"event": "discovery_pause"})
+
+    def request_discovery_resume(self) -> None:
+        """Ask the GUI's ScanManager to resume subnet scanning after a pause."""
+        self.push_gui_event({"event": "discovery_resume"})
+
     def request_config_reload(self) -> None:
         """Flag the scheduler to reload config on its next poll tick.
 
@@ -208,6 +222,18 @@ class WebSocketClient:
 
             command = msg.get("command")
             if command == "start_fan_detection":
+                if not self.controller.get_discovered_miners():
+                    logger.warning(
+                        "Portal requested fan detection mode but no miners have "
+                        "been discovered yet — rejecting"
+                    )
+                    self.controller.push_event(
+                        {"event": "fan_detection_stopped", "reason": "no_miners"}
+                    )
+                    self.controller.push_gui_event(
+                        {"event": "fan_detection_stopped", "reason": "no_miners"}
+                    )
+                    continue
                 logger.info("Portal requested fan detection mode")
                 self.controller.request_fan_detection()
             elif command == "stop_fan_detection":
@@ -294,15 +320,6 @@ class WebSocketClient:
                 })
                 return
 
-        if "fan_detection_idle_timeout" in payload:
-            val = payload["fan_detection_idle_timeout"]
-            if not isinstance(val, (int, float)) or val < 60:
-                self.controller.push_event({
-                    "event": "config_error",
-                    "error": "fan_detection_idle_timeout must be at least 60 seconds.",
-                })
-                return
-
         FORBIDDEN_KEYS = ("wright_api_key",)
         for key in FORBIDDEN_KEYS:
             if key in payload:
@@ -315,7 +332,6 @@ class WebSocketClient:
         SCALAR_KEYS = (
             "poll_interval_seconds", "collector_type", "wright_api_url",
             "facility_id", "disable_auto_update", "update_check_interval",
-            "fan_detection_idle_timeout",
         )
         for key in SCALAR_KEYS:
             if key in payload:
