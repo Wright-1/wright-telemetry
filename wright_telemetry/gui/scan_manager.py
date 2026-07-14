@@ -42,6 +42,7 @@ class ScanManager:
 
     def __init__(self, controller: Any, firmware_types: list[str]) -> None:
         self._controller = controller
+        controller.has_scan_manager = True
         self._firmware_types: list[str] = list(firmware_types)
         self._queue: list[str] = []
         self._results: dict[str, SubnetScanResult] = {}

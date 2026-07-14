@@ -325,10 +325,11 @@ class TestResolveMiners:
         assert len(result) == 1
         assert result[0]["url"] == "http://10.0.0.5"
 
-    def test_controller_store_returned_when_controller_provided(self):
-        """With a controller, _resolve_miners reads from the in-memory discovery store."""
+    def test_controller_store_returned_when_scan_manager_present(self):
+        """With a GUI ScanManager wired up, _resolve_miners reads from the in-memory discovery store."""
         from unittest.mock import MagicMock
         controller = MagicMock()
+        controller.has_scan_manager = True
         controller.get_discovered_miners.return_value = [
             {"url": "http://10.0.0.1", "name": "store-miner", "firmware": "braiins"},
             {"url": "http://10.0.0.5", "name": "store-miner-2", "firmware": "luxos"},
@@ -338,6 +339,31 @@ class TestResolveMiners:
         urls = [m["url"] for m in result]
         assert "http://10.0.0.1" in urls
         assert "http://10.0.0.5" in urls
+
+    def test_headless_controller_without_scan_manager_still_scans(self, monkeypatch):
+        """Regression: a non-None controller without a GUI ScanManager (e.g. the TUI's
+        WebSocket-bridge AgentController) must NOT be mistaken for GUI mode — it should
+        run a real subnet scan rather than reading the (permanently empty) discovery store.
+        """
+        from unittest.mock import MagicMock
+        from wright_telemetry.discovery import DiscoveredMiner
+
+        monkeypatch.setattr(
+            "wright_telemetry.scheduler.discover_miners",
+            lambda **_kw: [
+                DiscoveredMiner(ip="10.0.0.9", firmware="luxos", hostname="tui-found", mac_address="AA:BB:CC:DD:EE:09"),
+            ],
+        )
+        controller = MagicMock()
+        controller.has_scan_manager = False
+        controller.get_discovered_miners.return_value = []
+
+        cfg = {"discovery": {"enabled": True, "subnets": ["10.0.0.0/24"]}}
+        result = _resolve_miners(cfg, controller)
+
+        assert len(result) == 1
+        assert result[0]["url"] == "http://10.0.0.9"
+        controller.get_discovered_miners.assert_not_called()
 
     def test_no_duplicates_when_config_miner_matches_discovered(self, monkeypatch):
         """A miner already in config is not duplicated when discovery finds the same MAC."""

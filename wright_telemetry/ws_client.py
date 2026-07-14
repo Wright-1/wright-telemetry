@@ -47,7 +47,8 @@ class AgentController:
         self._miners_lock = threading.Lock()
         # True only when a GUI ScanManager is wired up. When False (CLI / TUI
         # mode) the scheduler runs its own subnet scan instead of reading the
-        # shared store. Set to True by ScanningEngine on startup.
+        # shared store. Set to True by ScanManager.__init__.
+        self.has_scan_manager: bool = False
 
 
     @property
