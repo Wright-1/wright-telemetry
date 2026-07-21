@@ -174,6 +174,12 @@ class AccessKeyPage(QWidget):
         self._status_lbl.setStyleSheet(f"color: {color}; border: none;")
         self._status_lbl.setVisible(bool(message))
 
+    def reset(self) -> None:
+        """Clear the input/status so the page looks fresh for re-provisioning."""
+        self._key_input.clear()
+        self._set_status("")
+        self._set_loading(False)
+
     def _set_loading(self, loading: bool) -> None:
         self._activate_btn.setEnabled(not loading)
         self._key_input.setEnabled(not loading)
@@ -197,7 +203,7 @@ class AccessKeyPage(QWidget):
             # Called from the background redeem thread.  Emit a signal so Qt
             # delivers _handle_result on the main thread — QTimer.singleShot
             # without a receiver context is unreliable from non-Qt threads.
-            self._redeem_done.emit({"result": result})
+            self._redeem_done.emit({"result": result, "access_key": raw_key})
 
         redeem_access_key(access_key=raw_key, callback=_on_result)
 
@@ -210,6 +216,10 @@ class AccessKeyPage(QWidget):
             from wright_telemetry.config import _DEFAULT_POLL_INTERVAL, _DEFAULT_COLLECTOR_TYPES
             from wright_telemetry.settings import API_URL
             cfg = load_config() or {}
+            # The access key the user typed is distinct from the wright_api_key
+            # returned by the redeem call — keep both so Settings can display
+            # the original access key.
+            cfg["access_key"]     = payload["access_key"]
             cfg["wright_api_key"] = result["apiKey"]
             cfg["facility_id"]    = result["facilityId"]
             cfg["email"]          = result.get("email", "")
