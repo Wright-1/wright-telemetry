@@ -1,10 +1,10 @@
 # Fake Miners — Local Testing Without Real Hardware
 
-Run fake Braiins, Vnish, and LuxOS miners locally using Docker so that
-`wright-telemetry` can be exercised end-to-end without any real hardware.
-Each fake runs as its own container on an isolated bridge network
-(`172.28.0.0/24`), which means `wright-telemetry` can scan a whole subnet
-just as it would in production.
+Run fake Braiins, Vnish, LuxOS, and Bitmain miners locally using Docker so
+that `wright-telemetry` can be exercised end-to-end without any real
+hardware. Each fake runs as its own container on an isolated bridge network
+(`172.28.0.0/24` – `172.28.4.0/24`), which means `wright-telemetry` can scan
+a whole subnet just as it would in production.
 
 ### Prerequisites
 
@@ -35,11 +35,19 @@ just as it would in production.
 
 ### IP layout
 
-| Firmware | IPs              | Port |
-|----------|------------------|------|
-| Braiins  | `172.28.0.10–19` | 80   |
-| Vnish    | `172.28.0.20–29` | 80   |
-| LuxOS    | `172.28.0.30–39` | 4028 |
+Five subnets (`172.28.0.0/24` – `172.28.4.0/24`), each following the same
+per-subnet layout (subnet E has no LuxOS/Bitmain — only 18 test serials total):
+
+| Firmware | Last octet | Port |
+|----------|------------|------|
+| Braiins  | `.10`      | 80   |
+| Vnish    | `.20`      | 80   |
+| LuxOS    | `.30`      | 4028 |
+| Bitmain  | `.40`      | 80   |
+
+Each fake miner reports one of a fixed set of 18 test serial numbers via the
+`SERIAL` environment variable in `docker-compose.yml`, so the fleet matches a
+known list of serials rather than the auto-generated `*FAKE*` ones.
 
 ### Starting the fleet
 
@@ -53,7 +61,7 @@ Run setup and enter the fake subnet when prompted:
 
 ```bash
 wright-telemetry --setup
-# subnet: 172.28.0.0/24
+# subnets: 172.28.0.0/24, 172.28.1.0/24, 172.28.2.0/24, 172.28.3.0/24, 172.28.4.0/24
 ```
 
 ### Stopping

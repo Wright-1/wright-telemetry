@@ -84,6 +84,7 @@ logger = logging.getLogger("fake-miner")
 
 FIRMWARE     = os.environ.get("FIRMWARE",     "braiins").lower().strip()
 MINER_INDEX  = int(os.environ.get("MINER_INDEX",  "0"))
+SERIAL       = os.environ.get("SERIAL", "").strip() or None
 FIXTURES_DIR = Path(os.environ.get("FIXTURES_DIR", "/fixtures"))
 HTTP_PORT    = int(os.environ.get("HTTP_PORT",    "80"))
 LUXOS_PORT   = int(os.environ.get("LUXOS_PORT",   "4028"))
@@ -375,7 +376,7 @@ def personalize(fixtures: dict[str, Any]) -> dict[str, Any]:
         details = fx.get("miner_details", {})
         details["hostname"]      = f"braiins-fake-{MINER_INDEX:03d}"
         details["mac_address"]   = _mac(0x000000)
-        details["serial_number"] = f"BRFAKE{MINER_INDEX:05d}"
+        details["serial_number"] = SERIAL or f"BRFAKE{MINER_INDEX:05d}"
         details["uid"]           = f"brfake{MINER_INDEX:012x}"
 
         # Jitter real_hashrate / nominal_hashrate.
@@ -389,7 +390,7 @@ def personalize(fixtures: dict[str, Any]) -> dict[str, Any]:
         info = fx.get("info", {})
         info["hostname"] = f"vnish-fake-{MINER_INDEX:03d}"
         info["mac"]      = _mac(0x001000)
-        info["serial"]   = f"VNFAKE{MINER_INDEX:05d}"
+        info["serial"]   = SERIAL or f"VNFAKE{MINER_INDEX:05d}"
         info["uid"]      = f"vnfake{MINER_INDEX:012x}"
 
         inner = fx.get("summary", {}).get("miner", {})
@@ -402,7 +403,7 @@ def personalize(fixtures: dict[str, Any]) -> dict[str, Any]:
         if isinstance(cfg_list, list) and cfg_list:
             cfg_list[0]["Hostname"]     = f"luxos-fake-{MINER_INDEX:03d}"
             cfg_list[0]["MACAddr"]      = _mac(0x002000)
-            cfg_list[0]["SerialNumber"] = f"LXFAKE{MINER_INDEX:05d}"
+            cfg_list[0]["SerialNumber"] = SERIAL or f"LXFAKE{MINER_INDEX:05d}"
 
         summary_list = fx.get("summary", {}).get("SUMMARY")
         if isinstance(summary_list, list) and summary_list:
@@ -414,7 +415,7 @@ def personalize(fixtures: dict[str, Any]) -> dict[str, Any]:
         sysinfo = fx.get("get_system_info", {})
         sysinfo["hostname"] = f"bitmain-fake-{MINER_INDEX:03d}"
         sysinfo["macaddr"]  = _mac(0x003000)
-        sysinfo["serinum"]  = f"BTFAKE{MINER_INDEX:05d}"
+        sysinfo["serinum"]  = SERIAL or f"BTFAKE{MINER_INDEX:05d}"
         sysinfo["ipaddress"] = f"172.28.{MINER_INDEX // 10}.{40 + (MINER_INDEX % 10)}"
 
         stats_list = fx.get("stats", {}).get("STATS")

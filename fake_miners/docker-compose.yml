@@ -17,14 +17,14 @@
 #   2. Start the fake fleet:
 #        docker compose -f fake_miners/docker-compose.yml up -d --build
 #
-#   3. Point wright-telemetry at all three subnets.
+#   3. Point wright-telemetry at all five subnets.
 #      When prompted during --setup, enter (comma-separated):
-#        172.28.0.0/24, 172.28.1.0/24, 172.28.2.0/24
+#        172.28.0.0/24, 172.28.1.0/24, 172.28.2.0/24, 172.28.3.0/24, 172.28.4.0/24
 #
 #      Or edit ~/.wright-telemetry/config.json directly:
 #        "discovery": {
 #          "enabled": true,
-#          "subnets": ["172.28.0.0/24", "172.28.1.0/24", "172.28.2.0/24"],
+#          "subnets": ["172.28.0.0/24", "172.28.1.0/24", "172.28.2.0/24", "172.28.3.0/24", "172.28.4.0/24"],
 #          ...
 #        }
 #
@@ -33,14 +33,16 @@
 #
 # NETWORK LAYOUT
 # --------------
-#   Three isolated Docker bridge networks simulate separate facility VLANs.
+#   Five isolated Docker bridge networks simulate separate facility VLANs.
 #   Each subnet contains one Braiins, one Vnish, one LuxOS, and one Bitmain
-#   fake miner so that discovery must scan all three subnets to find the
-#   full fleet.
+#   fake miner (subnet E only has Braiins + Vnish) so that discovery must
+#   scan all five subnets to find the full fleet.
 #
 #   miners-net-a  172.28.0.0/24  — Subnet A
 #   miners-net-b  172.28.1.0/24  — Subnet B
 #   miners-net-c  172.28.2.0/24  — Subnet C
+#   miners-net-d  172.28.3.0/24  — Subnet D
+#   miners-net-e  172.28.4.0/24  — Subnet E
 #
 # IP LAYOUT
 # ---------
@@ -53,23 +55,29 @@
 #   Subnet A:   172.28.0.10  172.28.0.20  172.28.0.30  172.28.0.40
 #   Subnet B:   172.28.1.10  172.28.1.20  172.28.1.30  172.28.1.40
 #   Subnet C:   172.28.2.10  172.28.2.20  172.28.2.30  172.28.2.40
+#   Subnet D:   172.28.3.10  172.28.3.20  172.28.3.30  172.28.3.40
+#   Subnet E:   172.28.4.10  172.28.4.20
 #
-# MINER_INDEX
-# -----------
+# MINER_INDEX / SERIAL
+# --------------------
 #   MINER_INDEX is unique across all containers of the same firmware type
-#   so each fake miner gets a distinct hostname, MAC, serial number, and
-#   jittered hashrate — exactly as if they were separate physical machines.
+#   so each fake miner gets a distinct hostname, MAC, and jittered hashrate —
+#   exactly as if they were separate physical machines.
 #
-#   braiins-{a,b,c}  → MINER_INDEX 0, 1, 2
-#   vnish-{a,b,c}    → MINER_INDEX 0, 1, 2
-#   luxos-{a,b,c}    → MINER_INDEX 0, 1, 2
-#   bitmain-{a,b,c}  → MINER_INDEX 0, 1, 2
+#   SERIAL pins each fake miner's reported serial number to a specific value
+#   (overriding the default MINER_INDEX-derived FAKE serial) so the fleet
+#   matches a known list of test serial numbers.
+#
+#   braiins-{a..e}  → MINER_INDEX 0..4
+#   vnish-{a..e}    → MINER_INDEX 0..4
+#   luxos-{a..d}    → MINER_INDEX 0..3
+#   bitmain-{a..d}  → MINER_INDEX 0..3
 #
 # ADDING MORE MINERS / SUBNETS
 # ----------------------------
 #   1. Add a new network block under `networks:` with a fresh CIDR.
-#   2. Add service blocks pointing at that network with unique IPs and
-#      incremented MINER_INDEX values.
+#   2. Add service blocks pointing at that network with unique IPs,
+#      incremented MINER_INDEX values, and a SERIAL to match.
 #   3. Re-run `docker compose up -d --build`.
 #   4. Add the new CIDR to discovery.subnets in your config.
 #
@@ -88,7 +96,7 @@ x-miner-base: &miner-base
     - ../tests/fixtures:/fixtures:ro     # live fixture mount — no rebuild needed
   restart: unless-stopped
 
-# ── Three isolated bridge networks (one per simulated VLAN) ──────────────────
+# ── Five isolated bridge networks (one per simulated VLAN) ───────────────────
 networks:
   miners-net-a:
     driver: bridge
@@ -111,6 +119,20 @@ networks:
       config:
         - subnet: 172.28.2.0/24
 
+  miners-net-d:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.3.0/24
+
+  miners-net-e:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.4.0/24
+
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
 
@@ -121,6 +143,7 @@ services:
     environment:
       FIRMWARE: braiins
       MINER_INDEX: "0"
+      SERIAL: "000000000017"
     networks:
       miners-net-a:
         ipv4_address: 172.28.0.10
@@ -130,6 +153,7 @@ services:
     environment:
       FIRMWARE: vnish
       MINER_INDEX: "0"
+      SERIAL: "00000000"
     networks:
       miners-net-a:
         ipv4_address: 172.28.0.20
@@ -139,6 +163,7 @@ services:
     environment:
       FIRMWARE: luxos
       MINER_INDEX: "0"
+      SERIAL: "000000000062"
     networks:
       miners-net-a:
         ipv4_address: 172.28.0.30
@@ -148,6 +173,7 @@ services:
     environment:
       FIRMWARE: bitmain
       MINER_INDEX: "0"
+      SERIAL: "000000000048"
     networks:
       miners-net-a:
         ipv4_address: 172.28.0.40
@@ -159,6 +185,7 @@ services:
     environment:
       FIRMWARE: braiins
       MINER_INDEX: "1"
+      SERIAL: "000000000154"
     networks:
       miners-net-b:
         ipv4_address: 172.28.1.10
@@ -168,6 +195,7 @@ services:
     environment:
       FIRMWARE: vnish
       MINER_INDEX: "1"
+      SERIAL: "000000000093"
     networks:
       miners-net-b:
         ipv4_address: 172.28.1.20
@@ -177,6 +205,7 @@ services:
     environment:
       FIRMWARE: luxos
       MINER_INDEX: "1"
+      SERIAL: "000000000109"
     networks:
       miners-net-b:
         ipv4_address: 172.28.1.30
@@ -186,6 +215,7 @@ services:
     environment:
       FIRMWARE: bitmain
       MINER_INDEX: "1"
+      SERIAL: "000000000031"
     networks:
       miners-net-b:
         ipv4_address: 172.28.1.40
@@ -197,6 +227,7 @@ services:
     environment:
       FIRMWARE: braiins
       MINER_INDEX: "2"
+      SERIAL: "000000000055"
     networks:
       miners-net-c:
         ipv4_address: 172.28.2.10
@@ -206,6 +237,7 @@ services:
     environment:
       FIRMWARE: vnish
       MINER_INDEX: "2"
+      SERIAL: "000000000161"
     networks:
       miners-net-c:
         ipv4_address: 172.28.2.20
@@ -215,6 +247,7 @@ services:
     environment:
       FIRMWARE: luxos
       MINER_INDEX: "2"
+      SERIAL: "000000000123"
     networks:
       miners-net-c:
         ipv4_address: 172.28.2.30
@@ -224,6 +257,71 @@ services:
     environment:
       FIRMWARE: bitmain
       MINER_INDEX: "2"
+      SERIAL: "000000000024"
     networks:
       miners-net-c:
         ipv4_address: 172.28.2.40
+
+  # ── Subnet D  (172.28.3.0/24) ───────────────────────────────────────────────
+
+  braiins-d:
+    <<: *miner-base
+    environment:
+      FIRMWARE: braiins
+      MINER_INDEX: "3"
+      SERIAL: "000000000086"
+    networks:
+      miners-net-d:
+        ipv4_address: 172.28.3.10
+
+  vnish-d:
+    <<: *miner-base
+    environment:
+      FIRMWARE: vnish
+      MINER_INDEX: "3"
+      SERIAL: "3506660000161"
+    networks:
+      miners-net-d:
+        ipv4_address: 172.28.3.20
+
+  luxos-d:
+    <<: *miner-base
+    environment:
+      FIRMWARE: luxos
+      MINER_INDEX: "3"
+      SERIAL: "000000000147"
+    networks:
+      miners-net-d:
+        ipv4_address: 172.28.3.30
+
+  bitmain-d:
+    <<: *miner-base
+    environment:
+      FIRMWARE: bitmain
+      MINER_INDEX: "3"
+      SERIAL: "000000000116"
+    networks:
+      miners-net-d:
+        ipv4_address: 172.28.3.40
+
+  # ── Subnet E  (172.28.4.0/24) ────────────────────────────────────────────────
+
+  braiins-e:
+    <<: *miner-base
+    environment:
+      FIRMWARE: braiins
+      MINER_INDEX: "4"
+      SERIAL: "000000000000"
+    networks:
+      miners-net-e:
+        ipv4_address: 172.28.4.10
+
+  vnish-e:
+    <<: *miner-base
+    environment:
+      FIRMWARE: vnish
+      MINER_INDEX: "4"
+      SERIAL: "000000000079"
+    networks:
+      miners-net-e:
+        ipv4_address: 172.28.4.20
