@@ -27,6 +27,8 @@ from wright_telemetry.models import ScanSummaryData, TelemetryPayload
 logger = logging.getLogger(__name__)
 
 _POST_TIMEOUT = 20  # seconds
+_BATCH_POST_TIMEOUT = 60  # seconds — one request carries up to _MAX_BATCH payloads
+_MAX_BATCH = 500  # must not exceed the gateway's MAX_BATCH_PAYLOADS
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +165,53 @@ class WrightAPIClient(ApiClient):
                 exc,
             )
             return False
+
+    def send_batch(self, payloads: list[TelemetryPayload]) -> int:
+        """Encrypt and POST many telemetry payloads in one request.
+
+        Each payload is encrypted individually (same wire format as ``send``);
+        batching only removes the per-payload HTTP round trip, which is what
+        dominates the poll cycle at scale. Returns the number accepted.
+
+        Sends in chunks of ``_MAX_BATCH`` to stay under the gateway's limit.
+        A failed chunk is not retried — telemetry is periodic sampling, so a
+        dropped payload costs one sample, and re-sending a partially-accepted
+        chunk would double-insert the rest.
+        """
+        if not payloads:
+            return 0
+
+        url = self.endpoint("telemetry/batch")
+        accepted = 0
+
+        for start in range(0, len(payloads), _MAX_BATCH):
+            chunk = payloads[start:start + _MAX_BATCH]
+            try:
+                wire = {
+                    "payloads": [
+                        encrypt_payload(p.to_dict(), self.api_key) for p in chunk
+                    ],
+                }
+                resp = self._session.post(url, json=wire, timeout=_BATCH_POST_TIMEOUT)
+                resp.raise_for_status()
+                try:
+                    accepted += int(resp.json().get("accepted", len(chunk)))
+                except (ValueError, AttributeError, TypeError):
+                    accepted += len(chunk)
+            except requests.RequestException as exc:
+                logger.warning(
+                    "Failed to send telemetry batch (%d payload(s)): %s",
+                    len(chunk), exc,
+                )
+
+        if accepted < len(payloads):
+            logger.warning(
+                "Telemetry batch: %d/%d payload(s) accepted",
+                accepted, len(payloads),
+            )
+        else:
+            logger.info("Sent %d telemetry payload(s) in batch", accepted)
+        return accepted
 
     def send_scan_summary(self, data: ScanSummaryData) -> bool:
         """Encrypt and POST a scan snapshot to the pipeline."""

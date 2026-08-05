@@ -102,7 +102,7 @@ class TestPollCycle:
         identities = {"http://10.0.0.1": identity}
 
         api_client = MagicMock()
-        api_client.send.return_value = True
+        api_client.send_batch.return_value = 0
 
         metrics = ["cooling", "hashrate", "uptime", "hashboards", "errors"]
 
@@ -113,7 +113,9 @@ class TestPollCycle:
             BaselineTracker(),
         )
 
-        sent_types = [call.args[0].metric_type for call in api_client.send.call_args_list]
+        # Payloads now go out in one batched call, not one send() per metric.
+        api_client.send_batch.assert_called_once()
+        sent_types = [p.metric_type for p in api_client.send_batch.call_args.args[0]]
         for m in metrics:
             assert m in sent_types
 
@@ -130,7 +132,7 @@ class TestPollCycle:
         identities = {"http://10.0.0.1": identity}
 
         api_client = MagicMock()
-        api_client.send.return_value = True
+        api_client.send_batch.return_value = 0
 
         metrics = ["cooling", "hashrate", "uptime"]
 
@@ -141,10 +143,71 @@ class TestPollCycle:
             BaselineTracker(),
         )
 
-        sent_types = [call.args[0].metric_type for call in api_client.send.call_args_list]
+        api_client.send_batch.assert_called_once()
+        sent_types = [p.metric_type for p in api_client.send_batch.call_args.args[0]]
         assert "cooling" in sent_types
         assert "uptime" in sent_types
         assert "hashrate" not in sent_types
+
+    def test_parallel_fanout_collects_every_miner(self, all_fixtures):
+        """All miners are polled concurrently and land in a single batch."""
+        miners = [
+            ({"url": f"http://10.0.0.{i}", "name": f"m{i}"},
+             StubCollector(f"http://10.0.0.{i}", all_fixtures))
+            for i in range(1, 13)
+        ]
+        identities = {cfg["url"]: c.fetch_identity() for cfg, c in miners}
+
+        api_client = MagicMock()
+        api_client.send_batch.return_value = 0
+
+        metrics = ["cooling", "uptime"]
+
+        from wright_telemetry.baseline import BaselineTracker
+        _poll_cycle(miners, identities, api_client, metrics, "fac-1", BaselineTracker())
+
+        api_client.send_batch.assert_called_once()
+        payloads = api_client.send_batch.call_args.args[0]
+        # Every miner contributed every metric, in one upload.
+        assert len([p for p in payloads if p.metric_type in metrics]) == len(miners) * len(metrics)
+
+    def test_one_broken_miner_doesnt_lose_the_others(self, all_fixtures):
+        """A miner that throws on every fetch must not drop the rest of the batch."""
+
+        class DeadCollector(StubCollector):
+            def get_fetcher(self, metric):
+                def _boom():
+                    raise ConnectionError("miner unreachable")
+                return _boom
+
+        miners = [
+            ({"url": "http://10.0.0.1", "name": "dead"},
+             DeadCollector("http://10.0.0.1", all_fixtures)),
+            ({"url": "http://10.0.0.2", "name": "alive"},
+             StubCollector("http://10.0.0.2", all_fixtures)),
+        ]
+        identities = {
+            "http://10.0.0.1": StubCollector("http://10.0.0.1", all_fixtures).fetch_identity(),
+            "http://10.0.0.2": StubCollector("http://10.0.0.2", all_fixtures).fetch_identity(),
+        }
+
+        api_client = MagicMock()
+        api_client.send_batch.return_value = 0
+
+        from wright_telemetry.baseline import BaselineTracker
+        _poll_cycle(
+            miners, identities, api_client, ["cooling", "uptime"], "fac-1", BaselineTracker(),
+        )
+
+        api_client.send_batch.assert_called_once()
+        payloads = api_client.send_batch.call_args.args[0]
+        assert len([p for p in payloads if p.metric_type in ("cooling", "uptime")]) == 2
+
+    def test_no_collectors_skips_upload(self):
+        api_client = MagicMock()
+        from wright_telemetry.baseline import BaselineTracker
+        _poll_cycle([], {}, api_client, ["cooling"], "fac-1", BaselineTracker())
+        api_client.send_batch.assert_not_called()
 
 
 # ---------------------------------------------------------------

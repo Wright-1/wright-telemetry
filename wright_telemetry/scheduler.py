@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from typing import Any
 
@@ -270,6 +271,56 @@ def _build_scan_summary(
     )
 
 
+_POLL_MAX_WORKERS = 24  # concurrent miner fetches; I/O-bound so the GIL isn't a factor
+
+
+def _poll_one_miner(
+    miner_cfg: dict[str, Any],
+    collector: MinerCollector,
+    identity: MinerIdentity | None,
+    metrics: list[str],
+    facility_id: str,
+) -> tuple[list[TelemetryPayload], Any]:
+    """Fetch all consented metrics from one miner.
+
+    Returns the payloads to upload and the cooling reading (needed for baseline
+    tracking, which runs on the main thread). Runs on a worker thread; touches
+    only this miner's collector and identity, never the shared API session.
+    """
+    name = miner_cfg.get("name", miner_cfg["url"])
+    payloads: list[TelemetryPayload] = []
+    cooling_data_obj = None
+
+    for metric in metrics:
+        fetcher = collector.get_fetcher(metric)
+        if fetcher is None:
+            continue
+        try:
+            data_obj = fetcher()
+            if metric == "cooling":
+                cooling_data_obj = data_obj
+            if metric == "hashrate" and identity is not None:
+                identity.nominal_hashrate_ghs = data_obj.get_nominal_ghs()
+            payloads.append(TelemetryPayload(
+                metric_type=metric,
+                facility_id=facility_id,
+                miner_identity=identity,
+                data=asdict(data_obj),
+            ))
+        except Exception as exc:
+            logger.warning("Error fetching %s from '%s': %s", metric, name, exc)
+
+    if cooling_data_obj is None:
+        fan_fetcher = collector.get_fetcher("cooling")
+        if fan_fetcher is not None:
+            try:
+                cooling_data_obj = fan_fetcher()
+            except Exception as exc:
+                logger.warning("Error fetching cooling from '%s': %s", name, exc)
+
+    return payloads, cooling_data_obj
+
+
 def _poll_cycle(
     collectors: list[tuple[dict[str, Any], MinerCollector]],
     identities: dict[str, MinerIdentity],
@@ -277,63 +328,72 @@ def _poll_cycle(
     metrics: list[str],
     facility_id: str,
     baseline_tracker: BaselineTracker,
+    max_workers: int = _POLL_MAX_WORKERS,
 ) -> None:
-    """Run one polling cycle across all miners and all consented metrics."""
-    for miner_cfg, collector in collectors:
-        name = miner_cfg.get("name", miner_cfg["url"])
-        identity = identities.get(miner_cfg["url"])
+    """Run one polling cycle across all miners and all consented metrics.
 
-        cooling_data_obj = None
-        for metric in metrics:
-            fetcher = collector.get_fetcher(metric)
-            if fetcher is None:
-                continue
+    Miner fetches run on a thread pool and every resulting payload is uploaded in
+    one batched request. Both were previously serial, so cycle time scaled
+    linearly with miner count — ~23min at 1,554 miners, which set the real
+    telemetry cadence regardless of poll_interval.
+    """
+    if not collectors:
+        return
+
+    payloads: list[TelemetryPayload] = []
+    # (name, identity, cooling_data_obj) for the serial baseline pass below.
+    cooling_results: list[tuple[str, MinerIdentity | None, Any]] = []
+
+    workers = max(1, min(max_workers, len(collectors)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _poll_one_miner,
+                miner_cfg,
+                collector,
+                identities.get(miner_cfg["url"]),
+                metrics,
+                facility_id,
+            ): miner_cfg
+            for miner_cfg, collector in collectors
+        }
+        for fut in as_completed(futures):
+            miner_cfg = futures[fut]
+            name = miner_cfg.get("name", miner_cfg["url"])
             try:
-                data_obj = fetcher()
-                if metric == "cooling":
-                    cooling_data_obj = data_obj
-                if metric == "hashrate" and identity is not None:
-                    identity.nominal_hashrate_ghs = data_obj.get_nominal_ghs()
-                payload = TelemetryPayload(
-                    metric_type=metric,
+                miner_payloads, cooling_data_obj = fut.result()
+            except Exception as exc:
+                logger.warning("Poll failed for '%s': %s", name, exc)
+                continue
+            payloads.extend(miner_payloads)
+            if cooling_data_obj is not None:
+                cooling_results.append(
+                    (name, identities.get(miner_cfg["url"]), cooling_data_obj)
+                )
+
+    # BaselineTracker is stateful and not thread-safe — keep it on the main thread.
+    for name, identity, cooling_data_obj in cooling_results:
+        try:
+            new_baselines = baseline_tracker.record(identity, cooling_data_obj)
+            for baseline in new_baselines:
+                _print_baseline_dashboard(name, baseline)
+                logger.info(
+                    "Baseline established for miner '%s' fan #%d: "
+                    "rpm=%.2f±%.2f samples=%d",
+                    name, baseline.fan_position,
+                    baseline.baseline_rpm, baseline.baseline_rpm_stddev,
+                    baseline.baseline_sample_count,
+                )
+                payloads.append(TelemetryPayload(
+                    metric_type="baseline",
                     facility_id=facility_id,
                     miner_identity=identity,
-                    data=asdict(data_obj),
-                )
-                api_client.send(payload)
-            except Exception as exc:
-                logger.warning(
-                    "Error fetching %s from '%s': %s", metric, name, exc,
-                )
+                    data=baseline.to_dict(),
+                ))
+        except Exception as exc:
+            logger.warning("Error updating baseline for '%s': %s", name, exc)
 
-        if cooling_data_obj is None:
-            fan_fetcher = collector.get_fetcher("cooling")
-            if fan_fetcher is not None:
-                try:
-                    cooling_data_obj = fan_fetcher()
-                except Exception as exc:
-                    logger.warning("Error fetching cooling from '%s': %s", name, exc)
-
-        if cooling_data_obj is not None:
-            try:
-                new_baselines = baseline_tracker.record(identity, cooling_data_obj)
-                for baseline in new_baselines:
-                    _print_baseline_dashboard(name, baseline)
-                    logger.info(
-                        "Baseline established for miner '%s' fan #%d: "
-                        "rpm=%.2f±%.2f samples=%d",
-                        name, baseline.fan_position,
-                        baseline.baseline_rpm, baseline.baseline_rpm_stddev,
-                        baseline.baseline_sample_count,
-                    )
-                    api_client.send(TelemetryPayload(
-                        metric_type="baseline",
-                        facility_id=facility_id,
-                        miner_identity=identity,
-                        data=baseline.to_dict(),
-                    ))
-            except Exception as exc:
-                logger.warning("Error updating baseline for '%s': %s", name, exc)
+    api_client.send_batch(payloads)
 
 
 _FAN_DETECTION_POLL_INTERVAL = 0.25  # seconds

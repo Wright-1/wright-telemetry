@@ -122,3 +122,64 @@ class TestSend:
         req = responses.calls[0].request
         assert req.headers["X-API-Key"] == API_KEY
         assert req.headers["X-Facility-ID"] == FACILITY_ID
+
+
+BATCH_URL = wright_api_url(API_URL, "telemetry/batch")
+
+
+class TestSendBatch:
+
+    def test_empty_returns_zero(self, api_client):
+        assert api_client.send_batch([]) == 0
+
+    @responses.activate
+    def test_single_request_for_many_payloads(self, api_client, sample_payload):
+        """The whole point: N payloads cost one round trip, not N."""
+        responses.add(
+            responses.POST, BATCH_URL,
+            json={"success": True, "accepted": 5, "failed": 0}, status=200,
+        )
+        assert api_client.send_batch([sample_payload] * 5) == 5
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_payloads_are_encrypted(self, api_client, sample_payload):
+        responses.add(
+            responses.POST, BATCH_URL,
+            json={"success": True, "accepted": 2, "failed": 0}, status=200,
+        )
+        api_client.send_batch([sample_payload] * 2)
+        import json
+        body = json.loads(responses.calls[0].request.body)
+        assert len(body["payloads"]) == 2
+        for wire in body["payloads"]:
+            assert "nonce" in wire and "ciphertext" in wire
+            assert "metric_type" not in wire
+
+    @responses.activate
+    def test_chunks_above_max_batch(self, api_client, sample_payload):
+        from wright_telemetry.api_client import _MAX_BATCH
+        responses.add(
+            responses.POST, BATCH_URL,
+            json={"success": True, "accepted": _MAX_BATCH, "failed": 0}, status=200,
+        )
+        n = _MAX_BATCH + 10
+        api_client.send_batch([sample_payload] * n)
+        assert len(responses.calls) == 2
+        import json
+        assert len(json.loads(responses.calls[0].request.body)["payloads"]) == _MAX_BATCH
+        assert len(json.loads(responses.calls[1].request.body)["payloads"]) == 10
+
+    @responses.activate
+    def test_failed_chunk_is_not_retried(self, api_client, sample_payload):
+        responses.add(responses.POST, BATCH_URL, json={"error": "boom"}, status=503)
+        assert api_client.send_batch([sample_payload] * 3) == 0
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_reports_partial_acceptance(self, api_client, sample_payload):
+        responses.add(
+            responses.POST, BATCH_URL,
+            json={"success": True, "accepted": 2, "failed": 1}, status=200,
+        )
+        assert api_client.send_batch([sample_payload] * 3) == 2
