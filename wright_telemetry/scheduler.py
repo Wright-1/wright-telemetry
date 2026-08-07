@@ -9,6 +9,7 @@ Outer layer: top-level crash recovery with exponential backoff -- if
 
 from __future__ import annotations
 
+import atexit
 import logging
 import queue
 import sys
@@ -273,7 +274,8 @@ def _build_scan_summary(
 
 
 _POLL_MAX_WORKERS = 24  # concurrent miner fetches; I/O-bound so the GIL isn't a factor
-_UPLOAD_QUEUE_DEPTH = 3  # cycles of buffered uploads before we start dropping
+_MIN_LOOP_YIELD = 0.05  # never spin, even when the cycle overruns
+_UPLOAD_QUEUE_DEPTH = 6  # 3 cycles; each cycle submits a telemetry batch + a scan summary
 
 
 class _AsyncUploader:
@@ -327,15 +329,21 @@ class _AsyncUploader:
             finally:
                 self._q.task_done()
 
-    def close(self, timeout: float = 30.0) -> None:
-        """Drain what's pending, then stop."""
+    def close(self, timeout: float = 90.0) -> None:
+        """Drain what's pending, then stop.
+
+        Waits on unfinished_tasks rather than empty(): a queue is empty as soon as
+        the last item is dequeued, which is before its upload has finished.
+        """
         deadline = time.monotonic() + timeout
-        while not self._q.empty() and time.monotonic() < deadline:
+        while self._q.unfinished_tasks and time.monotonic() < deadline:
             time.sleep(0.1)
-        if not self._q.empty():
-            logger.warning("Uploader shutting down with %d batch(es) unsent", self._q.qsize())
+        if self._q.unfinished_tasks:
+            logger.warning(
+                "Uploader shutting down with %d upload(s) unfinished", self._q.unfinished_tasks,
+            )
         self._stop.set()
-        self._thread.join(timeout=5.0)
+        self._thread.join(timeout=max(1.0, deadline - time.monotonic()))
 
 
 def _poll_one_miner(
@@ -458,6 +466,9 @@ def _poll_cycle(
         except Exception as exc:
             logger.warning("Error updating baseline for '%s': %s", name, exc)
 
+    # An empty batch would still occupy a queue slot and could evict a real one.
+    if not payloads:
+        return
     # Defaults to a blocking send; the run loop passes the async uploader.
     (submit or api_client.send_batch)(payloads)
 
@@ -1025,6 +1036,10 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
     consecutive_crashes = 0
     # Outlives the crash-restart loop so queued uploads survive a restart.
     uploader = _AsyncUploader()
+    # GUI mode runs this in a daemon thread and never signals it, so the
+    # KeyboardInterrupt path below is unreachable there — without this, quitting
+    # the app drops whatever is still queued.
+    atexit.register(uploader.close)
 
     while True:
         collectors = []
@@ -1213,12 +1228,17 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                         cycle_secs, sleep_for, poll_interval,
                     )
 
+                # Always give the controller a chance to be observed, and always
+                # yield: on sustained overrun sleep_for is 0, which would otherwise
+                # make fan-detection mode unreachable and spin the loop.
                 if controller:
-                    if sleep_for > 0 and controller.wait_for_mode_change(timeout=sleep_for):
+                    if controller.wait_for_mode_change(timeout=max(sleep_for, _MIN_LOOP_YIELD)):
                         if controller.mode == "fan_detection":
                             _run_ws_fan_detection(cfg, controller, api_client)
-                elif sleep_for > 0:
-                    time.sleep(sleep_for)
+                    # Long non-poll work (fan detection) invalidates the schedule.
+                    next_deadline = time.monotonic()
+                else:
+                    time.sleep(max(sleep_for, _MIN_LOOP_YIELD))
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")

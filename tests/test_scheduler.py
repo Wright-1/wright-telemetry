@@ -21,6 +21,8 @@ from wright_telemetry.models import (
     MinerIdentity,
     UptimeData,
 )
+from wright_telemetry.api_client import WrightAPIClient, wright_api_url
+from wright_telemetry.models import TelemetryPayload as _TP  # noqa: E402
 from wright_telemetry.scheduler import (
     _BASELINE_SAMPLES,
     _build_collectors,
@@ -574,3 +576,80 @@ class TestPollCycleSubmit:
         api_client.send_batch.assert_not_called()
         assert len(captured) == 1
         assert {p.metric_type for p in captured[0]} >= {"cooling", "uptime"}
+
+
+class TestUploaderReviewFixes:
+
+    def test_close_waits_for_in_flight_upload(self):
+        """empty() goes true when an item is dequeued, not when it finishes."""
+        import time as _t
+        from wright_telemetry.scheduler import _AsyncUploader
+        finished: list[str] = []
+        up = _AsyncUploader()
+        up.submit("slow", lambda: (_t.sleep(0.5), finished.append("done")))
+        _t.sleep(0.1)  # worker has dequeued it; queue is now empty but not done
+        up.close(timeout=10.0)
+        assert finished == ["done"]
+
+    def test_empty_batch_does_not_consume_a_queue_slot(self, all_fixtures):
+        """An all-failed cycle must not evict a real pending batch."""
+        class DeadCollector(StubCollector):
+            def get_fetcher(self, metric):
+                def _boom():
+                    raise ConnectionError("down")
+                return _boom
+
+        api_client = MagicMock()
+        submitted: list[Any] = []
+        from wright_telemetry.baseline import BaselineTracker
+        _poll_cycle(
+            [({"url": "http://10.0.0.1", "name": "dead"},
+              DeadCollector("http://10.0.0.1", all_fixtures))],
+            {"http://10.0.0.1": MinerIdentity(uid="u", serial_number="s",
+                                              hostname="h", mac_address="m")},
+            api_client, ["cooling"], "fac-1", BaselineTracker(),
+            submit=submitted.append,
+        )
+        assert submitted == []
+
+
+class TestSendBatchReviewFixes:
+
+    def test_one_unencryptable_payload_does_not_drop_the_chunk(self, api_client_for_batch):
+        """json.dumps TypeError is not a RequestException — it used to escape."""
+        import responses as _r
+        client, good = api_client_for_batch
+
+        class Unserialisable:
+            pass
+
+        bad = _TP(
+            metric_type="cooling",
+            facility_id="fac-001",
+            miner_identity=good.miner_identity,
+            data={"nope": Unserialisable()},
+        )
+
+        with _r.RequestsMock() as rsps:
+            rsps.add(_r.POST, wright_api_url("https://api.wrightfan.com", "telemetry/batch"),
+                     json={"success": True, "accepted": 2, "failed": 0}, status=200)
+            accepted = client.send_batch([good, bad, good])
+            assert accepted == 2
+            import json as _j
+            body = _j.loads(rsps.calls[0].request.body)
+            assert len(body["payloads"]) == 2
+
+
+@pytest.fixture()
+def api_client_for_batch():
+    client = WrightAPIClient(
+        api_url="https://api.wrightfan.com", api_key="k", facility_id="fac-001",
+    )
+    payload = _TP(
+        metric_type="cooling",
+        facility_id="fac-001",
+        miner_identity=MinerIdentity(uid="u1", serial_number="s1",
+                                     hostname="h1", mac_address="m1"),
+        data={"fans": [{"rpm": 4200}]},
+    )
+    return client, payload

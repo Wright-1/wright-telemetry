@@ -122,12 +122,21 @@ class WrightAPIClient(ApiClient):
         self.api_key     = api_key
         self.facility_id = facility_id
 
-        self._session = requests.Session()
-        self._session.headers.update({
+        headers = {
             "Content-Type":  "application/json",
             "X-API-Key":     self.api_key,
             "X-Facility-ID": self.facility_id,
-        })
+        }
+
+        self._session = requests.Session()
+        self._session.headers.update(headers)
+
+        # Separate session for the methods the scheduler's uploader thread calls
+        # (send_batch, send_scan_summary). send/send_agent_config stay on the main
+        # thread using _session, so neither session is ever used concurrently —
+        # requests.Session is not safe to share across threads.
+        self._async_session = requests.Session()
+        self._async_session.headers.update(headers)
 
     # ── ApiClient interface ──────────────────────────────────────────────────
 
@@ -142,6 +151,7 @@ class WrightAPIClient(ApiClient):
 
     def close(self) -> None:
         self._session.close()
+        self._async_session.close()
 
     def send(self, payload: TelemetryPayload) -> bool:
         """Encrypt and POST a telemetry payload to the pipeline."""
@@ -186,22 +196,38 @@ class WrightAPIClient(ApiClient):
 
         for start in range(0, len(payloads), _MAX_BATCH):
             chunk = payloads[start:start + _MAX_BATCH]
+
+            # Encrypt per payload: a single unserialisable `data` field would
+            # otherwise raise out of the whole chunk (json.dumps TypeError is not
+            # a RequestException), costing 500 payloads instead of one.
+            wire_payloads = []
+            for p in chunk:
+                try:
+                    wire_payloads.append(encrypt_payload(p.to_dict(), self.api_key))
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping unencryptable %s payload for miner %s: %s",
+                        p.metric_type,
+                        p.miner_identity.hostname or p.miner_identity.uid,
+                        exc,
+                    )
+
+            if not wire_payloads:
+                continue
+
             try:
-                wire = {
-                    "payloads": [
-                        encrypt_payload(p.to_dict(), self.api_key) for p in chunk
-                    ],
-                }
-                resp = self._session.post(url, json=wire, timeout=_BATCH_POST_TIMEOUT)
+                resp = self._async_session.post(
+                    url, json={"payloads": wire_payloads}, timeout=_BATCH_POST_TIMEOUT,
+                )
                 resp.raise_for_status()
                 try:
-                    accepted += int(resp.json().get("accepted", len(chunk)))
+                    accepted += int(resp.json().get("accepted", len(wire_payloads)))
                 except (ValueError, AttributeError, TypeError):
-                    accepted += len(chunk)
+                    accepted += len(wire_payloads)
             except requests.RequestException as exc:
                 logger.warning(
                     "Failed to send telemetry batch (%d payload(s)): %s",
-                    len(chunk), exc,
+                    len(wire_payloads), exc,
                 )
 
         if accepted < len(payloads):
@@ -219,7 +245,7 @@ class WrightAPIClient(ApiClient):
         url = self.endpoint("telemetry/scan-summary")
         try:
             wire = encrypt_payload(asdict(data), self.api_key)
-            resp = self._session.post(url, json=wire, timeout=_POST_TIMEOUT)
+            resp = self._async_session.post(url, json=wire, timeout=_POST_TIMEOUT)
             resp.raise_for_status()
             logger.info(
                 "Sent scan summary for facility %s: %d subnet(s), %d miner(s) (HTTP %d)",
