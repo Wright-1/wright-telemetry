@@ -10,6 +10,7 @@ Outer layer: top-level crash recovery with exponential backoff -- if
 from __future__ import annotations
 
 import logging
+import queue
 import sys
 import threading
 import time
@@ -272,6 +273,69 @@ def _build_scan_summary(
 
 
 _POLL_MAX_WORKERS = 24  # concurrent miner fetches; I/O-bound so the GIL isn't a factor
+_UPLOAD_QUEUE_DEPTH = 3  # cycles of buffered uploads before we start dropping
+
+
+class _AsyncUploader:
+    """Runs uploads on one background thread so the poll loop never waits on the WAN.
+
+    Single worker, so the client's requests.Session is only ever touched from one
+    thread. The queue is bounded: when uploads fall behind, the oldest batch is
+    dropped rather than stalling the loop. Telemetry is periodic sampling, so a
+    dropped batch costs samples, whereas a stalled loop corrupts the cadence for
+    every miner.
+    """
+
+    def __init__(self, depth: int = _UPLOAD_QUEUE_DEPTH) -> None:
+        self._q: queue.Queue = queue.Queue(maxsize=depth)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="telemetry-uploader", daemon=True,
+        )
+        self._thread.start()
+
+    def submit(self, label: str, fn: Any) -> None:
+        try:
+            self._q.put_nowait((label, fn))
+            return
+        except queue.Full:
+            pass
+        try:
+            dropped_label, _ = self._q.get_nowait()
+            self._q.task_done()
+            logger.warning(
+                "Upload queue full — dropped '%s'; uploads are not keeping up with polling",
+                dropped_label,
+            )
+        except queue.Empty:
+            pass
+        try:
+            self._q.put_nowait((label, fn))
+        except queue.Full:
+            logger.warning("Upload queue still full — dropped '%s'", label)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                label, fn = self._q.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            try:
+                fn()
+            except Exception as exc:
+                logger.warning("Upload '%s' failed: %s", label, exc)
+            finally:
+                self._q.task_done()
+
+    def close(self, timeout: float = 30.0) -> None:
+        """Drain what's pending, then stop."""
+        deadline = time.monotonic() + timeout
+        while not self._q.empty() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if not self._q.empty():
+            logger.warning("Uploader shutting down with %d batch(es) unsent", self._q.qsize())
+        self._stop.set()
+        self._thread.join(timeout=5.0)
 
 
 def _poll_one_miner(
@@ -329,6 +393,7 @@ def _poll_cycle(
     facility_id: str,
     baseline_tracker: BaselineTracker,
     max_workers: int = _POLL_MAX_WORKERS,
+    submit: Any = None,
 ) -> None:
     """Run one polling cycle across all miners and all consented metrics.
 
@@ -393,7 +458,8 @@ def _poll_cycle(
         except Exception as exc:
             logger.warning("Error updating baseline for '%s': %s", name, exc)
 
-    api_client.send_batch(payloads)
+    # Defaults to a blocking send; the run loop passes the async uploader.
+    (submit or api_client.send_batch)(payloads)
 
 
 _FAN_DETECTION_POLL_INTERVAL = 0.25  # seconds
@@ -957,6 +1023,8 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
 
     baseline_tracker = BaselineTracker()
     consecutive_crashes = 0
+    # Outlives the crash-restart loop so queued uploads survive a restart.
+    uploader = _AsyncUploader()
 
     while True:
         collectors = []
@@ -990,6 +1058,7 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
             _fd_last_check = 0.0
             known_urls = {m["url"] for m in miners}
             known_macs = {m["mac_address"] for m in miners if m.get("mac_address")}
+            next_deadline = time.monotonic()
 
             while True:
                 now = time.time()
@@ -1094,15 +1163,27 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                     except Exception as exc:
                         logger.warning("Failed to send agent config after reload: %s", exc)
 
-                _poll_cycle(collectors, identities, api_client, metrics, facility_id, baseline_tracker)
+                cycle_start = time.monotonic()
+
+                _poll_cycle(
+                    collectors, identities, api_client, metrics, facility_id,
+                    baseline_tracker, submit=lambda p: uploader.submit(
+                        f"telemetry×{len(p)}", lambda: api_client.send_batch(p),
+                    ),
+                )
 
                 try:
                     scan_summary = _build_scan_summary(
                         collectors, facility_id, discovery_cfg.get("subnets") or []
                     )
-                    api_client.send_scan_summary(scan_summary)
+                    uploader.submit(
+                        "scan-summary",
+                        lambda s=scan_summary: api_client.send_scan_summary(s),
+                    )
                 except Exception as exc:
-                    logger.warning("Failed to send scan summary: %s", exc)
+                    logger.warning("Failed to build scan summary: %s", exc)
+
+                cycle_secs = time.monotonic() - cycle_start
 
                 if controller:
                     controller.push_gui_event({"event": "poll_cycle_complete", "miner_count": len(collectors)})
@@ -1110,15 +1191,38 @@ def run(cfg: dict[str, Any], controller: Any = None) -> None:
                 if _fd_baseline:
                     _fd_baseline, _fd_last_check = _check_fd_growth(_fd_baseline, _fd_last_check)
 
-                if controller and controller.wait_for_mode_change(timeout=poll_interval):
-                    if controller.mode == "fan_detection":
-                        _run_ws_fan_detection(cfg, controller, api_client)
+                # Fixed-rate schedule: sleep the remainder of the interval rather
+                # than a full interval on top of the cycle, so cadence stays at
+                # poll_interval instead of drifting to cycle + poll_interval.
+                next_deadline += poll_interval
+                sleep_for = next_deadline - time.monotonic()
+
+                if sleep_for <= 0:
+                    logger.warning(
+                        "Poll cycle took %.1fs, overrunning the %ds interval by %.1fs — "
+                        "cadence cannot be maintained at this fleet size",
+                        cycle_secs, poll_interval, -sleep_for,
+                    )
+                    # Reset rather than carrying the debt forward, or a long stall
+                    # would fire back-to-back cycles trying to catch up.
+                    next_deadline = time.monotonic()
+                    sleep_for = 0
                 else:
-                    if not controller:
-                        time.sleep(poll_interval)
+                    logger.debug(
+                        "Poll cycle %.1fs, sleeping %.1fs (interval %ds)",
+                        cycle_secs, sleep_for, poll_interval,
+                    )
+
+                if controller:
+                    if sleep_for > 0 and controller.wait_for_mode_change(timeout=sleep_for):
+                        if controller.mode == "fan_detection":
+                            _run_ws_fan_detection(cfg, controller, api_client)
+                elif sleep_for > 0:
+                    time.sleep(sleep_for)
 
         except KeyboardInterrupt:
             logger.info("Shutting down (keyboard interrupt)")
+            uploader.close()
             api_client.close()
             break
         except Exception:

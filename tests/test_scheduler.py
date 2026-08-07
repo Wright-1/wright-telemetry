@@ -486,3 +486,91 @@ class TestBuildScanSummary:
 
 
 
+
+
+# ---------------------------------------------------------------
+# _AsyncUploader
+# ---------------------------------------------------------------
+
+class TestAsyncUploader:
+
+    def test_runs_submitted_work(self):
+        import threading
+        from wright_telemetry.scheduler import _AsyncUploader
+        done = threading.Event()
+        up = _AsyncUploader()
+        try:
+            up.submit("x", done.set)
+            assert done.wait(timeout=5.0)
+        finally:
+            up.close(timeout=2.0)
+
+    def test_survives_a_failing_upload(self):
+        """One bad upload must not kill the worker thread."""
+        import threading
+        from wright_telemetry.scheduler import _AsyncUploader
+
+        def boom():
+            raise RuntimeError("upload exploded")
+
+        done = threading.Event()
+        up = _AsyncUploader()
+        try:
+            up.submit("boom", boom)
+            up.submit("ok", done.set)
+            assert done.wait(timeout=5.0)
+        finally:
+            up.close(timeout=2.0)
+
+    def test_drops_oldest_when_backed_up(self):
+        """A full queue drops rather than blocking the poll loop."""
+        import threading
+        import time as _t
+        from wright_telemetry.scheduler import _AsyncUploader
+
+        gate = threading.Event()
+        ran: list[str] = []
+        up = _AsyncUploader(depth=2)
+        try:
+            up.submit("blocker", lambda: gate.wait(timeout=5.0))
+            _t.sleep(0.3)  # let the worker pick up the blocker
+            up.submit("a", lambda: ran.append("a"))
+            up.submit("b", lambda: ran.append("b"))
+            up.submit("c", lambda: ran.append("c"))  # queue full → oldest ('a') dropped
+            gate.set()
+            _t.sleep(0.5)
+            assert "a" not in ran
+            assert "c" in ran
+        finally:
+            gate.set()
+            up.close(timeout=2.0)
+
+    def test_close_drains_pending(self):
+        import time as _t
+        from wright_telemetry.scheduler import _AsyncUploader
+        ran: list[str] = []
+        up = _AsyncUploader()
+        up.submit("slow", lambda: (_t.sleep(0.2), ran.append("slow")))
+        up.close(timeout=5.0)
+        assert ran == ["slow"]
+
+
+class TestPollCycleSubmit:
+
+    def test_submit_callable_replaces_blocking_send(self, stub_collector):
+        """The run loop hands _poll_cycle the async uploader instead of send_batch."""
+        miner_cfg = {"url": "http://10.0.0.1", "name": "m"}
+        identities = {"http://10.0.0.1": stub_collector.fetch_identity()}
+        api_client = MagicMock()
+        captured: list[Any] = []
+
+        from wright_telemetry.baseline import BaselineTracker
+        _poll_cycle(
+            [(miner_cfg, stub_collector)], identities, api_client,
+            ["cooling", "uptime"], "fac-1", BaselineTracker(),
+            submit=captured.append,
+        )
+
+        api_client.send_batch.assert_not_called()
+        assert len(captured) == 1
+        assert {p.metric_type for p in captured[0]} >= {"cooling", "uptime"}
