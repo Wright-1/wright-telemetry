@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import responses
 
-from tests.conftest import BITMAIN_URL
+from tests.conftest import BITMAIN_PASSWORD, BITMAIN_URL, BITMAIN_USERNAME
 
 
 class TestAuthentication:
@@ -29,14 +29,16 @@ class TestAuthentication:
         from requests.auth import HTTPDigestAuth
         auth = bitmain_collector._session.auth
         assert isinstance(auth, HTTPDigestAuth)
-        assert auth.username == "root"
-        assert auth.password == "root"
+        assert auth.username == BITMAIN_USERNAME
+        assert auth.password == BITMAIN_PASSWORD
 
     @responses.activate
     def test_auto_retry_on_401(self, bitmain_fixtures):
         """A 401 response should trigger a re-auth and one retry."""
         from wright_telemetry.collectors.bitmain import BitmainCollector
-        collector = BitmainCollector(url=BITMAIN_URL, username="root", password="root")
+        collector = BitmainCollector(
+            url=BITMAIN_URL, username="root", password=BITMAIN_PASSWORD,
+        )
 
         # First call returns 401; second returns the real fixture.
         responses.add(
@@ -343,7 +345,9 @@ class TestFactoryRegistration:
         import wright_telemetry.collectors.bitmain  # noqa: F401
         from wright_telemetry.collectors.factory import CollectorFactory
         from wright_telemetry.collectors.bitmain import BitmainCollector
-        c = CollectorFactory.create("bitmain", url=BITMAIN_URL, username="root", password="root")
+        c = CollectorFactory.create(
+            "bitmain", url=BITMAIN_URL, username="root", password=BITMAIN_PASSWORD,
+        )
         assert isinstance(c, BitmainCollector)
         c.close()
 

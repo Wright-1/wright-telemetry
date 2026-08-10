@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import traceback
-from typing import Any
+from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -210,16 +210,38 @@ class ScanningEngine:
         self.controller.push_gui_event({"event": "subnet_removed", "subnet": subnet})
 
     #TODO - we may want a unique credential per subnet at some point
-    def update_discovery_credentials(self, username: str, password: str) -> None:
-        """Persist default miner credentials used during subnet discovery."""
-        from wright_telemetry.config import encode_password, load_config, save_config
+    def update_firmware_credentials(
+        self, creds: dict[str, dict[str, Optional[str]]],
+    ) -> None:
+        """Persist per-firmware miner credentials used during subnet discovery.
+
+        *creds* maps ``firmware -> {"username": str, "password": str | None}``.
+        A ``password`` of ``None`` means "unchanged" and keeps whatever is
+        already stored; an empty string clears it.  Passwords are encoded here
+        so plaintext never crosses into the config layer from the UI.
+        """
+        from wright_telemetry.config import (
+            encode_password, firmware_credentials_map, load_config,
+            save_config, save_firmware_credentials,
+        )
         cfg = load_config() or {}
-        disc = cfg.setdefault("discovery", {})
-        disc["default_username"] = username or "root"
-        if password:
-            disc["default_password_b64"] = encode_password(password)
-        else:
-            disc.pop("default_password_b64", None)
+        existing = firmware_credentials_map(cfg, list(creds))
+
+        encoded: dict[str, dict[str, str]] = {}
+        for firmware, entry in creds.items():
+            password = entry.get("password")
+            if password is None:
+                password_b64 = existing[firmware]["password_b64"]
+            elif password:
+                password_b64 = encode_password(password)
+            else:
+                password_b64 = ""
+            encoded[firmware] = {
+                "username": entry.get("username") or "",
+                "password_b64": password_b64,
+            }
+
+        save_firmware_credentials(cfg, encoded)
         save_config(cfg)
         self._cfg = cfg
         self.controller.request_config_reload()
