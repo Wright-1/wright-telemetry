@@ -221,38 +221,9 @@ class _CredentialRow(QWidget):
         self._password_input.textChanged.connect(self._on_password_edited)
         row.addWidget(self._password_input, 1)
 
-        self._pw_toggle_btn = QPushButton("Show")
-        self._pw_toggle_btn.setFixedHeight(34)
-        self._pw_toggle_btn.setFixedWidth(52)
-        self._pw_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._pw_toggle_btn.setCheckable(True)
-        self._pw_toggle_btn.setFont(make_font(11, 600))
-        self._pw_toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {T.BG_WINDOW};
-                border: 1px solid {T.BORDER_DEFAULT};
-                border-radius: 6px;
-                color: {T.TEXT_MUTED};
-            }}
-            QPushButton:checked {{
-                color: {T.ACCENT_BLUE};
-                border-color: {T.ACCENT_BLUE};
-            }}
-            QPushButton:hover {{
-                background: {T.BG_CARD};
-            }}
-        """)
-        self._pw_toggle_btn.toggled.connect(self._on_pw_visibility_toggled)
-        row.addWidget(self._pw_toggle_btn)
-
     def _on_password_edited(self) -> None:
         self._password_touched = True
         self.changed.emit()
-
-    def _on_pw_visibility_toggled(self, visible: bool) -> None:
-        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
-        self._password_input.setEchoMode(mode)
-        self._pw_toggle_btn.setText("Hide" if visible else "Show")
 
     def values(self) -> dict[str, Optional[str]]:
         """Current entry: ``password`` is None when the field was never edited."""
@@ -422,7 +393,6 @@ class _ProgressEntryCard(QWidget):
         cred_hdr.addWidget(_lbl("FIRMWARE", 10, 600, T.TEXT_MUTED, fixed_w=_CRED_LABEL_W))
         cred_hdr.addWidget(_lbl("USERNAME", 10, 600, T.TEXT_MUTED), 1)
         cred_hdr.addWidget(_lbl("PASSWORD", 10, 600, T.TEXT_MUTED), 1)
-        cred_hdr.addSpacing(52 + 12)   # show/hide button + row spacing
         entry.addLayout(cred_hdr)
 
         from wright_telemetry.config import firmware_credentials_map
