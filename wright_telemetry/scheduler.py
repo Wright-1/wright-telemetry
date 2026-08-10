@@ -87,7 +87,7 @@ def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[st
     default_user   = discovery_cfg.get("default_username",    "root")
     default_pw_b64 = discovery_cfg.get("default_password_b64", "")
 
-    def _creds_for(firmware: Optional[str]) -> tuple[str, str]:
+    def _creds_for(firmware: str | None) -> tuple[str, str]:
         """Credentials configured for *firmware*, falling back to the globals."""
         return resolve_firmware_credentials(cfg, firmware)
 

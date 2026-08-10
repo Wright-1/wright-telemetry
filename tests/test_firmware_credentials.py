@@ -255,3 +255,73 @@ def test_one_firmware_password_change_does_not_affect_others():
         if firmware == "vnish":
             continue
         assert resolve_firmware_credentials(cfg, firmware)[1] == encode_password(pw)
+
+
+# ── GUI persistence: untouched rows must stay on the global fallback ──────────
+
+def _engine_stub():
+    """A ScanningEngine with only what update_firmware_credentials touches."""
+    from wright_telemetry.gui.engine import ScanningEngine
+
+    engine = object.__new__(ScanningEngine)
+
+    class _Controller:
+        def request_config_reload(self) -> None:
+            pass
+
+    engine.controller = _Controller()
+    return engine
+
+
+def _run_gui_update(monkeypatch, cfg: dict, creds: dict) -> dict:
+    import wright_telemetry.config as config_mod
+
+    monkeypatch.setattr(config_mod, "load_config", lambda: cfg)
+    monkeypatch.setattr(config_mod, "save_config", lambda c: None)
+    _engine_stub().update_firmware_credentials(creds)
+    return cfg
+
+
+def test_gui_untouched_rows_do_not_freeze_the_global_password(monkeypatch):
+    """Editing one firmware must not pin the others to today's global password.
+
+    Regression: every row was persisted with its *resolved* password, so a
+    legacy global-password config gained explicit entries for all firmwares
+    and later rotating the global no longer reached them.
+    """
+    cfg = _legacy_cfg()
+    _run_gui_update(monkeypatch, cfg, {
+        "braiins": {"username": "edited", "password": "newpw"},
+        "vnish":   {"username": "root", "password": None},
+        "luxos":   {"username": "root", "password": None},
+    })
+
+    stored = cfg["discovery"]["firmware_credentials"]
+    assert set(stored) == {"braiins"}
+    assert stored["braiins"]["password_b64"] == encode_password("newpw")
+
+    # The untouched firmwares still track the global, so rotating it reaches them.
+    cfg["discovery"]["default_password_b64"] = encode_password("rotated")
+    assert resolve_firmware_credentials(cfg, "vnish")[1] == encode_password("rotated")
+    assert resolve_firmware_credentials(cfg, "braiins")[1] == encode_password("newpw")
+
+
+def test_gui_username_only_edit_is_persisted(monkeypatch):
+    cfg = _legacy_cfg()
+    _run_gui_update(monkeypatch, cfg, {
+        "vnish": {"username": "admin", "password": None},
+    })
+    user, pw = resolve_firmware_credentials(cfg, "vnish")
+    assert user == "admin"
+    assert pw == GLOBAL_PW  # password still falls through to the global
+
+
+def test_gui_edit_keeps_existing_entry_password(monkeypatch):
+    """An untouched password field on a firmware that already has an entry."""
+    cfg = _mixed_cfg()
+    _run_gui_update(monkeypatch, cfg, {
+        "vnish": {"username": "renamed", "password": None},
+    })
+    user, pw = resolve_firmware_credentials(cfg, "vnish")
+    assert user == "renamed"
+    assert pw == VNISH_PW

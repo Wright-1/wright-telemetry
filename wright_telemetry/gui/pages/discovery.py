@@ -612,7 +612,11 @@ class _ProgressEntryCard(QWidget):
         if self._engine is None:
             return
         self._engine.update_firmware_credentials(
-            {key: row.values() for key, row in self._cred_rows.items()}
+            {
+                key: row.values()
+                for key, row in self._cred_rows.items()
+                if row.isVisibleTo(self)
+            }
         )
 
     def _on_add(self) -> None:

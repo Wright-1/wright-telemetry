@@ -221,25 +221,46 @@ class ScanningEngine:
         so plaintext never crosses into the config layer from the UI.
         """
         from wright_telemetry.config import (
-            encode_password, firmware_credentials_map, load_config,
-            save_config, save_firmware_credentials,
+            FIRMWARE_CREDENTIALS_KEY, encode_password, firmware_credentials_map,
+            load_config, save_config, save_firmware_credentials,
         )
         cfg = load_config() or {}
-        existing = firmware_credentials_map(cfg, list(creds))
+        stored = (cfg.get("discovery") or {}).get(FIRMWARE_CREDENTIALS_KEY) or {}
+        resolved = firmware_credentials_map(cfg, list(creds))
 
         encoded: dict[str, dict[str, str]] = {}
         for firmware, entry in creds.items():
             password = entry.get("password")
+            prior = stored.get(firmware)
+            prior = prior if isinstance(prior, dict) else None
+            username = entry.get("username") or ""
+            if (
+                password is None
+                and prior is None
+                and username == resolved[firmware]["username"]
+            ):
+                # Nothing edited and no entry of its own: leave this firmware on
+                # the global fallback instead of freezing today's global into an
+                # explicit entry.
+                continue
+            if password is None and (prior is None or "password_b64" not in prior):
+                # Username-only edit on a firmware with no password of its own:
+                # store the username and leave the password on the global
+                # fallback rather than freezing a copy of it here.
+                encoded[firmware] = {"username": username}
+                continue
             if password is None:
-                password_b64 = existing[firmware]["password_b64"]
+                password_b64 = prior.get("password_b64") or ""
             elif password:
                 password_b64 = encode_password(password)
             else:
                 password_b64 = ""
             encoded[firmware] = {
-                "username": entry.get("username") or "",
+                "username": username,
                 "password_b64": password_b64,
             }
+        if not encoded:
+            return
 
         save_firmware_credentials(cfg, encoded)
         save_config(cfg)
