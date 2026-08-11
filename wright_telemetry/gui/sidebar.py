@@ -29,6 +29,7 @@ class Sidebar(QWidget):
         ("discovery",   "◎", "Discovery"),
         ("overview",    "⊞", "Overview"),
         ("logs",        "≡", "Logs"),
+        ("settings",    "⚙", "Settings"),
     ]
 
     def __init__(self, version: str = __version__, parent: QWidget | None = None):
@@ -182,8 +183,9 @@ class Sidebar(QWidget):
         """
         self._items["overview"].setVisible(connected)
         self._signup_card.setVisible(not connected)
-        # Logs page is always accessible
+        # Logs and Settings pages are always accessible
         self._items["logs"].setVisible(True)
+        self._items["settings"].setVisible(True)
 
     def _make_signup_card(self) -> QWidget:
         """Sidebar card: label + full-width button + tagline."""
