@@ -14,4 +14,5 @@ from wright_telemetry.collectors import (  # noqa: F401
     luxos,
     sealminer,
     vnish,
+    whatsminer,
 )

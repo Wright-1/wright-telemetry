@@ -47,3 +47,8 @@ config.json
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Raw miner API dumps (scripts/*_api_dump.ps1) — contain real MACs, IPs,
+# pool worker names and session tokens. Anonymise before adding as a fixture.
+*_dump.txt
+vnish_dump*.txt

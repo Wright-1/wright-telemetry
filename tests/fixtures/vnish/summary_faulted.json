@@ -1,0 +1,68 @@
+{
+  "_comment": "SYNTHETIC. Hand-built failure state, unlike the other vnish fixtures which are captured from a real S21. Vnish drops disconnected chains from the array entirely, so this has 2 chains instead of 3.",
+  "miner": {
+    "miner_status": {
+      "miner_state": "stopped",
+      "miner_state_time": 646
+    },
+    "miner_type": "Antminer S21 (Vnish 1.2.6-rc5)",
+    "hr_stock": 235651.0,
+    "average_hashrate": 0,
+    "instant_hashrate": 0,
+    "hr_realtime": 0,
+    "hr_nominal": 0,
+    "hr_average": 0,
+    "pcb_temp": {"min": 21, "max": 24},
+    "chip_temp": {"min": 28, "max": 31},
+    "power_consumption": 0,
+    "power_usage": 0,
+    "power_efficiency": 0,
+    "hw_errors": 0,
+    "pools": [],
+    "cooling": {
+      "fan_num": 4,
+      "fans": [
+        {"id": 0, "rpm": 7000, "status": "ok", "max_rpm": 7000},
+        {"id": 1, "rpm": 0, "status": "broken", "max_rpm": 7000},
+        {"id": 2, "rpm": 7000, "status": "ok", "max_rpm": 7000},
+        {"id": 3, "rpm": 7000, "status": "ok", "max_rpm": 7000}
+      ],
+      "settings": {"mode": {"name": "auto"}},
+      "fan_duty": 60
+    },
+    "chains": [
+      {
+        "id": 1,
+        "frequency": 460.0,
+        "voltage": 13300,
+        "power_consumption": 0,
+        "hashrate_ideal": 62630.98,
+        "hashrate_rt": 0.0,
+        "hashrate_percentage": 0.0,
+        "hr_error": 0.0,
+        "hw_errors": 0,
+        "pcb_temp": {"min": 21, "max": 24},
+        "chip_temp": {"min": 28, "max": 31},
+        "chip_statuses": {"red": 0, "orange": 0, "grey": 108},
+        "status": {"state": "idle"}
+      },
+      {
+        "id": 3,
+        "frequency": 460.0,
+        "voltage": 13300,
+        "power_consumption": 0,
+        "hashrate_ideal": 62630.98,
+        "hashrate_rt": 0.0,
+        "hashrate_percentage": 0.0,
+        "hr_error": 0.0,
+        "hw_errors": 912,
+        "pcb_temp": {"min": 22, "max": 24},
+        "chip_temp": {"min": 29, "max": 31},
+        "chip_statuses": {"red": 43, "orange": 2, "grey": 63},
+        "status": {"state": "failure", "description": "chain lost"}
+      }
+    ],
+    "found_blocks": 0,
+    "best_share": 19332518214
+  }
+}

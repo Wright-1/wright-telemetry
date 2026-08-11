@@ -5,10 +5,16 @@ Authentication is token-based via ``POST /api/v1/unlock``.
 
 Endpoints used:
     POST /api/v1/unlock    -> authentication token
-    GET  /api/v1/info      -> MinerIdentity (hostname, MAC, serial, model)
-    GET  /api/v1/summary   -> HashrateData + UptimeData (hashrate, uptime, pools, power)
-    GET  /api/v1/status    -> CoolingData + HashboardData (fans, temps, boards)
-    GET  /api/v1/info      -> UptimeData (firmware version, uptime)
+    GET  /api/v1/info      -> MinerIdentity (hostname, MAC, serial, model, firmware)
+    GET  /api/v1/summary   -> everything else: hashrate, pools, power, uptime,
+                              fans (``miner.cooling.fans``), hashboards
+                              (``miner.chains``) and inferred errors
+    GET  /api/v1/status    -> miner state flags only; used as an uptime fallback
+
+``/api/v1/status`` returns nothing but state flags on this firmware
+(``miner_state``, ``find_miner``, ``reboot_required``) -- fans and chains are
+in the summary response, not there. Verified against an Antminer S21 running
+Vnish 1.2.6-rc5; see ``tests/fixtures/vnish/README.md``.
 """
 
 from __future__ import annotations
@@ -91,13 +97,26 @@ class VnishCollector(MinerCollector):
 
     def fetch_identity(self) -> MinerIdentity:
         raw = self._get("/api/v1/info")
+        network = raw.get("system", {}).get("network_status", {})
+        mac = network.get("mac", "")
+
+        # Vnish reports serial "N/A" on hardware whose EEPROM it can't read
+        # (every S21 seen so far), so the MAC is the only stable identifier.
+        serial = raw.get("serial", "")
+        if serial.strip().upper() in ("", "N/A", "NA", "UNKNOWN"):
+            serial = ""
+        uid = raw.get("uid") or serial or mac
+
         return MinerIdentity(
-            uid=raw.get("uid", raw.get("serial", "")),
-            serial_number=raw.get("serial", ""),
-            hostname=raw.get("hostname", ""),
-            mac_address=raw.get("mac", ""),
-            model=raw.get("model", ""),
+            uid=uid,
+            serial_number=serial,
+            hostname=network.get("hostname", ""),
+            mac_address=mac,
+            # "miner" is the display name ("Antminer S21"); "model" is the
+            # slug ("s21").
+            model=raw.get("miner") or raw.get("model", ""),
             firmware="vnish",
+            ip_address=network.get("ip", ""),
         )
 
     # ------------------------------------------------------------------
@@ -105,7 +124,7 @@ class VnishCollector(MinerCollector):
     # ------------------------------------------------------------------
 
     def fetch_cooling(self) -> CoolingData:
-        raw = self._get("/api/v1/status")
+        raw = self._get("/api/v1/summary")
         return CoolingData.from_vnish(raw)
 
     def fetch_hashrate(self) -> HashrateData:
@@ -118,9 +137,9 @@ class VnishCollector(MinerCollector):
         return UptimeData.from_vnish(info_raw, summary_raw)
 
     def fetch_hashboards(self) -> HashboardData:
-        raw = self._get("/api/v1/status")
+        raw = self._get("/api/v1/summary")
         return HashboardData.from_vnish(raw)
 
     def fetch_errors(self) -> ErrorData:
-        raw = self._get("/api/v1/status")
+        raw = self._get("/api/v1/summary")
         return ErrorData.from_vnish(raw)

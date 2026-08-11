@@ -1,0 +1,47 @@
+{
+  "STATUS": [
+    {
+      "STATUS": "S",
+      "Msg": "Summary"
+    }
+  ],
+  "SUMMARY": [
+    {
+      "Elapsed": 4680,
+      "MHS av": 87377881.4,
+      "MHS 5s": 104999986.4,
+      "MHS 1m": 88965118.1,
+      "MHS 5m": 87407605.54,
+      "MHS 15m": 87376511.2,
+      "HS RT": 87407605.54,
+      "Accepted": 458,
+      "Rejected": 7,
+      "Total MH": 408948293190.0,
+      "Temperature": 80.0,
+      "freq_avg": 703,
+      "Fan Speed In": 6990,
+      "Fan Speed Out": 6930,
+      "Power": 3370,
+      "Power Rate": 38.57,
+      "Pool Rejected%": 1.2516,
+      "Pool Stale%": 0.0,
+      "Uptime": 6722,
+      "Security Mode": 0,
+      "Hash Stable": true,
+      "Hash Stable Cost Seconds": 3242,
+      "Hash Deviation%": 0.0765,
+      "Target Freq": 668,
+      "Target MHS": 84083832,
+      "Env Temp": 53.0,
+      "Power Mode": "Normal",
+      "Factory GHS": 91027,
+      "Power Limit": 3360,
+      "Chip Temp Min": 85.58,
+      "Chip Temp Max": 101.33,
+      "Chip Temp Avg": 93.66,
+      "Debug": "00.0_100.0_624",
+      "Btminer Fast Boot": "disable"
+    }
+  ],
+  "id": 1
+}
