@@ -266,7 +266,7 @@ class WebSocketClient:
 
     def _apply_config_update(self, cfg: dict[str, Any], payload: dict[str, Any]) -> None:
         """Validate, merge, save, and emit updated config."""
-        VALID_COLLECTOR_TYPES = ("braiins", "luxos", "vnish")
+        VALID_COLLECTOR_TYPES = ("braiins", "luxos", "vnish", "whatsminer")
 
         if "poll_interval_seconds" in payload:
             val = payload["poll_interval_seconds"]

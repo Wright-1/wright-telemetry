@@ -7,6 +7,18 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
 
+def _as_float(value: Any) -> float:
+    """Coerce a possibly-stringy numeric API field to float, 0.0 on failure.
+
+    WhatsMiner's ``get_psu`` returns its numbers as JSON strings ("13968"),
+    while every other btminer command returns real numbers.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 @dataclass
 class MinerIdentity:
     uid: str
@@ -163,6 +175,31 @@ class CoolingData:
         psu_amb = stats.get("PSU Temp AMB")
         if isinstance(psu_amb, (int, float)) and psu_amb > 0:
             all_temps.append(float(psu_amb))
+        highest_temp: Optional[dict[str, Any]] = (
+            {"value": max(all_temps), "unit": "C"} if all_temps else None
+        )
+        return cls(fans=fans, highest_temperature=highest_temp)
+
+    @classmethod
+    def from_whatsminer(cls, summary_raw: dict[str, Any]) -> CoolingData:
+        summary = (summary_raw.get("SUMMARY") or [{}])[0]
+        # btminer reports one intake and one exhaust speed rather than a
+        # per-fan array, so position 0 is air-in and 1 is air-out. It exposes
+        # no fan PWM/duty anywhere in the readable API, so target_speed_ratio
+        # stays 0.0 (same limitation as the Sealminer/Bitmain adapters).
+        fans: list[FanReading] = []
+        for position, key in enumerate(("Fan Speed In", "Fan Speed Out")):
+            rpm = summary.get(key)
+            if rpm is None:
+                continue
+            fans.append(FanReading(position=position, rpm=int(rpm), target_speed_ratio=0.0))
+        # "Env Temp" is ambient intake air, not a component temperature, so it
+        # is deliberately excluded from the highest-temperature calculation.
+        all_temps = [
+            float(summary[key])
+            for key in ("Chip Temp Max", "Temperature")
+            if isinstance(summary.get(key), (int, float)) and summary[key] > 0
+        ]
         highest_temp: Optional[dict[str, Any]] = (
             {"value": max(all_temps), "unit": "C"} if all_temps else None
         )
@@ -353,6 +390,69 @@ class HashrateData:
         }
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
+    @classmethod
+    def from_whatsminer(
+        cls,
+        summary_raw: dict[str, Any],
+        pools_raw: dict[str, Any],
+        psu_raw: dict[str, Any],
+    ) -> HashrateData:
+        summary = (summary_raw.get("SUMMARY") or [{}])[0]
+        psu = psu_raw.get("Msg") or {}
+        # btminer's "MHS av" is a since-boot lifetime average, so it stays high
+        # after a miner goes idle and the pipeline maps ghs_av to the billing
+        # ("1h") metric. Prefer the best recent rolling window, exactly as the
+        # Sealminer adapter does; fall back to the lifetime average only when no
+        # window is reported.
+        rolling_avg_mhs: Optional[float] = next(
+            (summary[w] for w in ("MHS 15m", "MHS 5m", "MHS 1m") if summary.get(w) is not None),
+            summary.get("MHS av"),
+        )
+        miner_stats = {
+            "ghs_5s": summary.get("MHS 5s", 0) / 1000,
+            "ghs_1m": summary.get("MHS 1m", 0) / 1000,
+            "ghs_5m": summary.get("MHS 5m", 0) / 1000,
+            "ghs_15m": summary.get("MHS 15m", 0) / 1000,
+            "ghs_av": (rolling_avg_mhs or 0) / 1000,
+            "total_mh": summary.get("Total MH", 0),
+            "hardware_errors": summary.get("Hardware Errors", 0),
+            # "Factory GHS" is already in GH/s (unlike every "MHS *" field),
+            # so it is used as-is with no /1000 conversion.
+            "nominal_ghs": summary.get("Factory GHS", 0),
+            "hash_deviation_pct": summary.get("Hash Deviation%", 0),
+            "hash_stable": summary.get("Hash Stable", False),
+            "freq_avg": summary.get("freq_avg", 0),
+        }
+        pools = pools_raw.get("POOLS", [])
+        pool_stats = {
+            "pools": [
+                {
+                    "url": p.get("URL", ""),
+                    "user": p.get("User", ""),
+                    "status": p.get("Status", ""),
+                    "accepted": p.get("Accepted", 0),
+                    "rejected": p.get("Rejected", 0),
+                    "stale": p.get("Stale", 0),
+                    "difficulty_accepted": p.get("Difficulty Accepted", 0),
+                    "pool_rejected_pct": p.get("Pool Rejected%", 0),
+                    "pool_stale_pct": p.get("Pool Stale%", 0),
+                }
+                for p in pools
+            ],
+        }
+        power_stats = {
+            "watts": summary.get("Power", 0),
+            # "Power Rate" is W/TH == J/TH, matching efficiency_j_per_th.
+            "efficiency": summary.get("Power Rate", 0),
+            "power_limit": summary.get("Power Limit", 0),
+            "power_mode": summary.get("Power Mode", ""),
+            # get_psu reports current in 1mA units and voltage in 10mV units.
+            "psu_amps": _as_float(psu.get("iin")) / 1000,
+            "psu_volts": _as_float(psu.get("vin")) / 100,
+            "psu_fan_rpm": int(_as_float(psu.get("fan_speed"))),
+        }
+        return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
+
     def get_nominal_ghs(self) -> Optional[float]:
         ms = self.miner_stats
         if "rate_ideal" in ms:
@@ -466,6 +566,36 @@ class UptimeData:
                 "software_version": stats.get("Software Version", ""),
                 "mining_mode": stats.get("Mining Mode", ""),
                 "pm_state": stats.get("PM State", ""),
+            },
+            platform=0,
+            status=0,
+        )
+
+    @classmethod
+    def from_whatsminer(
+        cls,
+        summary_raw: dict[str, Any],
+        version_raw: dict[str, Any],
+        info_raw: dict[str, Any],
+    ) -> UptimeData:
+        summary = (summary_raw.get("SUMMARY") or [{}])[0]
+        version = version_raw.get("Msg") or {}
+        info = info_raw.get("Msg") or {}
+        # btminer distinguishes the two: "Elapsed" is how long the mining
+        # process has been hashing, "Uptime" is control-board uptime.
+        miner_elapsed = int(summary.get("Elapsed", 0))
+        return cls(
+            bosminer_uptime_s=miner_elapsed,
+            system_uptime_s=int(summary.get("Uptime", miner_elapsed)),
+            hostname=info.get("hostname", ""),
+            bos_version={
+                "firmware": version.get("fw_ver", ""),
+                "api": version.get("api_ver", ""),
+                "platform": version.get("platform", ""),
+                "chip": version.get("chip", ""),
+                # Present only on newer firmware; the model otherwise comes from
+                # devdetails (see WhatsminerCollector.fetch_identity).
+                "miner_type": version.get("miner_type", ""),
             },
             platform=0,
             status=0,
@@ -676,6 +806,51 @@ class HashboardData:
             ))
         return cls(hashboards=boards)
 
+    @classmethod
+    def from_whatsminer(cls, edevs_raw: dict[str, Any]) -> HashboardData:
+        boards: list[HashboardReading] = []
+        for dev in edevs_raw.get("DEVS", []):
+            slot = dev.get("Slot", dev.get("ASC", 0))
+            board_temp_val = dev.get("Temperature")
+            chip_temp_val = dev.get("Chip Temp Max")
+            freq = dev.get("Chip Frequency")
+            boards.append(HashboardReading(
+                board_name=f"Board {slot}",
+                board_temp=(
+                    {"value": board_temp_val, "unit": "C"} if board_temp_val is not None else None
+                ),
+                highest_chip_temp=(
+                    {"value": chip_temp_val, "unit": "C"} if chip_temp_val is not None else None
+                ),
+                lowest_inlet_temp=None,
+                highest_outlet_temp=None,
+                # "Effective Chips" is the working chip count, which is what the
+                # other adapters report as chips_count.
+                chips_count=int(dev.get("Effective Chips", 0)),
+                id=str(slot),
+                enabled=dev.get("Enabled") == "Y" and dev.get("Status") == "Alive",
+                stats={
+                    "mhs_av": dev.get("MHS av", 0),
+                    "mhs_5s": dev.get("MHS 5s", 0),
+                    "mhs_1m": dev.get("MHS 1m", 0),
+                    "mhs_5m": dev.get("MHS 5m", 0),
+                    "mhs_15m": dev.get("MHS 15m", 0),
+                    # Per-board "Factory GHS" is in GH/s; the pipeline's
+                    # boardNominalGhs reads nominal_mhs, so convert to MH/s.
+                    "nominal_mhs": dev.get("Factory GHS", 0) * 1000,
+                    "accepted": dev.get("Accepted", 0),
+                    "rejected": dev.get("Rejected", 0),
+                    "chip_temp_min": dev.get("Chip Temp Min", 0),
+                    "chip_temp_avg": dev.get("Chip Temp Avg", 0),
+                    "serial_number": dev.get("PCB SN", ""),
+                    "chip_data": dev.get("Chip Data", ""),
+                    "upfreq_complete": dev.get("Upfreq Complete", 0),
+                    "chip_vol_diff": dev.get("chip_vol_diff", 0),
+                },
+                freq_mhz=float(freq) if freq is not None else None,
+            ))
+        return cls(hashboards=boards)
+
 
 @dataclass
 class ErrorEntry:
@@ -766,6 +941,40 @@ class ErrorData:
             error_codes=[{"code": error_code}] if error_code else [],
             components=[{"chips": error_chip}] if error_chip else [],
         )])
+
+    @classmethod
+    def from_whatsminer(cls, error_raw: dict[str, Any]) -> ErrorData:
+        """Map ``get_error_code``, whose entry shape varies across firmware.
+
+        The healthy case is ``{"Msg": {"error_code": []}}``. When populated,
+        btminer has shipped both a list of ``{"<code>": "<timestamp>",
+        "reason": "..."}`` objects and a bare list/dict of codes, so both are
+        handled rather than assuming one.
+        """
+        raw_codes = (error_raw.get("Msg") or {}).get("error_code")
+        if isinstance(raw_codes, dict):
+            raw_codes = [{k: v} for k, v in raw_codes.items()]
+        entries: list[ErrorEntry] = []
+        for item in raw_codes or []:
+            if isinstance(item, dict):
+                reason = str(item.get("reason", ""))
+                # Every non-"reason" key is a code whose value is its timestamp.
+                codes = {str(k): v for k, v in item.items() if k != "reason"}
+                code = next(iter(codes), "")
+                entries.append(ErrorEntry(
+                    message=reason or f"Error code {code}",
+                    timestamp=str(codes.get(code, "")),
+                    error_codes=[{"code": c} for c in codes],
+                    components=[],
+                ))
+            else:
+                entries.append(ErrorEntry(
+                    message=f"Error code {item}",
+                    timestamp="",
+                    error_codes=[{"code": str(item)}],
+                    components=[],
+                ))
+        return cls(errors=entries)
 
 
 # ---------------------------------------------------------------------------

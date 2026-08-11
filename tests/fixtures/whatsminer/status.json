@@ -1,0 +1,10 @@
+{
+  "STATUS": "S",
+  "When": 1786404205,
+  "Code": 131,
+  "Msg": {
+    "btmineroff": "false",
+    "Firmware Version": "'20220422.18.REL'"
+  },
+  "Description": ""
+}

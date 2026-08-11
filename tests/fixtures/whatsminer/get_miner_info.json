@@ -1,0 +1,16 @@
+{
+  "STATUS": "S",
+  "When": 1786404205,
+  "Code": 131,
+  "Msg": {
+    "ip": "10:0:1:106",
+    "proto": "dhcp",
+    "netmask": "255.255.255.0",
+    "gateway": "10.0.1.1",
+    "dns": "10.0.1.1",
+    "hostname": "WhatsMiner",
+    "mac": "C8:08:18:00:15:EF",
+    "ledstat": "auto"
+  },
+  "Description": ""
+}

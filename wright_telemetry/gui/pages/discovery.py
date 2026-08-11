@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -175,7 +176,12 @@ class _ProgressEntryCard(QWidget):
         ("vnish",   "Vnish"),
         ("bitmain", "Bitmain"),
         ("sealminer", "Sealminer"),
+        ("whatsminer", "WhatsMiner"),
     ]
+
+    # Toggles are laid out in a grid this many columns wide; three keeps the
+    # row inside the content area even at the minimum window width.
+    _FIRMWARE_COLUMNS = 3
 
     def __init__(self, engine: Optional["ScanningEngine"], parent=None):
         super().__init__(parent)
@@ -290,15 +296,22 @@ class _ProgressEntryCard(QWidget):
         fw_row_widget.setSizePolicy(
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
         )
-        fw_row = QHBoxLayout(fw_row_widget)
+        # Grid rather than a single row: the toggles outgrew the content area
+        # once the sixth firmware was added. The stack is only 640px wide at the
+        # default window size (1060 minus the 180px sidebar and 240px security
+        # panel) and 480px at WINDOW_MIN_W, so a one-row layout clipped.
+        fw_row = QGridLayout(fw_row_widget)
         fw_row.setContentsMargins(0, 0, 0, 0)
-        fw_row.setSpacing(28)
-        for key, label in self.FIRMWARE_OPTIONS:
+        fw_row.setHorizontalSpacing(28)
+        fw_row.setVerticalSpacing(12)
+        for index, (key, label) in enumerate(self.FIRMWARE_OPTIONS):
             checked = key in active_types or not active_types
             toggle = _FirmwareToggle(key, label, checked)
             toggle.toggle.toggled.connect(self._on_firmware_changed)
             self._fw_toggles[key] = toggle
-            fw_row.addWidget(toggle)
+            fw_row.addWidget(
+                toggle, index // self._FIRMWARE_COLUMNS, index % self._FIRMWARE_COLUMNS
+            )
 
         fw_and_warn.addWidget(fw_row_widget)
         fw_and_warn.addStretch()

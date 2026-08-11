@@ -22,6 +22,7 @@ from wright_telemetry.discovery import (
     _probe_braiins,
     _probe_sealminer,
     _probe_vnish,
+    _probe_whatsminer,
     _read_cgminer_response,
     all_firmware_types,
     default_subnet,
@@ -38,6 +39,13 @@ SEALMINER_FIXTURES = Path(__file__).parent / "fixtures" / "sealminer"
 
 def _load_seal(name: str) -> dict[str, Any]:
     return json.loads((SEALMINER_FIXTURES / name).read_text())
+
+
+WHATSMINER_FIXTURES = Path(__file__).parent / "fixtures" / "whatsminer"
+
+
+def _load_wm(name: str) -> dict[str, Any]:
+    return json.loads((WHATSMINER_FIXTURES / name).read_text())
 
 
 class _FakeSocket:
@@ -229,6 +237,9 @@ class TestAllFirmwareTypes:
         # Single source of truth: the default scan list must cover every
         # registered probe so newly added firmware is never silently omitted.
         assert all_firmware_types() == list(_PROBES)
+
+    def test_includes_whatsminer(self):
+        assert "whatsminer" in all_firmware_types()
 
     def test_includes_sealminer(self):
         # Regression: the GUI engine's fallback firmware list once hardcoded
@@ -691,3 +702,90 @@ class TestLoadSubnetsFile:
         assert len(result) == 75
         assert result[0] == "192.168.1.0/27"
         assert result[74] == "192.168.75.0/27"
+
+
+# ---------------------------------------------------------------
+# WhatsMiner probe (port 4028, "cmd" key)
+# ---------------------------------------------------------------
+
+class TestProbeWhatsminer:
+
+    def _fake_query(self):
+        version = _load_wm("get_version.json")
+        info = _load_wm("get_miner_info.json")
+
+        def _q(ip, command, timeout=2, **params):
+            return version if command == "get_version" else info
+
+        return _q
+
+    def test_matches_fixture(self):
+        with patch(
+            "wright_telemetry.discovery._whatsminer_query", side_effect=self._fake_query()
+        ):
+            miner = _probe_whatsminer("10.0.1.106")
+        assert miner is not None
+        assert miner.firmware == "whatsminer"
+        assert miner.ip == "10.0.1.106"
+        assert miner.mac_address == "C8:08:18:00:15:EF"
+        assert miner.hostname == "WhatsMiner"
+
+    def test_invalid_cmd_reply_returns_none(self):
+        # What a non-WhatsMiner CGMiner-family device answers to "cmd".
+        with patch(
+            "wright_telemetry.discovery._whatsminer_query",
+            return_value={"STATUS": "E", "Code": 14, "Msg": "invalid cmd"},
+        ):
+            assert _probe_whatsminer("10.0.1.106") is None
+
+    def test_luxos_version_reply_returns_none(self):
+        with patch(
+            "wright_telemetry.discovery._whatsminer_query",
+            return_value={"VERSION": [{"LUXminer": "2024.1.1"}]},
+        ):
+            assert _probe_whatsminer("10.0.1.106") is None
+
+    def test_no_response_returns_none(self):
+        with patch("wright_telemetry.discovery._whatsminer_query", return_value=None):
+            assert _probe_whatsminer("10.0.1.106") is None
+
+    def test_connection_error_returns_none(self):
+        with patch(
+            "wright_telemetry.discovery._whatsminer_query",
+            side_effect=socket.error("refused"),
+        ):
+            assert _probe_whatsminer("10.0.1.106") is None
+
+    def test_matches_even_when_miner_info_fails(self):
+        def _q(ip, command, timeout=2, **params):
+            if command == "get_version":
+                return _load_wm("get_version.json")
+            raise socket.error("closed")
+
+        with patch("wright_telemetry.discovery._whatsminer_query", side_effect=_q):
+            miner = _probe_whatsminer("10.0.1.106")
+        assert miner is not None
+        assert miner.mac_address == ""
+
+    def test_answered_host_logs_at_info_without_debug(self):
+        import logging
+        with patch(
+            "wright_telemetry.discovery._whatsminer_query",
+            return_value={"STATUS": "E", "Msg": "invalid cmd"},
+        ):
+            logger = logging.getLogger("wright_telemetry.discovery")
+            records = []
+            handler = logging.Handler()
+            handler.emit = records.append
+            logger.addHandler(handler)
+            old_level = logger.level
+            logger.setLevel(logging.INFO)
+            try:
+                assert _probe_whatsminer("10.0.1.9") is None
+            finally:
+                logger.removeHandler(handler)
+                logger.setLevel(old_level)
+        assert any(
+            "10.0.1.9" in r.getMessage() and "match=False" in r.getMessage()
+            for r in records
+        )
