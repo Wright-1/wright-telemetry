@@ -369,12 +369,17 @@ def _probe_bitmain(ip: str) -> Optional[DiscoveredMiner]:
 
 
 def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
-    """Hit the Vnish REST API; require 200 JSON with ``firmware_version``.
+    """Hit the Vnish REST API; require 200 JSON that identifies as Vnish.
 
     Treating 401 alone as Vnish caused false positives (e.g. other firmware
     returning 401 on ``/api/v1/info``). Miners that hide ``/api/v1/info``
     behind auth must be added manually or discovered after probe support
     for credentials is added.
+
+    The version field is ``fw_version`` on current firmware and
+    ``firmware_version`` on older builds; ``fw_name`` is the definitive
+    marker. Requiring ``firmware_version`` alone silently skipped every
+    S21 on Vnish 1.2.6.
     """
     url = f"http://{ip}/api/v1/info"
     session = requests.Session()
@@ -386,12 +391,19 @@ def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
             data = resp.json()
         except Exception:
             return None
-        if not data.get("firmware_version"):
+        is_vnish = (
+            str(data.get("fw_name", "")).lower() == "vnish"
+            or bool(data.get("fw_version"))
+            or bool(data.get("firmware_version"))
+        )
+        if not is_vnish:
             return None
+        # Older builds put these at the top level; current ones nest them.
+        network = data.get("system", {}).get("network_status", {})
         return DiscoveredMiner(
             ip=ip, firmware="vnish",
-            hostname=data.get("hostname", ""),
-            mac_address=data.get("mac", ""),
+            hostname=network.get("hostname", data.get("hostname", "")),
+            mac_address=network.get("mac", data.get("mac", "")),
         )
     except (requests.ConnectionError, requests.Timeout, OSError):
         pass
@@ -451,12 +463,74 @@ def _probe_sealminer(ip: str) -> Optional[DiscoveredMiner]:
     return DiscoveredMiner(ip=ip, firmware="sealminer", hostname="", mac_address=mac)
 
 
+def _whatsminer_query(
+    ip: str, command: str, timeout: float = _PROBE_TIMEOUT, **params: Any
+) -> Optional[dict[str, Any]]:
+    """Run one btminer command on ``ip:4028``.
+
+    Separate from :func:`_cgminer_query` because WhatsMiner keys the request
+    ``cmd`` rather than ``command`` — the CGMiner spelling returns
+    ``invalid cmd``, which is also why a WhatsMiner never false-positives on
+    the LuxOS or Sealminer probes.
+    """
+    payload: dict[str, Any] = {"cmd": command, **params}
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        sock.connect((ip, 4028))
+        sock.sendall(json.dumps(payload).encode("utf-8"))
+        return _read_cgminer_response(sock, timeout)
+
+
+def _probe_whatsminer(ip: str) -> Optional[DiscoveredMiner]:
+    """Send ``get_version`` to port 4028; an ``api_ver``/``fw_ver`` reply is btminer.
+
+    btminer answers ``get_version`` with ``Msg: {api_ver, fw_ver, platform,
+    chip}``. No other supported firmware implements the command at all, so
+    requiring one of those two version fields keeps this specific.
+    """
+    try:
+        data = _whatsminer_query(ip, "get_version")
+    except (socket.error, ValueError):
+        return None
+
+    if not data:
+        return None
+
+    msg = data.get("Msg") if isinstance(data.get("Msg"), dict) else {}
+    matched = bool(msg.get("api_ver") or msg.get("fw_ver"))
+    # Same rationale as the Sealminer probe: log every device that answers on
+    # 4028 so a failed field scan stays diagnosable from collector.log alone.
+    snippet = json.dumps(data)[: 2000 if _discovery_debug() else 400]
+    logger.info(
+        "discovery: %s:4028 answered 'get_version' (whatsminer match=%s): %s",
+        ip, matched, snippet,
+    )
+    if not matched:
+        return None
+
+    hostname = ""
+    mac = ""
+    try:
+        info_data = _whatsminer_query(
+            ip, "get_miner_info",
+            info="ip,proto,netmask,gateway,dns,hostname,mac,ledstat,minersn,powersn",
+        )
+        msg = (info_data or {}).get("Msg")
+        info = msg if isinstance(msg, dict) else {}
+        hostname = info.get("hostname", "")
+        mac = info.get("mac", "")
+    except (socket.error, ValueError):
+        pass
+    return DiscoveredMiner(ip=ip, firmware="whatsminer", hostname=hostname, mac_address=mac)
+
+
 _PROBES: dict[str, Callable[[str], Optional[DiscoveredMiner]]] = {
     "braiins": _probe_braiins,
     "luxos": _probe_luxos,
     "vnish": _probe_vnish,
     "bitmain": _probe_bitmain,
     "sealminer": _probe_sealminer,
+    "whatsminer": _probe_whatsminer,
 }
 
 

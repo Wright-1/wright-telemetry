@@ -1,0 +1,12 @@
+{
+  "STATUS": "S",
+  "When": 1786404205,
+  "Code": 131,
+  "Msg": {
+    "api_ver": "2.0.3",
+    "fw_ver": "20220422.18.REL",
+    "platform": "H6OS",
+    "chip": "H3AP04-21092904BINV03-195004C"
+  },
+  "Description": ""
+}

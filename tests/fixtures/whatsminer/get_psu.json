@@ -1,0 +1,18 @@
+{
+  "STATUS": "S",
+  "When": 1786404205,
+  "Code": 131,
+  "Msg": {
+    "name": "P221C",
+    "hw_version": "RT0014",
+    "sw_version": "201224.210903",
+    "model": "P22-12-3300-C",
+    "iin": "13968",
+    "vin": "24200",
+    "fan_speed": "9840",
+    "version": "-1",
+    "serial_no": "1355A2137605435",
+    "vender": "1"
+  },
+  "Description": ""
+}

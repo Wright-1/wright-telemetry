@@ -1,0 +1,35 @@
+{
+  "STATUS": [
+    {
+      "STATUS": "S",
+      "Msg": "Device Details"
+    }
+  ],
+  "DEVDETAILS": [
+    {
+      "DEVDETAILS": 0,
+      "Name": "SM",
+      "ID": 0,
+      "Driver": "bitmicro",
+      "Kernel": "",
+      "Model": "M30SVE20"
+    },
+    {
+      "DEVDETAILS": 1,
+      "Name": "SM",
+      "ID": 1,
+      "Driver": "bitmicro",
+      "Kernel": "",
+      "Model": "M30SVE20"
+    },
+    {
+      "DEVDETAILS": 2,
+      "Name": "SM",
+      "ID": 2,
+      "Driver": "bitmicro",
+      "Kernel": "",
+      "Model": "M30SVE20"
+    }
+  ],
+  "id": 1
+}

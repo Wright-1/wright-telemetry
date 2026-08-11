@@ -52,11 +52,13 @@ LUXOS_FIXTURES_DIR   = Path(__file__).parent / "fixtures" / "luxos"
 VNISH_FIXTURES_DIR   = Path(__file__).parent / "fixtures" / "vnish"
 BITMAIN_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "bitmain"
 SEALMINER_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "sealminer"
+WHATSMINER_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "whatsminer"
 MINER_URL   = "http://192.168.1.100"
 LUXOS_HOST  = "192.168.1.200"
 VNISH_URL   = "http://192.168.1.150"
 BITMAIN_URL = "http://192.168.1.200"
 SEALMINER_HOST = "192.168.1.210"
+WHATSMINER_HOST = "192.168.1.220"
 
 # One distinct username *and* password per firmware, mirroring the per-firmware
 # credentials users configure in the GUI/TUI.  Keeping both halves different
@@ -107,6 +109,10 @@ def _load_vnish(name: str) -> dict[str, Any]:
 
 def _load_sealminer(name: str) -> dict[str, Any]:
     return json.loads((SEALMINER_FIXTURES_DIR / name).read_text())
+
+
+def _load_whatsminer(name: str) -> dict[str, Any]:
+    return json.loads((WHATSMINER_FIXTURES_DIR / name).read_text())
 
 
 def _load_bitmain(name: str) -> dict[str, Any]:
@@ -252,6 +258,12 @@ def vnish_fixtures() -> dict[str, Any]:
         "summary": _load_vnish("summary.json"),
         "status": _load_vnish("status.json"),
     }
+
+
+@pytest.fixture()
+def vnish_faulted_summary() -> dict[str, Any]:
+    """Synthetic failure-state summary: stopped miner, dead fan, failed chain."""
+    return _load_vnish("summary_faulted.json")
 
 
 @pytest.fixture()
@@ -422,3 +434,50 @@ def sealminer_collector():
     return SealminerCollector(
         url=SEALMINER_HOST, username=SEALMINER_USERNAME, password=SEALMINER_PASSWORD,
     )
+
+# ---------------------------------------------------------------------------
+# WhatsMiner fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def whatsminer_fixtures() -> dict[str, Any]:
+    """All WhatsMiner fixture data keyed by btminer command name.
+
+    Captured from a live M30SVE20 on firmware 20220422.18.REL (API 2.0.3).
+    """
+    return {
+        "summary":        _load_whatsminer("summary.json"),
+        "pools":          _load_whatsminer("pools.json"),
+        "edevs":          _load_whatsminer("edevs.json"),
+        "devs":           _load_whatsminer("devs.json"),
+        "devdetails":     _load_whatsminer("devdetails.json"),
+        "get_version":    _load_whatsminer("get_version.json"),
+        "get_psu":        _load_whatsminer("get_psu.json"),
+        "status":         _load_whatsminer("status.json"),
+        "get_error_code": _load_whatsminer("get_error_code.json"),
+        "get_miner_info": _load_whatsminer("get_miner_info.json"),
+    }
+
+
+@pytest.fixture()
+def mock_whatsminer_api(whatsminer_fixtures):
+    """Patch ``WhatsminerCollector._send_command`` to return fixture data by command."""
+    def _fake_send(self, command, **params):
+        if command in whatsminer_fixtures:
+            return whatsminer_fixtures[command]
+        # Mirrors the real adapter, which maps an "invalid cmd" reply to {}.
+        return {}
+
+    with patch(
+        "wright_telemetry.collectors.whatsminer.WhatsminerCollector._send_command",
+        _fake_send,
+    ):
+        yield
+
+
+@pytest.fixture()
+def whatsminer_collector():
+    """Return a WhatsminerCollector pointed at the test host."""
+    from wright_telemetry.collectors.whatsminer import WhatsminerCollector
+    return WhatsminerCollector(url=WHATSMINER_HOST)

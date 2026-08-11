@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -24,6 +23,7 @@ from wright_telemetry.gui.pages.permissions import PermissionsPage
 from wright_telemetry.gui.pages.discovery import DiscoveryPage
 from wright_telemetry.gui.pages.overview import OverviewPage
 from wright_telemetry.gui.pages.portal import PortalPage
+from wright_telemetry.gui.pages.settings import SettingsPage
 from wright_telemetry.gui.security_panel import SecurityPanel
 from wright_telemetry import __version__
 from wright_telemetry.gui.sidebar import Sidebar
@@ -102,10 +102,13 @@ class MainWindow(QWidget):
             "overview":    OverviewPage(engine=engine),
             "logs":        LogsPage(),
             "portal":      PortalPage(),
+            "settings":    SettingsPage(),
         }
         for key in self.PAGE_KEYS:
             self.stack.addWidget(self.pages[key])
         self.stack.addWidget(self.pages["portal"])
+        self.stack.addWidget(self.pages["settings"])
+        self.pages["settings"].config_cleared.connect(self._on_config_cleared)
 
         self._access_key_page = AccessKeyPage()
         self.stack.addWidget(self._access_key_page)
@@ -316,6 +319,26 @@ class MainWindow(QWidget):
         self._switch_page("permissions")
 
     # -------------------------------------------------------------------------
+    # Config reset (settings page)
+    # -------------------------------------------------------------------------
+
+    def _on_config_cleared(self) -> None:
+        """The Settings page deleted config.json — return to the access-key gate."""
+        if self._engine is not None:
+            self._engine.stop()
+            self._engine = None
+
+        self._ob_permissions = False
+        self._ob_discovery = False
+        self._ob_account = False
+
+        self._access_key_page.reset()
+        self.sidebar.setVisible(False)
+        self.security.setVisible(False)
+        self._footer.setVisible(False)
+        self.stack.setCurrentWidget(self._access_key_page)
+
+    # -------------------------------------------------------------------------
     # Navigation
     # -------------------------------------------------------------------------
 
@@ -360,65 +383,12 @@ class MainWindow(QWidget):
 
     def _confirm_close(self) -> bool:
         """Show a native confirmation dialog. Returns True if the user confirms."""
-        import sys
-        if sys.platform == "darwin":
-            return self._confirm_close_macos()
-        # Fallback for Windows / Linux
-        reply = QMessageBox.question(
+        from wright_telemetry.gui.native_dialog import confirm_dialog
+
+        return confirm_dialog(
             self,
             "Close WrightData",
             "Are you sure you want to close WrightData?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            confirm_label="Close",
+            cancel_label="Cancel",
         )
-        return reply == QMessageBox.StandardButton.Yes
-
-    def _confirm_close_macos(self) -> bool:
-        """Native macOS confirmation dialog.
-
-        Tries NSAlert first (uses the real WrightData app icon, fully respects
-        dark mode).  Falls back to osascript if PyObjC is unavailable, then to
-        QMessageBox as a last resort.
-        """
-        # ── 1. NSAlert via PyObjC (packaged app: app icon, dark-mode aware) ──
-        try:
-            from AppKit import NSAlert  # type: ignore
-            alert = NSAlert.alloc().init()
-            alert.setMessageText_("Close WrightData")
-            alert.setInformativeText_("Are you sure you want to close WrightData?")
-            alert.setAlertStyle_(0)          # 0 = NSAlertStyleWarning
-            alert.addButtonWithTitle_("Close")
-            alert.addButtonWithTitle_("Cancel")
-            # runModal returns 1000 for the first button (Close)
-            return int(alert.runModal()) == 1000
-        except Exception:
-            pass
-
-        # ── 2. osascript fallback (dev environment without PyObjC) ────────────
-        import subprocess
-        script = (
-            'display dialog "Are you sure you want to close WrightData?" '
-            'with title "Close WrightData" '
-            'buttons {"Cancel", "Close"} '
-            'default button "Cancel" '
-            'with icon caution'
-        )
-        try:
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-            )
-            return "Close" in result.stdout
-        except Exception:
-            pass
-
-        # ── 3. Qt fallback (should never be reached on macOS) ─────────────────
-        reply = QMessageBox.question(
-            self,
-            "Close WrightData",
-            "Are you sure you want to close WrightData?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        return reply == QMessageBox.StandardButton.Yes
