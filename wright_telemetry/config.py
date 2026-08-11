@@ -295,7 +295,7 @@ def resolve_firmware_credentials(
 
     return (
         entry.get("username") or fallback_user,
-        entry["password_b64"] if "password_b64" in entry else fallback_pw,
+        entry.get("password_b64", fallback_pw),
     )
 
 

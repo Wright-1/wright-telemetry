@@ -221,8 +221,12 @@ class ScanningEngine:
         so plaintext never crosses into the config layer from the UI.
         """
         from wright_telemetry.config import (
-            FIRMWARE_CREDENTIALS_KEY, encode_password, firmware_credentials_map,
-            load_config, save_config, save_firmware_credentials,
+            FIRMWARE_CREDENTIALS_KEY,
+            encode_password,
+            firmware_credentials_map,
+            load_config,
+            save_config,
+            save_firmware_credentials,
         )
         cfg = load_config() or {}
         stored = (cfg.get("discovery") or {}).get(FIRMWARE_CREDENTIALS_KEY) or {}

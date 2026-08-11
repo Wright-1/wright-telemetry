@@ -71,12 +71,14 @@ LUXOS_USERNAME     = "luxos-user"
 VNISH_USERNAME     = "vnish-user"
 BITMAIN_USERNAME   = "bitmain-user"
 SEALMINER_USERNAME = "sealminer-user"
+WHATSMINER_USERNAME = "whatsminer-user"
 
 BRAIINS_PASSWORD   = "braiins-pw"
 LUXOS_PASSWORD     = "luxos-pw"
 VNISH_PASSWORD     = "vnish-pw"
 BITMAIN_PASSWORD   = "bitmain-pw"
 SEALMINER_PASSWORD = "sealminer-pw"
+WHATSMINER_PASSWORD = "whatsminer-pw"
 
 FIRMWARE_USERNAMES = {
     "braiins":   BRAIINS_USERNAME,
@@ -84,6 +86,7 @@ FIRMWARE_USERNAMES = {
     "vnish":     VNISH_USERNAME,
     "bitmain":   BITMAIN_USERNAME,
     "sealminer": SEALMINER_USERNAME,
+    "whatsminer": WHATSMINER_USERNAME,
 }
 
 FIRMWARE_PASSWORDS = {
@@ -92,6 +95,7 @@ FIRMWARE_PASSWORDS = {
     "vnish":     VNISH_PASSWORD,
     "bitmain":   BITMAIN_PASSWORD,
     "sealminer": SEALMINER_PASSWORD,
+    "whatsminer": WHATSMINER_PASSWORD,
 }
 
 

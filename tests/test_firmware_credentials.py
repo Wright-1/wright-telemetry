@@ -1,5 +1,9 @@
 """Tests for per-firmware miner credentials (config, scheduler, discovery)."""
 
+from tests.conftest import FIRMWARE_PASSWORDS, FIRMWARE_USERNAMES
+from wright_telemetry.config import (
+    _KNOWN_FIRMWARE_TYPES as KNOWN_FIRMWARE_TYPES,
+)
 from wright_telemetry.config import (
     SENSITIVE_MASK,
     encode_password,
@@ -10,8 +14,6 @@ from wright_telemetry.config import (
 )
 from wright_telemetry.discovery import DiscoveredMiner, discovered_to_miner_cfgs
 from wright_telemetry.scheduler import _build_collectors, _resolve_miners
-
-from tests.conftest import FIRMWARE_PASSWORDS, FIRMWARE_USERNAMES
 
 GLOBAL_PW = encode_password("globalpw")
 VNISH_PW = encode_password("vnishpw")
@@ -40,7 +42,7 @@ def _mixed_cfg() -> dict:
 
 def test_legacy_config_falls_back_to_globals():
     cfg = _legacy_cfg()
-    for firmware in ("braiins", "vnish", "bitmain", "luxos", "sealminer"):
+    for firmware in KNOWN_FIRMWARE_TYPES:
         assert resolve_firmware_credentials(cfg, firmware) == ("root", GLOBAL_PW)
 
 
@@ -107,7 +109,7 @@ def test_map_seeds_every_firmware_from_globals():
     result = firmware_credentials_map(_mixed_cfg())
     assert result["vnish"] == {"username": "admin", "password_b64": VNISH_PW}
     assert result["braiins"] == {"username": "root", "password_b64": GLOBAL_PW}
-    assert set(result) == {"braiins", "bitmain", "luxos", "vnish", "sealminer"}
+    assert set(result) == set(KNOWN_FIRMWARE_TYPES)
 
 
 def test_map_honours_explicit_firmware_list():

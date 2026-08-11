@@ -25,7 +25,6 @@ from wright_telemetry.collectors.factory import CollectorFactory
 from wright_telemetry.config import (
     decode_password,
     load_config,
-    mask_config,
     resolve_firmware_credentials,
 )
 from wright_telemetry.mac_util import normalize_mac_address
