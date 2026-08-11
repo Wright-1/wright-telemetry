@@ -111,22 +111,33 @@ class TestCoolingDataFromLuxos:
 class TestCoolingDataFromVnish:
 
     def test_full_data(self):
-        cd = CoolingData.from_vnish(_v("status.json"))
+        cd = CoolingData.from_vnish(_v("summary.json"))
         assert len(cd.fans) == 4
-        assert cd.fans[1].rpm == 4150
+        assert cd.fans[1].rpm == 7000
         assert cd.highest_temperature is not None
         assert cd.highest_temperature["unit"] == "C"
 
-    def test_fan_speed_ratio_normalised(self):
-        cd = CoolingData.from_vnish(_v("status.json"))
-        assert cd.fans[0].target_speed_ratio == pytest.approx(0.65)
+    def test_fan_speed_ratio_from_shared_duty(self):
+        """Vnish has one fan_duty for the miner, not a per-fan target."""
+        cd = CoolingData.from_vnish(_v("summary.json"))
+        assert cd.fans[0].target_speed_ratio == pytest.approx(1.0)
+        cd = CoolingData.from_vnish(_v("summary_faulted.json"))
+        assert cd.fans[0].target_speed_ratio == pytest.approx(0.6)
 
-    def test_highest_temp_is_max_of_chain_temps(self):
-        cd = CoolingData.from_vnish(_v("status.json"))
-        assert cd.highest_temperature["value"] == pytest.approx(74.0)
+    def test_highest_temp_is_max_chip_temp(self):
+        cd = CoolingData.from_vnish(_v("summary.json"))
+        assert cd.highest_temperature["value"] == pytest.approx(86.0)
+
+    def test_highest_temp_falls_back_to_chains(self):
+        """Older builds omit the miner-level chip_temp roll-up."""
+        summary = _v("summary.json")
+        del summary["miner"]["chip_temp"]
+        del summary["miner"]["pcb_temp"]
+        cd = CoolingData.from_vnish(summary)
+        assert cd.highest_temperature["value"] == pytest.approx(86.0)
 
     def test_empty_fans(self):
-        cd = CoolingData.from_vnish({"fans": [], "chains": []})
+        cd = CoolingData.from_vnish({"miner": {"cooling": {"fans": []}, "chains": []}})
         assert cd.fans == []
         assert cd.highest_temperature is None
 
@@ -180,14 +191,23 @@ class TestHashrateDataFromVnish:
 
     def test_full_data(self):
         hr = HashrateData.from_vnish(_v("summary.json"))
-        assert hr.miner_stats["ghs_5s"] == pytest.approx(145230.5)
-        assert hr.power_stats["watts"] == 3245
+        assert hr.miner_stats["ghs_5s"] == pytest.approx(181060.66)
+        assert hr.power_stats["watts"] == 3869
+
+    def test_hashrate_read_in_ghs_not_ths(self):
+        """instant_hashrate is TH/s; reading it would under-report 1000x."""
+        summary = _v("summary.json")
+        hr = HashrateData.from_vnish(summary)
+        assert hr.miner_stats["ghs_5s"] != summary["miner"]["instant_hashrate"]
+        assert hr.miner_stats["ghs_5s"] == pytest.approx(
+            summary["miner"]["instant_hashrate"] * 1000, rel=1e-3
+        )
 
     def test_pool_fields_present(self):
         hr = HashrateData.from_vnish(_v("summary.json"))
         pool = hr.pool_stats["pools"][0]
-        assert pool["url"] == "stratum+tcp://pool.example.com:3333"
-        assert pool["accepted"] == 58432
+        assert pool["url"] == "sha256.stratum.examplepool.io:3333"
+        assert pool["accepted"] == 13070
 
     def test_empty_sections(self):
         hr = HashrateData.from_vnish({})
@@ -239,11 +259,11 @@ class TestUptimeDataFromVnish:
 
     def test_full_data(self):
         ud = UptimeData.from_vnish(_v("info.json"), _v("summary.json"))
-        assert ud.bosminer_uptime_s == 1728000
-        assert ud.system_uptime_s == 1728000
-        assert ud.hostname == "vnish-rack2-slot5"
-        assert ud.bos_version["vnish"] == "1.2.6"
-        assert ud.bos_version["model"] == "Antminer S19j Pro+"
+        assert ud.bosminer_uptime_s == 147708
+        assert ud.system_uptime_s == 147708
+        assert ud.hostname == "Antminer"
+        assert ud.bos_version["vnish"] == "1.2.6-rc5"
+        assert ud.bos_version["model"] == "Antminer S21"
 
     def test_empty_responses(self):
         ud = UptimeData.from_vnish({}, {})
@@ -323,33 +343,45 @@ class TestHashboardDataFromLuxos:
 class TestHashboardDataFromVnish:
 
     def test_board_count(self):
-        hbd = HashboardData.from_vnish(_v("status.json"))
+        hbd = HashboardData.from_vnish(_v("summary.json"))
         assert len(hbd.hashboards) == 3
 
     def test_board_fields(self):
-        hbd = HashboardData.from_vnish(_v("status.json"))
+        hbd = HashboardData.from_vnish(_v("summary.json"))
         b = hbd.hashboards[0]
-        assert b.board_name == "Chain 0"
-        assert b.chips_count == 114
+        assert b.board_name == "Chain 1"
+        assert b.id == "1"
+        assert b.chips_count == 108
         assert b.enabled is True
-        assert b.stats["serial_number"] == "HB0-VN91CX-A"
+        assert b.stats["hashrate"] == pytest.approx(59595.152)
 
-    def test_board_temp(self):
-        hbd = HashboardData.from_vnish(_v("status.json"))
-        assert hbd.hashboards[0].board_temp == {"value": 58.0, "unit": "C"}
-        assert hbd.hashboards[0].highest_chip_temp == {"value": 72.5, "unit": "C"}
+    def test_board_temp_uses_range_max(self):
+        hbd = HashboardData.from_vnish(_v("summary.json"))
+        b = hbd.hashboards[0]
+        assert b.board_temp == {"value": 70, "unit": "C"}
+        assert b.highest_chip_temp == {"value": 85, "unit": "C"}
+        assert b.lowest_inlet_temp == {"value": 52, "unit": "C"}
 
     def test_empty_chains(self):
-        hbd = HashboardData.from_vnish({"chains": []})
+        hbd = HashboardData.from_vnish({"miner": {"chains": []}})
         assert hbd.hashboards == []
 
+    def test_freq_mhz_populated(self):
+        hbd = HashboardData.from_vnish(_v("summary.json"))
+        assert all(b.freq_mhz == 460.0 for b in hbd.hashboards)
+
     def test_freq_mhz_none_when_absent(self):
-        hbd = HashboardData.from_vnish(_v("status.json"))
+        summary = _v("summary.json")
+        for chain in summary["miner"]["chains"]:
+            del chain["frequency"]
+        hbd = HashboardData.from_vnish(summary)
         assert all(b.freq_mhz is None for b in hbd.hashboards)
 
-    def test_freq_mhz_populated_when_present(self):
-        hbd = HashboardData.from_vnish(_v("status_with_freq.json"))
-        assert all(b.freq_mhz == 700.0 for b in hbd.hashboards)
+    def test_disconnected_board_is_omitted(self):
+        """Vnish drops lost chains from the array rather than disabling them."""
+        hbd = HashboardData.from_vnish(_v("summary_faulted.json"))
+        assert [b.id for b in hbd.hashboards] == ["1", "3"]
+        assert hbd.hashboards[1].enabled is False
 
 
 # ---------------------------------------------------------------
@@ -405,24 +437,34 @@ class TestErrorDataFromLuxos:
 
 class TestErrorDataFromVnish:
 
-    def test_full_data(self):
-        ed = ErrorData.from_vnish(_v("status.json"))
-        assert len(ed.errors) == 2
+    def test_healthy_miner_has_no_errors(self):
+        """Vnish has no error feed; a mining miner with red chips is not a fault."""
+        ed = ErrorData.from_vnish(_v("summary.json"))
+        assert ed.errors == []
 
-    def test_first_error_fields(self):
-        ed = ErrorData.from_vnish(_v("status.json"))
-        e = ed.errors[0]
-        assert e.message == "Chain 1 temperature exceeds warning threshold"
-        assert e.timestamp == "2024-03-15T10:23:45Z"
-        assert e.error_codes[0]["code"] == "TEMP_WARNING"
-        assert e.components[0]["type"] == "hashboard"
+    def test_faults_synthesised(self):
+        ed = ErrorData.from_vnish(_v("summary_faulted.json"))
+        codes = [e.error_codes[0]["code"] for e in ed.errors]
+        assert codes.count("FAN_FAILURE") == 1
+        assert codes.count("CHAIN_NOT_MINING") == 2
+        assert codes.count("MINER_NOT_MINING") == 1
 
-    def test_second_error_code(self):
-        ed = ErrorData.from_vnish(_v("status.json"))
-        assert ed.errors[1].error_codes[0]["code"] == "FAN_RPM_LOW"
+    def test_fan_error_fields(self):
+        ed = ErrorData.from_vnish(_v("summary_faulted.json"))
+        e = next(x for x in ed.errors if x.error_codes[0]["code"] == "FAN_FAILURE")
+        assert e.components[0] == {"type": "fan", "id": "1"}
+        assert e.error_codes[0]["severity"] == "error"
+        assert e.timestamp == ""
+
+    def test_miner_state_from_status_fallback(self):
+        """miner_state also lives on /api/v1/status, which needs no auth."""
+        ed = ErrorData.from_vnish({}, _v("status.json"))
+        assert ed.errors == []
+        ed = ErrorData.from_vnish({}, {"miner_state": "stopped"})
+        assert [e.error_codes[0]["code"] for e in ed.errors] == ["MINER_NOT_MINING"]
 
     def test_empty_errors(self):
-        ed = ErrorData.from_vnish({"errors": []})
+        ed = ErrorData.from_vnish({})
         assert ed.errors == []
 
 
@@ -436,14 +478,19 @@ class TestErrorDataFromVnish:
 # ---------------------------------------------------------------
 
 class TestCrossOsCoolingNormalization:
-    """Fan count, positions, RPMs and speed ratios must be identical across firmware."""
+    """Fan count, positions, RPMs and speed ratios must be identical across firmware.
+
+    Braiins and LuxOS fixtures are fabricated to describe one imaginary miner,
+    so their values can be compared directly. The Vnish fixtures are real
+    captures from an S21, so Vnish is checked for shape in
+    ``TestVnishMatchesNormalisedShape`` instead of value equality.
+    """
 
     @pytest.fixture()
     def all_cooling(self):
         return {
             "braiins": CoolingData.from_braiins(_b("cooling_state.json")),
             "luxos":   CoolingData.from_luxos(_l("fans.json"), _l("temps.json")),
-            "vnish":   CoolingData.from_vnish(_v("status.json")),
         }
 
     def test_fan_count(self, all_cooling):
@@ -482,14 +529,13 @@ class TestCrossOsHashrateNormalization:
         return {
             "braiins": HashrateData.from_braiins(_b("miner_stats.json")),
             "luxos":   HashrateData.from_luxos(_l("summary.json"), _l("pools.json"), _l("power.json")),
-            "vnish":   HashrateData.from_vnish(_v("summary.json")),
         }
 
     def test_ghs_5s(self, all_hashrate):
         # Braiins preserves the raw nested API structure; LuxOS and Vnish normalise to ghs_5s.
         braiins_ghs = all_hashrate["braiins"].miner_stats["real_hashrate"]["gigahash_per_second"]
         assert braiins_ghs == pytest.approx(145230.5), "braiins: real_hashrate mismatch"
-        for fw in ("luxos", "vnish"):
+        for fw in ("luxos",):
             assert all_hashrate[fw].miner_stats["ghs_5s"] == pytest.approx(145230.5), f"{fw}: ghs_5s mismatch"
 
     def test_power_watts(self, all_hashrate):
@@ -518,7 +564,6 @@ class TestCrossOsUptimeNormalization:
         return {
             "braiins": UptimeData.from_braiins(_b("miner_details.json")),
             "luxos":   UptimeData.from_luxos(_l("summary.json"), _l("version.json"), _l("config.json")),
-            "vnish":   UptimeData.from_vnish(_v("info.json"), _v("summary.json")),
         }
 
     def test_bosminer_uptime_s(self, all_uptime):
@@ -543,7 +588,6 @@ class TestCrossOsHashboardNormalization:
         return {
             "braiins": HashboardData.from_braiins(_b("hashboards.json")),
             "luxos":   HashboardData.from_luxos(_l("devs.json"), _l("temps.json")),
-            "vnish":   HashboardData.from_vnish(_v("status.json")),
         }
 
     def test_board_count(self, all_hashboards):
@@ -580,7 +624,6 @@ class TestCrossOsErrorNormalization:
         return {
             "braiins": ErrorData.from_braiins(_b("miner_errors.json")),
             "luxos":   ErrorData.from_luxos(_l("events.json")),
-            "vnish":   ErrorData.from_vnish(_v("status.json")),
         }
 
     def test_error_count(self, all_errors):
@@ -674,7 +717,7 @@ class TestHashrateDataGetNominalGhs:
 
     def test_vnish_uses_hr_nominal(self):
         hr = HashrateData.from_vnish(_v("summary.json"))
-        assert hr.get_nominal_ghs() == pytest.approx(147000.0)
+        assert hr.get_nominal_ghs() == pytest.approx(187892.94)
 
     def test_empty_returns_none(self):
         hr = HashrateData(miner_stats={}, pool_stats={}, power_stats={})
@@ -701,3 +744,57 @@ class TestTelemetryPayload:
         assert d["miner_identity"]["uid"] == "u"
         assert d["data"] == {"fans": []}
         assert "timestamp" in d
+
+
+class TestVnishMatchesNormalisedShape:
+    """Vnish fixtures are real captures, so assert the normalised shape.
+
+    Value-equality against the fabricated braiins/luxos fixtures is not
+    possible, but every field the pipeline reads must still be the same type
+    and unit as the other adapters produce.
+    """
+
+    def test_cooling_shape(self):
+        cd = CoolingData.from_vnish(_v("summary.json"))
+        assert len(cd.fans) == 4
+        assert [f.position for f in cd.fans] == [0, 1, 2, 3]
+        for fan in cd.fans:
+            assert isinstance(fan.rpm, int) and fan.rpm > 0
+            assert 0.0 <= fan.target_speed_ratio <= 1.0
+        assert cd.highest_temperature["unit"] == "C"
+
+    def test_hashrate_shape(self):
+        hr = HashrateData.from_vnish(_v("summary.json"))
+        for key in ("ghs_5s", "ghs_av", "hardware_errors", "hr_nominal"):
+            assert isinstance(hr.miner_stats[key], (int, float)), key
+        assert isinstance(hr.power_stats["watts"], (int, float))
+        for pool in hr.pool_stats["pools"]:
+            for key in ("url", "user", "status", "accepted", "rejected", "stale",
+                        "difficulty_accepted", "pool_rejected_pct", "pool_stale_pct"):
+                assert key in pool, key
+
+    def test_uptime_shape(self):
+        ud = UptimeData.from_vnish(_v("info.json"), _v("summary.json"))
+        assert isinstance(ud.bosminer_uptime_s, int) and ud.bosminer_uptime_s > 0
+        assert ud.hostname
+        assert isinstance(ud.bos_version, dict) and ud.bos_version
+
+    def test_hashboard_shape(self):
+        hbd = HashboardData.from_vnish(_v("summary.json"))
+        assert len(hbd.hashboards) == 3
+        for b in hbd.hashboards:
+            assert isinstance(b.id, str)
+            assert b.enabled is True
+            assert b.board_temp["unit"] == "C"
+            assert b.highest_chip_temp["unit"] == "C"
+            # Present but always empty: Vnish exposes no per-board serial.
+            assert "serial_number" in b.stats
+
+    def test_error_shape(self):
+        ed = ErrorData.from_vnish(_v("summary_faulted.json"))
+        assert ed.errors
+        for e in ed.errors:
+            assert e.message
+            assert isinstance(e.timestamp, str)
+            assert e.error_codes and "code" in e.error_codes[0]
+            assert e.components and "type" in e.components[0]

@@ -369,12 +369,17 @@ def _probe_bitmain(ip: str) -> Optional[DiscoveredMiner]:
 
 
 def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
-    """Hit the Vnish REST API; require 200 JSON with ``firmware_version``.
+    """Hit the Vnish REST API; require 200 JSON that identifies as Vnish.
 
     Treating 401 alone as Vnish caused false positives (e.g. other firmware
     returning 401 on ``/api/v1/info``). Miners that hide ``/api/v1/info``
     behind auth must be added manually or discovered after probe support
     for credentials is added.
+
+    The version field is ``fw_version`` on current firmware and
+    ``firmware_version`` on older builds; ``fw_name`` is the definitive
+    marker. Requiring ``firmware_version`` alone silently skipped every
+    S21 on Vnish 1.2.6.
     """
     url = f"http://{ip}/api/v1/info"
     session = requests.Session()
@@ -386,12 +391,19 @@ def _probe_vnish(ip: str) -> Optional[DiscoveredMiner]:
             data = resp.json()
         except Exception:
             return None
-        if not data.get("firmware_version"):
+        is_vnish = (
+            str(data.get("fw_name", "")).lower() == "vnish"
+            or bool(data.get("fw_version"))
+            or bool(data.get("firmware_version"))
+        )
+        if not is_vnish:
             return None
+        # Older builds put these at the top level; current ones nest them.
+        network = data.get("system", {}).get("network_status", {})
         return DiscoveredMiner(
             ip=ip, firmware="vnish",
-            hostname=data.get("hostname", ""),
-            mac_address=data.get("mac", ""),
+            hostname=network.get("hostname", data.get("hostname", "")),
+            mac_address=network.get("mac", data.get("mac", "")),
         )
     except (requests.ConnectionError, requests.Timeout, OSError):
         pass

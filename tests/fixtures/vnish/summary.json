@@ -1,27 +1,161 @@
 {
   "miner": {
-    "instant_hashrate": 145230.5,
-    "average_hashrate": 145100.0,
-    "hardware_errors": 12,
-    "uptime": 1728000,
-    "hr_nominal": 147000.0
-  },
-  "pools": [
-    {
-      "url": "stratum+tcp://pool.example.com:3333",
-      "user": "miner_worker.001",
-      "status": "Alive",
-      "accepted": 58432,
-      "rejected": 15,
-      "stale": 3,
-      "difficulty_accepted": 934912000.0,
-      "pool_rejected_pct": 0.026,
-      "pool_stale_pct": 0.005
-    }
-  ],
-  "power": {
-    "watts": 3245,
-    "efficiency": 22.35,
-    "power_consumption": 3250
+    "miner_status": {
+      "miner_state": "mining",
+      "miner_state_time": 147708
+    },
+    "miner_type": "Antminer S21 (Vnish 1.2.6-rc5)",
+    "hr_stock": 235651.0,
+    "average_hashrate": 179.911,
+    "instant_hashrate": 181.06065,
+    "hr_realtime": 181060.66,
+    "hr_nominal": 187892.94,
+    "hr_average": 179911.0,
+    "pcb_temp": {
+      "min": 52,
+      "max": 71
+    },
+    "chip_temp": {
+      "min": 67,
+      "max": 86
+    },
+    "power_consumption": 3869,
+    "power_usage": 3869,
+    "power_efficiency": 21.505077,
+    "hw_errors_percent": 0.014,
+    "hr_error": 26.224,
+    "hw_errors": 1494,
+    "devfee_percent": 2.799,
+    "devfee": 5068.265,
+    "pools": [
+      {
+        "id": 0,
+        "url": "sha256.stratum.examplepool.io:3333",
+        "pool_type": "UserPool",
+        "user": "exampleuser.worker1",
+        "status": "active",
+        "asic_boost": true,
+        "diff": "131K",
+        "accepted": 13070,
+        "rejected": 27,
+        "stale": 35,
+        "ls_diff": 131072.0,
+        "ls_time": "0:00:00",
+        "diffa": 5986123776.0,
+        "ping": 25
+      },
+      {
+        "id": 1,
+        "url": "sha256.stratum.examplepool.io:8080",
+        "pool_type": "UserPool",
+        "user": "exampleuser.worker1",
+        "status": "working",
+        "asic_boost": true,
+        "diff": "32.8K",
+        "accepted": 0,
+        "rejected": 0,
+        "stale": 0,
+        "ls_diff": 0.0,
+        "ls_time": "0",
+        "diffa": 0.0,
+        "ping": 0
+      },
+      {
+        "id": 2,
+        "url": "203.0.113.10:3333",
+        "pool_type": "UserPool",
+        "user": "exampleuser.worker1",
+        "status": "working",
+        "asic_boost": true,
+        "diff": "32.8K",
+        "accepted": 43,
+        "rejected": 0,
+        "stale": 51,
+        "ls_diff": 32768.0,
+        "ls_time": "1:14:52",
+        "diffa": 1409024.0,
+        "ping": 0
+      },
+      {
+        "id": 3,
+        "url": "DevFee",
+        "pool_type": "DevFee",
+        "user": "DevFee",
+        "status": "working",
+        "asic_boost": true,
+        "diff": "32.8K",
+        "accepted": 6395,
+        "rejected": 28,
+        "stale": 0,
+        "ls_diff": 32768.0,
+        "ls_time": "0:02:12",
+        "diffa": 174532096.0,
+        "ping": 0
+      }
+    ],
+    "cooling": {
+      "fan_num": 4,
+      "fans": [
+        {"id": 0, "rpm": 7000, "status": "ok", "max_rpm": 7000},
+        {"id": 1, "rpm": 7000, "status": "ok", "max_rpm": 7000},
+        {"id": 2, "rpm": 7000, "status": "ok", "max_rpm": 7000},
+        {"id": 3, "rpm": 7000, "status": "ok", "max_rpm": 7000}
+      ],
+      "settings": {
+        "mode": {
+          "name": "auto"
+        }
+      },
+      "fan_duty": 100
+    },
+    "chains": [
+      {
+        "id": 1,
+        "frequency": 460.0,
+        "voltage": 13300,
+        "power_consumption": 1289,
+        "hashrate_ideal": 62630.98,
+        "hashrate_rt": 59595.152,
+        "hashrate_percentage": 95.33,
+        "hr_error": 0.0,
+        "hw_errors": 3,
+        "pcb_temp": {"min": 52, "max": 70},
+        "chip_temp": {"min": 67, "max": 85},
+        "chip_statuses": {"red": 1, "orange": 7, "grey": 100},
+        "status": {"state": "mining"}
+      },
+      {
+        "id": 2,
+        "frequency": 460.0,
+        "voltage": 13300,
+        "power_consumption": 1289,
+        "hashrate_ideal": 62630.98,
+        "hashrate_rt": 58144.516,
+        "hashrate_percentage": 91.46,
+        "hr_error": 26.22,
+        "hw_errors": 1486,
+        "pcb_temp": {"min": 55, "max": 64},
+        "chip_temp": {"min": 70, "max": 79},
+        "chip_statuses": {"red": 5, "orange": 5, "grey": 98},
+        "status": {"state": "mining"}
+      },
+      {
+        "id": 3,
+        "frequency": 460.0,
+        "voltage": 13300,
+        "power_consumption": 1289,
+        "hashrate_ideal": 62630.98,
+        "hashrate_rt": 63320.984,
+        "hashrate_percentage": 100.46,
+        "hr_error": 0.0,
+        "hw_errors": 5,
+        "pcb_temp": {"min": 54, "max": 71},
+        "chip_temp": {"min": 69, "max": 86},
+        "chip_statuses": {"red": 0, "orange": 0, "grey": 108},
+        "status": {"state": "mining"}
+      }
+    ],
+    "found_blocks": 0,
+    "best_share": 19332518214
   }
 }

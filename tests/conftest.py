@@ -219,6 +219,12 @@ def vnish_fixtures() -> dict[str, Any]:
 
 
 @pytest.fixture()
+def vnish_faulted_summary() -> dict[str, Any]:
+    """Synthetic failure-state summary: stopped miner, dead fan, failed chain."""
+    return _load_vnish("summary_faulted.json")
+
+
+@pytest.fixture()
 def mock_vnish_api(vnish_fixtures) -> responses.RequestsMock:
     """Activate ``responses`` with all Vnish endpoints returning fixture data."""
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:

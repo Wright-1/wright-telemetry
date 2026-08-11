@@ -19,6 +19,25 @@ def _as_float(value: Any) -> float:
         return 0.0
 
 
+def _vnish_ver_from_miner_type(miner_type: str) -> str:
+    """Pull "1.2.6-rc5" out of "Antminer S21 (Vnish 1.2.6-rc5)"."""
+    if "(Vnish " in miner_type:
+        return miner_type.split("(Vnish ", 1)[1].rstrip(")").strip()
+    return ""
+
+
+def _share_pct(count: Any, pool: dict[str, Any]) -> float:
+    """Percentage ``count`` is of a Vnish pool's total submitted shares.
+
+    Vnish reports raw accepted/rejected/stale counts but none of the
+    percentages other firmwares hand us pre-computed.
+    """
+    total = sum(_as_float(pool.get(k, 0)) for k in ("accepted", "rejected", "stale"))
+    if total <= 0:
+        return 0.0
+    return round(_as_float(count) / total * 100, 3)
+
+
 @dataclass
 class MinerIdentity:
     uid: str
@@ -108,26 +127,42 @@ class CoolingData:
         return cls(fans=fans, highest_temperature=highest_temp)
 
     @classmethod
-    def from_vnish(cls, raw: dict[str, Any]) -> CoolingData:
+    def from_vnish(cls, summary_raw: dict[str, Any]) -> CoolingData:
+        """Parse ``GET /api/v1/summary``.
+
+        Fans live at ``miner.cooling.fans`` — ``/api/v1/status`` carries only
+        miner state flags. Vnish reports one duty cycle for the whole miner
+        (``cooling.fan_duty``, a percent) rather than a per-fan target, so
+        every fan gets the same ratio.
+        """
+        miner = summary_raw.get("miner", {})
+        cooling = miner.get("cooling", {})
+        duty = cooling.get("fan_duty", 0)
+        ratio = (duty / 100.0) if isinstance(duty, (int, float)) else 0.0
         fans = [
             FanReading(
                 position=f.get("id", 0),
                 rpm=f.get("rpm", 0),
-                target_speed_ratio=f.get("speed_pct", 0) / 100.0,
+                target_speed_ratio=ratio,
             )
-            for f in raw.get("fans", [])
+            for f in cooling.get("fans", [])
         ]
+        # miner.chip_temp.max is the hottest die across all chains; fall back to
+        # the per-chain maxima when the summary omits the roll-up.
         highest_temp: Optional[dict[str, Any]] = None
-        chains = raw.get("chains", [])
-        if chains:
-            all_temps: list[float] = []
-            for c in chains:
-                for key in ("temp_board", "temp_chip"):
-                    val = c.get(key)
+        candidates: list[float] = []
+        for block in (miner.get("chip_temp"), miner.get("pcb_temp")):
+            val = (block or {}).get("max")
+            if isinstance(val, (int, float)) and val > 0:
+                candidates.append(float(val))
+        if not candidates:
+            for chain in miner.get("chains", []):
+                for key in ("chip_temp", "pcb_temp"):
+                    val = (chain.get(key) or {}).get("max")
                     if isinstance(val, (int, float)) and val > 0:
-                        all_temps.append(float(val))
-            if all_temps:
-                highest_temp = {"value": max(all_temps), "unit": "C"}
+                        candidates.append(float(val))
+        if candidates:
+            highest_temp = {"value": max(candidates), "unit": "C"}
         return cls(fans=fans, highest_temperature=highest_temp)
 
     @classmethod
@@ -265,15 +300,22 @@ class HashrateData:
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
     @classmethod
-    def from_vnish(cls, raw: dict[str, Any]) -> HashrateData:
-        miner = raw.get("miner", {})
+    def from_vnish(cls, summary_raw: dict[str, Any]) -> HashrateData:
+        """Parse ``GET /api/v1/summary``.
+
+        Vnish reports the same hashrate twice in different units:
+        ``instant_hashrate``/``average_hashrate`` are TH/s while
+        ``hr_realtime``/``hr_average``/``hr_nominal`` are GH/s (per
+        ``info.hr_measure``). Read the GH/s pair so ``ghs_*`` is really GH/s —
+        reading ``instant_hashrate`` under-reports by 1000x.
+        """
+        miner = summary_raw.get("miner", {})
         miner_stats = {
-            "ghs_5s": miner.get("instant_hashrate", 0),
-            "ghs_av": miner.get("average_hashrate", 0),
-            "hardware_errors": miner.get("hardware_errors", 0),
+            "ghs_5s": miner.get("hr_realtime", 0),
+            "ghs_av": miner.get("hr_average", 0),
+            "hardware_errors": miner.get("hw_errors", 0),
             "hr_nominal": miner.get("hr_nominal", 0),
         }
-        pools = raw.get("pools", [])
         pool_stats = {
             "pools": [
                 {
@@ -283,17 +325,18 @@ class HashrateData:
                     "accepted": p.get("accepted", 0),
                     "rejected": p.get("rejected", 0),
                     "stale": p.get("stale", 0),
-                    "difficulty_accepted": p.get("difficulty_accepted", 0),
-                    "pool_rejected_pct": p.get("pool_rejected_pct", 0),
-                    "pool_stale_pct": p.get("pool_stale_pct", 0),
+                    # Vnish names accepted difficulty "diffa" and reports no
+                    # reject/stale percentages, so derive them from the counts.
+                    "difficulty_accepted": p.get("diffa", 0),
+                    "pool_rejected_pct": _share_pct(p.get("rejected", 0), p),
+                    "pool_stale_pct": _share_pct(p.get("stale", 0), p),
                 }
-                for p in pools
+                for p in miner.get("pools", [])
             ],
         }
-        power = raw.get("power", {})
         power_stats = {
-            "watts": power.get("watts", 0),
-            "efficiency": power.get("efficiency", 0),
+            "watts": miner.get("power_consumption", miner.get("power_usage", 0)),
+            "efficiency": miner.get("power_efficiency", 0),
         }
         return cls(miner_stats=miner_stats, pool_stats=pool_stats, power_stats=power_stats)
 
@@ -513,15 +556,29 @@ class UptimeData:
 
     @classmethod
     def from_vnish(cls, info_raw: dict[str, Any], summary_raw: dict[str, Any]) -> UptimeData:
+        """Parse ``GET /api/v1/info`` + ``GET /api/v1/summary``.
+
+        Uptime is ``miner.miner_status.miner_state_time`` (seconds since the
+        miner entered its current state). ``system.uptime`` exists but is a
+        display string ("1 days, 17:02"), so it is not used.
+        """
         miner = summary_raw.get("miner", {})
-        elapsed = miner.get("uptime", 0)
+        elapsed = miner.get("miner_status", {}).get("miner_state_time", 0)
+        network = info_raw.get("system", {}).get("network_status", {})
         return cls(
             bosminer_uptime_s=elapsed,
             system_uptime_s=elapsed,
-            hostname=info_raw.get("hostname", ""),
+            hostname=network.get("hostname", ""),
             bos_version={
-                "vnish": info_raw.get("firmware_version", ""),
-                "model": info_raw.get("model", ""),
+                # "fw_version" on this firmware; older builds used
+                # "firmware_version". Fall back to the version baked into
+                # summary's miner_type, e.g. "Antminer S21 (Vnish 1.2.6-rc5)".
+                "vnish": (
+                    info_raw.get("fw_version")
+                    or info_raw.get("firmware_version")
+                    or _vnish_ver_from_miner_type(miner.get("miner_type", ""))
+                ),
+                "model": info_raw.get("miner") or info_raw.get("model", ""),
             },
             platform=0,
             status=0,
@@ -688,32 +745,56 @@ class HashboardData:
         return cls(hashboards=boards)
 
     @classmethod
-    def from_vnish(cls, raw: dict[str, Any]) -> HashboardData:
-        boards: list[HashboardReading] = []
-        for chain in raw.get("chains", []):
-            board_id = chain.get("id", 0)
-            board_temp_val = chain.get("temp_board")
-            board_temp = {"value": board_temp_val, "unit": "C"} if board_temp_val is not None else None
-            chip_temp_val = chain.get("temp_chip")
-            highest_chip = {"value": chip_temp_val, "unit": "C"} if chip_temp_val is not None else None
+    def from_vnish(cls, summary_raw: dict[str, Any]) -> HashboardData:
+        """Parse ``GET /api/v1/summary`` — chains live at ``miner.chains``.
 
+        Vnish omits disconnected boards from the array entirely rather than
+        listing them as disabled, so a 3-board S21 showing 2 chains has lost
+        one. Per-chain temps are ``{"min": .., "max": ..}`` ranges; the max is
+        the useful end. There is no per-board serial or share count.
+        """
+        boards: list[HashboardReading] = []
+        for chain in summary_raw.get("miner", {}).get("chains", []):
+            board_id = chain.get("id", 0)
+
+            pcb_max = (chain.get("pcb_temp") or {}).get("max")
+            board_temp = {"value": pcb_max, "unit": "C"} if pcb_max is not None else None
+            chip_max = (chain.get("chip_temp") or {}).get("max")
+            highest_chip = {"value": chip_max, "unit": "C"} if chip_max is not None else None
+            pcb_min = (chain.get("pcb_temp") or {}).get("min")
+            lowest_inlet = {"value": pcb_min, "unit": "C"} if pcb_min is not None else None
+
+            # No chip count field — the per-chip status histogram covers every
+            # chip on the board, so its total is the count.
+            chip_statuses = chain.get("chip_statuses") or {}
+            chips_count = sum(
+                v for v in chip_statuses.values() if isinstance(v, (int, float))
+            )
+
+            freq = chain.get("frequency")
             boards.append(HashboardReading(
-                board_name=chain.get("name", f"Chain {board_id}"),
+                board_name=f"Chain {board_id}",
                 board_temp=board_temp,
                 highest_chip_temp=highest_chip,
-                lowest_inlet_temp=None,
+                lowest_inlet_temp=lowest_inlet,
                 highest_outlet_temp=None,
-                chips_count=chain.get("chips", 0),
+                chips_count=int(chips_count),
                 id=str(board_id),
-                enabled=chain.get("status", "") == "ok",
+                enabled=(chain.get("status") or {}).get("state") == "mining",
                 stats={
-                    "hashrate": chain.get("hashrate", 0),
-                    "accepted": chain.get("accepted", 0),
-                    "rejected": chain.get("rejected", 0),
+                    "hashrate": chain.get("hashrate_rt", 0),
+                    "hashrate_ideal": chain.get("hashrate_ideal", 0),
+                    "hashrate_percentage": chain.get("hashrate_percentage", 0),
                     "hardware_errors": chain.get("hw_errors", 0),
-                    "serial_number": chain.get("serial", ""),
+                    "voltage": chain.get("voltage", 0),
+                    "power_consumption": chain.get("power_consumption", 0),
+                    "chips_red": chip_statuses.get("red", 0),
+                    "chips_orange": chip_statuses.get("orange", 0),
+                    # Vnish exposes no per-board serial; kept for shape parity
+                    # with the other adapters.
+                    "serial_number": "",
                 },
-                freq_mhz=chain.get("freq"),
+                freq_mhz=float(freq) if freq else None,
             ))
         return cls(hashboards=boards)
 
@@ -891,16 +972,53 @@ class ErrorData:
         return cls(errors=entries)
 
     @classmethod
-    def from_vnish(cls, raw: dict[str, Any]) -> ErrorData:
-        entries = [
-            ErrorEntry(
-                message=e.get("message", ""),
-                timestamp=e.get("timestamp", ""),
-                error_codes=[{"code": e.get("code", ""), "severity": e.get("severity", "")}],
-                components=[{"type": e.get("component_type", ""), "id": e.get("component_id", "")}],
-            )
-            for e in raw.get("errors", [])
-        ]
+    def from_vnish(cls, summary_raw: dict[str, Any], status_raw: Optional[dict[str, Any]] = None) -> ErrorData:
+        """Synthesise errors from ``GET /api/v1/summary`` (+ optional status).
+
+        Vnish exposes no error or event feed, so failures are inferred the
+        same way from_sealminer does: only hard faults are reported, not
+        degradation. A miner running normally yields an empty list even when
+        it has some red chips (common and not actionable on its own).
+        """
+        miner = summary_raw.get("miner", {})
+        entries: list[ErrorEntry] = []
+
+        for fan in miner.get("cooling", {}).get("fans", []):
+            status = fan.get("status", "")
+            rpm = fan.get("rpm", 0)
+            if status not in ("ok", "") or rpm == 0:
+                entries.append(ErrorEntry(
+                    message=f"Fan {fan.get('id', '?')} is not running (status: {status or 'unknown'}, {rpm} rpm)",
+                    timestamp="",
+                    error_codes=[{"code": "FAN_FAILURE", "severity": "error"}],
+                    components=[{"type": "fan", "id": str(fan.get("id", ""))}],
+                ))
+
+        for chain in miner.get("chains", []):
+            state = (chain.get("status") or {}).get("state", "")
+            if state and state != "mining":
+                description = (chain.get("status") or {}).get("description", "")
+                detail = f" ({description})" if description else ""
+                entries.append(ErrorEntry(
+                    message=f"Chain {chain.get('id', '?')} is not mining -- state: {state}{detail}",
+                    timestamp="",
+                    error_codes=[{"code": "CHAIN_NOT_MINING", "severity": "error"}],
+                    components=[{"type": "hashboard", "id": str(chain.get("id", ""))}],
+                ))
+
+        # A stopped/idle miner is a fault in its own right; miner_state also
+        # appears on /api/v1/status, which is readable without authentication.
+        state = miner.get("miner_status", {}).get("miner_state", "")
+        if not state and status_raw:
+            state = status_raw.get("miner_state", "")
+        if state and state != "mining":
+            entries.append(ErrorEntry(
+                message=f"Miner is not mining -- state: {state}",
+                timestamp="",
+                error_codes=[{"code": "MINER_NOT_MINING", "severity": "error"}],
+                components=[{"type": "miner", "id": ""}],
+            ))
+
         return cls(errors=entries)
 
     @classmethod

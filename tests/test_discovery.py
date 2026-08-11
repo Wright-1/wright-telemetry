@@ -193,6 +193,35 @@ class TestProbeVnish:
         )
         assert _probe_vnish("10.0.0.12") is None
 
+    @responses.activate
+    def test_current_firmware_is_discovered(self, vnish_fixtures):
+        """Regression: Vnish 1.2.6 uses fw_version and nests hostname/MAC under
+        system.network_status. Requiring a top-level firmware_version skipped
+        every S21 on this firmware."""
+        responses.add(
+            responses.GET,
+            "http://10.0.0.13/api/v1/info",
+            json=vnish_fixtures["info"],
+            status=200,
+        )
+        result = _probe_vnish("10.0.0.13")
+        assert result is not None
+        assert result.firmware == "vnish"
+        assert result.hostname == "Antminer"
+        assert result.mac_address == "AA:BB:CC:11:22:33"
+
+    @responses.activate
+    def test_fw_name_alone_identifies_vnish(self):
+        responses.add(
+            responses.GET,
+            "http://10.0.0.14/api/v1/info",
+            json={"fw_name": "Vnish", "system": {"network_status": {"mac": "A1:B2:C3:D4:E5:F6"}}},
+            status=200,
+        )
+        result = _probe_vnish("10.0.0.14")
+        assert result is not None
+        assert result.mac_address == "A1:B2:C3:D4:E5:F6"
+
 
 # ---------------------------------------------------------------
 # firmware_types_for_collector
