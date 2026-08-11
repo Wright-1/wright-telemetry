@@ -515,7 +515,8 @@ def _probe_whatsminer(ip: str) -> Optional[DiscoveredMiner]:
             ip, "get_miner_info",
             info="ip,proto,netmask,gateway,dns,hostname,mac,ledstat,minersn,powersn",
         )
-        info = (info_data or {}).get("Msg") or {}
+        msg = (info_data or {}).get("Msg")
+        info = msg if isinstance(msg, dict) else {}
         hostname = info.get("hostname", "")
         mac = info.get("mac", "")
     except (socket.error, ValueError):
