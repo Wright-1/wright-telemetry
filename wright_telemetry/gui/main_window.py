@@ -25,6 +25,7 @@ from wright_telemetry.gui.pages.overview import OverviewPage
 from wright_telemetry.gui.pages.portal import PortalPage
 from wright_telemetry.gui.pages.settings import SettingsPage
 from wright_telemetry.gui.security_panel import SecurityPanel
+from wright_telemetry.gui.status_banner import StatusBanner
 from wright_telemetry import __version__
 from wright_telemetry.gui.sidebar import Sidebar
 
@@ -85,6 +86,10 @@ class MainWindow(QWidget):
         tb_layout.addWidget(tb_label)
         tb_layout.addStretch()
         root.addWidget(title_bar)
+
+        # Shared status banner (spans every page — e.g. fan detection mode)
+        self.banner = StatusBanner()
+        root.addWidget(self.banner)
 
         # Three-column body
         body = QHBoxLayout()
@@ -288,6 +293,8 @@ class MainWindow(QWidget):
         engine.signals.agent_info_error.connect(
             lambda _err: self.sidebar.set_portal_connected(False)
         )
+        engine.signals.fan_detection_changed.connect(self.banner.update_fan_detection)
+        engine.signals.fan_detection_error.connect(self.banner.show_error)
 
     # -------------------------------------------------------------------------
     # Provisioning callback (access-key page)

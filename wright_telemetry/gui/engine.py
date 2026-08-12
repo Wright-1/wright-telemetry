@@ -29,6 +29,8 @@ class EngineSignals(QObject):
     # ── Scheduler ────────────────────────────────────────────────────────────
     miner_count_changed = pyqtSignal(int)
     poll_cycle_complete = pyqtSignal()
+    fan_detection_changed = pyqtSignal(dict)    # {active, state, miner_count, dip_count}
+    fan_detection_error = pyqtSignal(str)       # human-readable failure message
 
     # ── Discovery / scan queue ────────────────────────────────────────────────
     scan_queued = pyqtSignal(str)               # subnet
@@ -349,6 +351,12 @@ class ScanningEngine:
                     # No specific subnets: re-queue everything already known
                     self.scan_manager.start_all()
 
+            elif etype == "discovery_pause":
+                self.scan_manager.pause()
+
+            elif etype == "discovery_resume":
+                self.scan_manager.resume()
+
             elif etype == "discovery_total":
                 self.signals.discovery_total_changed.emit(event["total"])
 
@@ -360,3 +368,24 @@ class ScanningEngine:
 
             elif etype == "agent_info_error":
                 self.signals.agent_info_error.emit(event["error"])
+
+            elif etype == "fan_detection_state":
+                self.signals.fan_detection_changed.emit({
+                    "active": True,
+                    "state": event.get("state", ""),
+                    "miner_count": event.get("miner_count", 0),
+                    "dip_count": event.get("dip_count", 0),
+                })
+
+            elif etype == "fan_detection_stopped":
+                if event.get("reason") == "no_miners":
+                    self.signals.fan_detection_error.emit(
+                        "Fan detection couldn't start — no miners discovered yet. "
+                        "Wait for discovery to finish, then try again."
+                    )
+                self.signals.fan_detection_changed.emit({
+                    "active": False,
+                    "state": "",
+                    "miner_count": 0,
+                    "dip_count": 0,
+                })

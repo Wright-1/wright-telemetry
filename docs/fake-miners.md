@@ -1,10 +1,10 @@
 # Fake Miners — Local Testing Without Real Hardware
 
-Run fake Braiins, Vnish, and LuxOS miners locally using Docker so that
-`wright-telemetry` can be exercised end-to-end without any real hardware.
-Each fake runs as its own container on an isolated bridge network
-(`172.28.0.0/24`), which means `wright-telemetry` can scan a whole subnet
-just as it would in production.
+Run fake Braiins, Vnish, LuxOS, and Bitmain miners locally using Docker so
+that `wright-telemetry` can be exercised end-to-end without any real
+hardware. Each fake runs as its own container on an isolated bridge network
+(`172.28.0.0/24` – `172.28.4.0/24`), which means `wright-telemetry` can scan
+a whole subnet just as it would in production.
 
 ### Prerequisites
 
@@ -35,11 +35,19 @@ just as it would in production.
 
 ### IP layout
 
-| Firmware | IPs              | Port |
-|----------|------------------|------|
-| Braiins  | `172.28.0.10–19` | 80   |
-| Vnish    | `172.28.0.20–29` | 80   |
-| LuxOS    | `172.28.0.30–39` | 4028 |
+Five subnets (`172.28.0.0/24` – `172.28.4.0/24`), each following the same
+per-subnet layout (subnet E has no LuxOS/Bitmain — only 18 test serials total):
+
+| Firmware | Last octet | Port |
+|----------|------------|------|
+| Braiins  | `.10`      | 80   |
+| Vnish    | `.20`      | 80   |
+| LuxOS    | `.30`      | 4028 |
+| Bitmain  | `.40`      | 80   |
+
+Each fake miner reports one of a fixed set of 18 test serial numbers via the
+`SERIAL` environment variable in `docker-compose.yml`, so the fleet matches a
+known list of serials rather than the auto-generated `*FAKE*` ones.
 
 ### Starting the fleet
 
@@ -53,7 +61,7 @@ Run setup and enter the fake subnet when prompted:
 
 ```bash
 wright-telemetry --setup
-# subnet: 172.28.0.0/24
+# subnets: 172.28.0.0/24, 172.28.1.0/24, 172.28.2.0/24, 172.28.3.0/24, 172.28.4.0/24
 ```
 
 ### Stopping
@@ -101,17 +109,38 @@ docker compose -f fake_miners/docker-compose.yml up -d --build
 
 ## Fan dip simulation (Wright Fan detection testing)
 
-To trigger a Wright Fan detection scenario, drop all fans to 0 RPM on demand:
+To trigger a Wright Fan detection scenario, simulate power getting cut to a
+single fan — RPM drops to 0 for `duration_s` seconds, then ramps back up to
+speed. This is a real switch flip: exactly one fan on the miner drops while
+the others hold steady, which is what the detection logic (`_detect_fan_dips`
+in `wright_telemetry/scheduler.py`) requires — a dip only counts if it's
+isolated to a single fan; more than one fan low at once is treated as
+ambiguous (power loss, hardware fault) and ignored.
+
+The easiest way to drive this is the `simulate_fan_dip.py` helper:
+```bash
+python fake_miners/simulate_fan_dip.py braiins-a --fan 2 --duration 8
+```
+See `python fake_miners/simulate_fan_dip.py --help` for random-fan/random-miner
+and looping modes, plus an `--all-fans` mode for testing that a whole-unit
+drop is correctly ignored.
 
 ### Per-miner control
 
-The same API is available on each individual miner's `/control` path:
+The same API is available on each individual miner's `/control` path. Add
+`"fan_position"` to target one fan; omit it to dip every fan on the miner at
+once (whole-unit power loss — the real detection logic will ignore this):
 ```bash
-# Status for one miner
+# Status for one miner (per-fan breakdown)
 curl http://172.28.0.10/control
 
-# Dip just that miner
+# Dip one fan on that miner
 curl -X POST http://172.28.0.10/control \
   -H 'Content-Type: application/json' \
-  -d '{"action": "fan_dip", "duration_s": 8}'
+  -d '{"action": "fan_dip", "duration_s": 8, "fan_position": 2}'
+
+# Restore that fan early
+curl -X POST http://172.28.0.10/control \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "fan_restore", "fan_position": 2}'
 ```
