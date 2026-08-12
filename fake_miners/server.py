@@ -46,12 +46,40 @@ main HTTP port:
 
 AUTHENTICATION
 --------------
-The server enforces token-based auth exactly as real hardware does:
-  • Before any login request arrives, all traffic is allowed.
-  • After the first successful POST to /api/v1/auth/login (Braiins) or
-    /api/v1/unlock (Vnish), every subsequent GET must carry the correct
+Each firmware has its OWN username and password, so a collector handed another
+firmware's credentials is rejected rather than silently served telemetry.
+Distinct usernames matter as much as distinct passwords — if every miner were
+"root", a mixed-up username would be invisible.  Defaults match the constants
+in tests/conftest.py and are overridable per container via the MINER_USERNAME /
+MINER_PASSWORD environment variables:
+
+    braiins  braiins-user:braiins-pw      bitmain    bitmain-user:bitmain-pw
+    vnish    vnish-user:vnish-pw          sealminer  sealminer-user:sealminer-pw
+    luxos    luxos-user:luxos-pw
+
+How much of each credential a firmware can enforce depends on its protocol:
+
+  • Braiins — POST /api/v1/auth/login carries {"username", "password"}; both
+    are checked, and a mismatch on either returns HTTP 401.
+  • Bitmain — HTTP Digest Auth (RFC 2617); the username is signed into the
+    response hash, so both halves are checked.
+  • Vnish — POST /api/v1/unlock carries only {"pw"}.  The username never
+    reaches the miner, so only the password can be enforced; the username is
+    still configured so config-level mix-ups are caught upstream.
+  • LuxOS / Sealminer — raw cgminer TCP on port 4028, which is unauthenticated
+    on real hardware too, so neither half is checked.
+
+Token flow for Braiins and Vnish, exactly as real hardware behaves:
+  • Before any login is attempted, all traffic is allowed — this mirrors a
+    miner with no password set, and keeps the no-credentials collector path
+    working.
+  • After a successful login, every subsequent GET must carry the correct
     token header.  Missing or wrong token → HTTP 401, which exercises the
     collector's re-auth / retry path.
+  • After a REJECTED login the miner locks and serves nothing anonymously.
+    Otherwise a collector holding the wrong password would still be served on
+    a fresh container, and the per-firmware passwords would only take effect
+    once some other collector happened to log in correctly first.
 """
 
 from __future__ import annotations
@@ -88,6 +116,40 @@ FIXTURES_DIR = Path(os.environ.get("FIXTURES_DIR", "/fixtures"))
 HTTP_PORT    = int(os.environ.get("HTTP_PORT",    "80"))
 LUXOS_PORT   = int(os.environ.get("LUXOS_PORT",   "4028"))
 CONTROL_PORT = int(os.environ.get("CONTROL_PORT", "8080"))
+
+# One distinct username AND password per firmware, matching the constants in
+# tests/conftest.py.  A collector handed another firmware's credentials gets a
+# 401 rather than silently collecting.  Distinct usernames matter as much as
+# distinct passwords: if every firmware used "root", a mixed-up username would
+# be invisible.  (Real firmware mostly does use "root" — these are distinct for
+# test isolation, not realism.)
+#
+# Only Braiins and Bitmain can actually enforce the username: Braiins posts
+# {"username", "password"} and Bitmain signs it into the Digest response.
+# Vnish posts only {"pw"} — its username never reaches the miner — and
+# LuxOS/Sealminer are unauthenticated cgminer TCP.
+_DEFAULT_USERNAMES = {
+    "braiins":   "braiins-user",
+    "luxos":     "luxos-user",
+    "vnish":     "vnish-user",
+    "bitmain":   "bitmain-user",
+    "sealminer": "sealminer-user",
+}
+
+_DEFAULT_PASSWORDS = {
+    "braiins":   "braiins-pw",
+    "luxos":     "luxos-pw",
+    "vnish":     "vnish-pw",
+    "bitmain":   "bitmain-pw",
+    "sealminer": "sealminer-pw",
+}
+
+MINER_USERNAME = os.environ.get(
+    "MINER_USERNAME", _DEFAULT_USERNAMES.get(FIRMWARE, "root"),
+)
+MINER_PASSWORD = os.environ.get(
+    "MINER_PASSWORD", _DEFAULT_PASSWORDS.get(FIRMWARE, "root"),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -986,17 +1048,55 @@ class _AuthState:
 
     def __init__(self) -> None:
         self._token: Optional[str] = None
+        self._locked = False
         self._lock = threading.Lock()
 
     def issue(self, token: str) -> None:
         with self._lock:
             self._token = token
+            self._locked = False
+
+    def reject(self) -> None:
+        """Record a login attempt that failed on bad credentials.
+
+        Without this, a miner that has never seen a *successful* login keeps
+        serving telemetry anonymously — so a collector configured with the
+        wrong firmware's password would still be served on a fresh container,
+        and the per-firmware passwords would only bite once someone happened
+        to log in correctly first.  A rejected login locks the miner instead.
+        """
+        with self._lock:
+            self._locked = True
 
     def check(self, header_value: str) -> bool:
         with self._lock:
+            if self._locked:
+                return False  # a login was attempted and failed → stay locked
             if self._token is None:
-                return True   # no login yet → allow
+                return True   # no login attempted yet → allow
             return header_value == self._token
+
+
+def _check_login_credentials(body: bytes) -> bool:
+    """Validate a Braiins/Vnish login body against this miner's credentials.
+
+    Braiins posts ``{"username": ..., "password": ...}`` to /api/v1/auth/login;
+    Vnish posts ``{"pw": ...}`` to /api/v1/unlock (no username).
+    """
+    try:
+        req = json.loads(body.decode()) if body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(req, dict):
+        return False
+
+    if FIRMWARE == "vnish":
+        return req.get("pw", "") == MINER_PASSWORD
+
+    return (
+        req.get("username", "") == MINER_USERNAME
+        and req.get("password", "") == MINER_PASSWORD
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1134,9 +1234,14 @@ def _make_http_handler(
                 self._send_json({"error": "not found"}, 404)
                 return
 
-            self._read_body()  # consume request body (credentials not validated)
+            body = self._read_body()
 
             if self.path == auth_path:
+                if not _check_login_credentials(body):
+                    logger.info("Rejected login on %s — bad credentials", self.path)
+                    auth.reject()
+                    self._send_json({"error": "invalid credentials"}, 401)
+                    return
                 auth.issue(fixtures[tok_fixture][tok_field])
 
             self._send_json(fixtures[key])
@@ -1339,7 +1444,9 @@ def main() -> None:
     )
 
     if FIRMWARE == "bitmain":
-        digest_auth = _DigestAuthState(username="root", password="root")
+        digest_auth = _DigestAuthState(
+            username=MINER_USERNAME, password=MINER_PASSWORD,
+        )
         ThreadingHTTPServer.allow_reuse_address = True
         server = ThreadingHTTPServer(
             ("0.0.0.0", HTTP_PORT),
@@ -1347,8 +1454,8 @@ def main() -> None:
         )
         logger.info(
             "fake-bitmain miner #%d  ready on HTTP port %d  "
-            "(Digest Auth root:root, control: /control)",
-            MINER_INDEX, HTTP_PORT,
+            "(Digest Auth %s:%s, control: /control)",
+            MINER_INDEX, HTTP_PORT, MINER_USERNAME, MINER_PASSWORD,
         )
         server.serve_forever()
 
@@ -1359,8 +1466,9 @@ def main() -> None:
             _make_http_handler(fixtures, fan_state, live_state, auth),
         )
         logger.info(
-            "fake-%s miner #%d  ready on HTTP port %d  (control: /control)",
-            FIRMWARE, MINER_INDEX, HTTP_PORT,
+            "fake-%s miner #%d  ready on HTTP port %d  "
+            "(login %s:%s, control: /control)",
+            FIRMWARE, MINER_INDEX, HTTP_PORT, MINER_USERNAME, MINER_PASSWORD,
         )
         server.serve_forever()
 

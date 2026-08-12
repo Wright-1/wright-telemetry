@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import traceback
-from typing import Any
+from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -210,16 +210,63 @@ class ScanningEngine:
         self.controller.push_gui_event({"event": "subnet_removed", "subnet": subnet})
 
     #TODO - we may want a unique credential per subnet at some point
-    def update_discovery_credentials(self, username: str, password: str) -> None:
-        """Persist default miner credentials used during subnet discovery."""
-        from wright_telemetry.config import encode_password, load_config, save_config
+    def update_firmware_credentials(
+        self, creds: dict[str, dict[str, Optional[str]]],
+    ) -> None:
+        """Persist per-firmware miner credentials used during subnet discovery.
+
+        *creds* maps ``firmware -> {"username": str, "password": str | None}``.
+        A ``password`` of ``None`` means "unchanged" and keeps whatever is
+        already stored; an empty string clears it.  Passwords are encoded here
+        so plaintext never crosses into the config layer from the UI.
+        """
+        from wright_telemetry.config import (
+            FIRMWARE_CREDENTIALS_KEY,
+            encode_password,
+            firmware_credentials_map,
+            load_config,
+            save_config,
+            save_firmware_credentials,
+        )
         cfg = load_config() or {}
-        disc = cfg.setdefault("discovery", {})
-        disc["default_username"] = username or "root"
-        if password:
-            disc["default_password_b64"] = encode_password(password)
-        else:
-            disc.pop("default_password_b64", None)
+        stored = (cfg.get("discovery") or {}).get(FIRMWARE_CREDENTIALS_KEY) or {}
+        resolved = firmware_credentials_map(cfg, list(creds))
+
+        encoded: dict[str, dict[str, str]] = {}
+        for firmware, entry in creds.items():
+            password = entry.get("password")
+            prior = stored.get(firmware)
+            prior = prior if isinstance(prior, dict) else None
+            username = entry.get("username") or ""
+            if (
+                password is None
+                and prior is None
+                and username == resolved[firmware]["username"]
+            ):
+                # Nothing edited and no entry of its own: leave this firmware on
+                # the global fallback instead of freezing today's global into an
+                # explicit entry.
+                continue
+            if password is None and (prior is None or "password_b64" not in prior):
+                # Username-only edit on a firmware with no password of its own:
+                # store the username and leave the password on the global
+                # fallback rather than freezing a copy of it here.
+                encoded[firmware] = {"username": username}
+                continue
+            if password is None:
+                password_b64 = prior.get("password_b64") or ""
+            elif password:
+                password_b64 = encode_password(password)
+            else:
+                password_b64 = ""
+            encoded[firmware] = {
+                "username": username,
+                "password_b64": password_b64,
+            }
+        if not encoded:
+            return
+
+        save_firmware_credentials(cfg, encoded)
         save_config(cfg)
         self._cfg = cfg
         self.controller.request_config_reload()

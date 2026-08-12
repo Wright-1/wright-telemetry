@@ -60,6 +60,44 @@ BITMAIN_URL = "http://192.168.1.200"
 SEALMINER_HOST = "192.168.1.210"
 WHATSMINER_HOST = "192.168.1.220"
 
+# One distinct username *and* password per firmware, mirroring the per-firmware
+# credentials users configure in the GUI/TUI.  Keeping both halves different
+# means a test fails loudly if either leaks from one firmware's miners to
+# another's — with every username set to "root", a mixed-up username is
+# invisible.  Real firmware mostly does use "root"; these are distinct for test
+# isolation, not realism.
+BRAIINS_USERNAME   = "braiins-user"
+LUXOS_USERNAME     = "luxos-user"
+VNISH_USERNAME     = "vnish-user"
+BITMAIN_USERNAME   = "bitmain-user"
+SEALMINER_USERNAME = "sealminer-user"
+WHATSMINER_USERNAME = "whatsminer-user"
+
+BRAIINS_PASSWORD   = "braiins-pw"
+LUXOS_PASSWORD     = "luxos-pw"
+VNISH_PASSWORD     = "vnish-pw"
+BITMAIN_PASSWORD   = "bitmain-pw"
+SEALMINER_PASSWORD = "sealminer-pw"
+WHATSMINER_PASSWORD = "whatsminer-pw"
+
+FIRMWARE_USERNAMES = {
+    "braiins":   BRAIINS_USERNAME,
+    "luxos":     LUXOS_USERNAME,
+    "vnish":     VNISH_USERNAME,
+    "bitmain":   BITMAIN_USERNAME,
+    "sealminer": SEALMINER_USERNAME,
+    "whatsminer": WHATSMINER_USERNAME,
+}
+
+FIRMWARE_PASSWORDS = {
+    "braiins":   BRAIINS_PASSWORD,
+    "luxos":     LUXOS_PASSWORD,
+    "vnish":     VNISH_PASSWORD,
+    "bitmain":   BITMAIN_PASSWORD,
+    "sealminer": SEALMINER_PASSWORD,
+    "whatsminer": WHATSMINER_PASSWORD,
+}
+
 
 def _load_braiins(name: str) -> dict[str, Any]:
     return json.loads((BRAIINS_FIXTURES_DIR / name).read_text())
@@ -145,7 +183,9 @@ def mock_braiins_api(braiins_fixtures) -> responses.RequestsMock:
 def braiins_collector():
     """Return an unauthenticated BraiinsCollector pointed at the test URL."""
     from wright_telemetry.collectors.braiins import BraiinsCollector
-    collector = BraiinsCollector(url=MINER_URL, username="root", password="test123")
+    collector = BraiinsCollector(
+        url=MINER_URL, username=BRAIINS_USERNAME, password=BRAIINS_PASSWORD,
+    )
     yield collector
     collector.close()
 
@@ -197,9 +237,15 @@ def mock_luxos_api(luxos_fixtures):
 
 @pytest.fixture()
 def luxos_collector():
-    """Return a LuxOSCollector pointed at the test host."""
+    """Return a LuxOSCollector pointed at the test host.
+
+    LuxOS talks raw cgminer TCP and ignores the password, but one is supplied
+    so every firmware's test miner carries its own distinct credential.
+    """
     from wright_telemetry.collectors.luxos import LuxOSCollector
-    return LuxOSCollector(url=LUXOS_HOST)
+    return LuxOSCollector(
+        url=LUXOS_HOST, username=LUXOS_USERNAME, password=LUXOS_PASSWORD,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +305,9 @@ def mock_vnish_api(vnish_fixtures) -> responses.RequestsMock:
 def vnish_collector():
     """Return an unauthenticated VnishCollector pointed at the test URL."""
     from wright_telemetry.collectors.vnish import VnishCollector
-    collector = VnishCollector(url=VNISH_URL, password="test123")
+    collector = VnishCollector(
+        url=VNISH_URL, username=VNISH_USERNAME, password=VNISH_PASSWORD,
+    )
     yield collector
     collector.close()
 
@@ -331,7 +379,9 @@ def mock_bitmain_api(bitmain_fixtures) -> responses.RequestsMock:
 def bitmain_collector():
     """Return a BitmainCollector pointed at the test URL."""
     from wright_telemetry.collectors.bitmain import BitmainCollector
-    collector = BitmainCollector(url=BITMAIN_URL, username="root", password="root")
+    collector = BitmainCollector(
+        url=BITMAIN_URL, username=BITMAIN_USERNAME, password=BITMAIN_PASSWORD,
+    )
     yield collector
     collector.close()
 
@@ -379,10 +429,15 @@ def mock_sealminer_api(sealminer_fixtures):
 
 @pytest.fixture()
 def sealminer_collector():
-    """Return a SealminerCollector pointed at the test host."""
-    from wright_telemetry.collectors.sealminer import SealminerCollector
-    return SealminerCollector(url=SEALMINER_HOST)
+    """Return a SealminerCollector pointed at the test host.
 
+    Sealminer talks raw cgminer TCP and ignores the password, but one is
+    supplied so every firmware's test miner carries its own distinct credential.
+    """
+    from wright_telemetry.collectors.sealminer import SealminerCollector
+    return SealminerCollector(
+        url=SEALMINER_HOST, username=SEALMINER_USERNAME, password=SEALMINER_PASSWORD,
+    )
 
 # ---------------------------------------------------------------------------
 # WhatsMiner fixtures

@@ -22,7 +22,11 @@ from wright_telemetry.api_client import WrightAPIClient
 from wright_telemetry.baseline import BaselineTracker
 from wright_telemetry.collectors.base import MinerCollector
 from wright_telemetry.collectors.factory import CollectorFactory
-from wright_telemetry.config import decode_password, load_config, mask_config
+from wright_telemetry.config import (
+    decode_password,
+    load_config,
+    resolve_firmware_credentials,
+)
 from wright_telemetry.mac_util import normalize_mac_address
 from wright_telemetry.consent import DEFAULT_CONSENT, consented_metrics
 from wright_telemetry.discovery import (
@@ -82,18 +86,23 @@ def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[st
     default_user   = discovery_cfg.get("default_username",    "root")
     default_pw_b64 = discovery_cfg.get("default_password_b64", "")
 
+    def _creds_for(firmware: str | None) -> tuple[str, str]:
+        """Credentials configured for *firmware*, falling back to the globals."""
+        return resolve_firmware_credentials(cfg, firmware)
+
     # A GUI ScanManager is wired up: its scans already keep the shared store
     # up to date, so just read from it instead of scanning again here.
     if controller is not None and getattr(controller, "has_scan_manager", False):
         raw = controller.get_discovered_miners()
-        return [
-            {
+        resolved: list[dict[str, Any]] = []
+        for m in raw:
+            fw_user, fw_pw_b64 = _creds_for(m.get("firmware"))
+            resolved.append({
                 **m,
-                "username":     m.get("username",     default_user),
-                "password_b64": m.get("password_b64", default_pw_b64),
-            }
-            for m in raw
-        ]
+                "username":     m.get("username",     fw_user),
+                "password_b64": m.get("password_b64", fw_pw_b64),
+            })
+        return resolved
 
     # No controller (standalone / headless): run a direct subnet scan.
     if not discovery_cfg.get("enabled", False):
@@ -105,7 +114,9 @@ def _resolve_miners(cfg: dict[str, Any], controller: Any = None) -> list[dict[st
     firmware_types = firmware_types_for_collector(collector_types)
     found = discover_miners(subnets=subnets, firmware_types=firmware_types)
     logger.info("Discovered %d miner(s) via subnet scan", len(found))
-    return discovered_to_miner_cfgs(found, default_user, default_pw_b64)
+    return discovered_to_miner_cfgs(
+        found, default_user, default_pw_b64, credentials_for=_creds_for,
+    )
 
 
 def _build_collectors(

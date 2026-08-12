@@ -755,21 +755,32 @@ def discovered_to_miner_cfgs(
     miners: list[DiscoveredMiner],
     default_username: str = "root",
     default_password_b64: str = "",
+    credentials_for: Optional[Callable[[str], tuple[str, str]]] = None,
 ) -> list[dict[str, Any]]:
-    """Convert a list of :class:`DiscoveredMiner` to miner config dicts."""
+    """Convert a list of :class:`DiscoveredMiner` to miner config dicts.
+
+    *credentials_for* resolves ``firmware -> (username, password_b64)`` so each
+    miner gets the credentials configured for its firmware.  When omitted, the
+    *default_username* / *default_password_b64* pair is applied to every miner.
+    """
     cfgs: list[dict[str, Any]] = []
     for m in miners:
+        if credentials_for is not None:
+            username, password_b64 = credentials_for(m.firmware)
+        else:
+            username, password_b64 = default_username, default_password_b64
+
         entry: dict[str, Any] = {
             "name": m.hostname or m.ip,
             "url": f"http://{m.ip}",
-            "username": default_username,
+            "username": username,
             "discovered": True,
             "firmware": m.firmware,
         }
         if m.mac_address:
             entry["mac_address"] = m.mac_address
-        if default_password_b64:
-            entry["password_b64"] = default_password_b64
+        if password_b64:
+            entry["password_b64"] = password_b64
         cfgs.append(entry)
     return cfgs
 

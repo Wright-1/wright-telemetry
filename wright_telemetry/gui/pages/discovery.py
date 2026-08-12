@@ -163,6 +163,78 @@ class _FirmwareToggle(QWidget):
         return self.toggle.isChecked()
 
 
+# ── Per-firmware credential row ───────────────────────────────────────────────
+
+_CRED_INPUT_STYLE = f"""
+    QLineEdit {{
+        background: {T.BG_WINDOW};
+        border: 1px solid {T.BORDER_DEFAULT};
+        border-radius: 6px;
+        padding: 6px 10px;
+        color: {T.TEXT_PRIMARY};
+        font-size: 13px;
+    }}
+    QLineEdit:focus {{
+        border-color: {T.ACCENT_BLUE};
+    }}
+"""
+
+_CRED_LABEL_W = 96
+
+
+class _CredentialRow(QWidget):
+    """Username + password inputs for a single firmware type."""
+
+    changed = pyqtSignal()
+
+    def __init__(self, key: str, label: str, username: str,
+                 has_saved_password: bool, parent=None):
+        super().__init__(parent)
+        self.key = key
+        # None until the user edits the field, so an untouched blank password
+        # never wipes the one already saved in config.
+        self._password_touched = False
+        self.setStyleSheet("background: transparent;")
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+
+        row.addWidget(_lbl(label, 12, 600, T.TEXT_PRIMARY, fixed_w=_CRED_LABEL_W))
+
+        self._username_input = QLineEdit()
+        self._username_input.setPlaceholderText("root")
+        self._username_input.setFont(make_font(12, 400))
+        self._username_input.setFixedHeight(34)
+        self._username_input.setStyleSheet(_CRED_INPUT_STYLE)
+        self._username_input.setText(username)
+        self._username_input.textChanged.connect(self.changed)
+        row.addWidget(self._username_input, 1)
+
+        self._password_input = QLineEdit()
+        self._password_input.setPlaceholderText(
+            "(saved — type to change)" if has_saved_password else "Leave blank if none"
+        )
+        self._password_input.setFont(make_font(12, 400))
+        self._password_input.setFixedHeight(34)
+        self._password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._password_input.setStyleSheet(_CRED_INPUT_STYLE)
+        self._password_input.textChanged.connect(self._on_password_edited)
+        row.addWidget(self._password_input, 1)
+
+    def _on_password_edited(self) -> None:
+        self._password_touched = True
+        self.changed.emit()
+
+    def values(self) -> dict[str, Optional[str]]:
+        """Current entry: ``password`` is None when the field was never edited."""
+        return {
+            "username": self._username_input.text().strip(),
+            # do not strip the password — it can legitimately contain spaces
+            "password": self._password_input.text() if self._password_touched else None,
+        }
+
+
 # ── Combined progress + subnet entry card ─────────────────────────────────────
 
 class _ProgressEntryCard(QWidget):
@@ -188,6 +260,7 @@ class _ProgressEntryCard(QWidget):
         self._engine = engine
         self._scanning = False
         self._fw_toggles: dict[str, _FirmwareToggle] = {}
+        self._cred_rows: dict[str, _CredentialRow] = {}
 
         # Debounce credential saves — wait 500ms after the last keystroke
         self._cred_debounce = QTimer()
@@ -318,91 +391,39 @@ class _ProgressEntryCard(QWidget):
 
         entry.addLayout(fw_and_warn)
 
-        # ── Credentials ────────────────────────────────────────────────────
+        # ── Credentials — one row per firmware ─────────────────────────────
         entry.addSpacing(4)
         entry.addWidget(_lbl("MINER CREDENTIALS", 10, 600, T.TEXT_MUTED))
         entry.addWidget(_lbl(
-            "Default username and password used when connecting to discovered miners.",
+            "Credentials used when connecting to discovered miners, per firmware. "
+            "Only enabled firmware types are shown.",
             11, 400, T.TEXT_MUTED, wrap=True,
         ))
 
-        _input_style = f"""
-            QLineEdit {{
-                background: {T.BG_WINDOW};
-                border: 1px solid {T.BORDER_DEFAULT};
-                border-radius: 6px;
-                padding: 6px 10px;
-                color: {T.TEXT_PRIMARY};
-                font-size: 13px;
-            }}
-            QLineEdit:focus {{
-                border-color: {T.ACCENT_BLUE};
-            }}
-        """
+        # Column headers, aligned with the inputs below
+        cred_hdr = QHBoxLayout()
+        cred_hdr.setSpacing(12)
+        cred_hdr.addWidget(_lbl("FIRMWARE", 10, 600, T.TEXT_MUTED, fixed_w=_CRED_LABEL_W))
+        cred_hdr.addWidget(_lbl("USERNAME", 10, 600, T.TEXT_MUTED), 1)
+        cred_hdr.addWidget(_lbl("PASSWORD", 10, 600, T.TEXT_MUTED), 1)
+        entry.addLayout(cred_hdr)
 
-        creds_row = QHBoxLayout()
-        creds_row.setSpacing(12)
+        from wright_telemetry.config import firmware_credentials_map
+        saved_creds = firmware_credentials_map(
+            engine._cfg if engine else {}, [k for k, _ in self.FIRMWARE_OPTIONS],
+        )
+        for key, label in self.FIRMWARE_OPTIONS:
+            saved = saved_creds[key]
+            row = _CredentialRow(
+                key, label,
+                username=saved["username"],
+                has_saved_password=bool(saved["password_b64"]),
+            )
+            row.changed.connect(self._on_credentials_changed)
+            self._cred_rows[key] = row
+            entry.addWidget(row)
 
-        # Username
-        user_col = QVBoxLayout()
-        user_col.setSpacing(4)
-        user_col.addWidget(_lbl("USERNAME", 10, 600, T.TEXT_MUTED))
-        self._username_input = QLineEdit()
-        self._username_input.setPlaceholderText("root")
-        self._username_input.setFont(make_font(12, 400))
-        self._username_input.setFixedHeight(36)
-        self._username_input.setStyleSheet(_input_style)
-        disc_cfg = engine._cfg.get("discovery", {}) if engine else {}
-        self._username_input.setText(disc_cfg.get("default_username", ""))
-        self._username_input.textChanged.connect(self._on_credentials_changed)
-        user_col.addWidget(self._username_input)
-        creds_row.addLayout(user_col, 1)
-
-        # Password with show/hide toggle
-        pw_col = QVBoxLayout()
-        pw_col.setSpacing(4)
-        pw_col.addWidget(_lbl("PASSWORD", 10, 600, T.TEXT_MUTED))
-        pw_wrap = QHBoxLayout()
-        pw_wrap.setSpacing(0)
-        self._password_input = QLineEdit()
-        self._password_input.setPlaceholderText("Leave blank if none")
-        self._password_input.setFont(make_font(12, 400))
-        self._password_input.setFixedHeight(36)
-        self._password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._password_input.setStyleSheet(_input_style)
-        # Pre-populate: if a password_b64 is saved decode and show placeholder dots
-        if disc_cfg.get("default_password_b64"):
-            self._password_input.setPlaceholderText("(saved — type to change)")
-        self._password_input.textChanged.connect(self._on_credentials_changed)
-        pw_wrap.addWidget(self._password_input, 1)
-
-        self._pw_toggle_btn = QPushButton("Show")
-        self._pw_toggle_btn.setFixedHeight(36)
-        self._pw_toggle_btn.setFixedWidth(52)
-        self._pw_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._pw_toggle_btn.setCheckable(True)
-        self._pw_toggle_btn.setFont(make_font(11, 600))
-        self._pw_toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {T.BG_WINDOW};
-                border: 1px solid {T.BORDER_DEFAULT};
-                border-radius: 6px;
-                color: {T.TEXT_MUTED};
-            }}
-            QPushButton:checked {{
-                color: {T.ACCENT_BLUE};
-                border-color: {T.ACCENT_BLUE};
-            }}
-            QPushButton:hover {{
-                background: {T.BG_CARD};
-            }}
-        """)
-        self._pw_toggle_btn.toggled.connect(self._on_pw_visibility_toggled)
-        pw_wrap.addWidget(self._pw_toggle_btn)
-        pw_col.addLayout(pw_wrap)
-        creds_row.addLayout(pw_col, 1)
-
-        entry.addLayout(creds_row)
+        self._sync_credential_row_visibility()
 
         # ── CIDR input — multi-value, comma-separated ──────────────────────
         entry.addSpacing(4)
@@ -477,6 +498,7 @@ class _ProgressEntryCard(QWidget):
             toggle.toggle.blockSignals(True)
             toggle.toggle.setChecked(key in active_types or not active_types)
             toggle.toggle.blockSignals(False)
+        self._sync_credential_row_visibility()
 
     # ── Progress slots ────────────────────────────────────────────────────────
 
@@ -578,27 +600,37 @@ class _ProgressEntryCard(QWidget):
     # ── Firmware / add handlers ───────────────────────────────────────────────
 
     def _on_firmware_changed(self) -> None:
+        self._sync_credential_row_visibility()
         if self._engine is None:
             return
         selected = [k for k, t in self._fw_toggles.items() if t.isChecked()]
         self._engine.update_firmware_types(selected)
 
+    def _sync_credential_row_visibility(self) -> None:
+        """Show a credential row only for firmware types that are enabled.
+
+        With no types enabled every firmware is scanned, so show them all.
+        """
+        any_checked = any(t.isChecked() for t in self._fw_toggles.values())
+        for key, row in self._cred_rows.items():
+            toggle = self._fw_toggles.get(key)
+            row.setVisible(not any_checked or (toggle is not None and toggle.isChecked()))
+
     def _on_credentials_changed(self) -> None:
         """Restart the debounce timer on every keystroke."""
         self._cred_debounce.start()
 
-    def _on_pw_visibility_toggled(self, visible: bool) -> None:
-        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
-        self._password_input.setEchoMode(mode)
-        self._pw_toggle_btn.setText("Hide" if visible else "Show")
-
     def _flush_credentials(self) -> None:
-        """Persist username/password to config via the engine."""
+        """Persist per-firmware credentials to config via the engine."""
         if self._engine is None:
             return
-        username = self._username_input.text().strip()
-        password = self._password_input.text()  # do not strip — passwords can have spaces
-        self._engine.update_discovery_credentials(username, password)
+        self._engine.update_firmware_credentials(
+            {
+                key: row.values()
+                for key, row in self._cred_rows.items()
+                if row.isVisibleTo(self)
+            }
+        )
 
     def _on_add(self) -> None:
         if self._engine is None:

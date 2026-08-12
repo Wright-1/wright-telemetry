@@ -258,7 +258,91 @@ def mask_config(cfg: dict[str, Any]) -> dict[str, Any]:
     discovery = masked.get("discovery", {})
     if "default_password_b64" in discovery:
         discovery["default_password_b64"] = SENSITIVE_MASK
+    for entry in (discovery.get(FIRMWARE_CREDENTIALS_KEY) or {}).values():
+        if isinstance(entry, dict) and "password_b64" in entry:
+            entry["password_b64"] = SENSITIVE_MASK
     return masked
+
+
+# ------------------------------------------------------------------
+# Per-firmware credentials
+# ------------------------------------------------------------------
+
+FIRMWARE_CREDENTIALS_KEY = "firmware_credentials"
+
+
+def resolve_firmware_credentials(
+    cfg: dict[str, Any],
+    firmware: Optional[str],
+) -> tuple[str, str]:
+    """Return ``(username, password_b64)`` to use for *firmware*.
+
+    Looks up ``discovery.firmware_credentials[firmware]`` and falls back to the
+    legacy global ``default_username`` / ``default_password_b64`` for any field
+    the firmware entry does not set.  Configs written before per-firmware
+    credentials existed therefore keep working unchanged.
+
+    A field that is *present but empty* means "this firmware has no password"
+    and is honoured as-is — only an absent field falls back to the global.
+    """
+    disc = cfg.get("discovery") or {}
+    fallback_user = disc.get("default_username") or "root"
+    fallback_pw = disc.get("default_password_b64") or ""
+
+    entry = (disc.get(FIRMWARE_CREDENTIALS_KEY) or {}).get(firmware or "")
+    if not isinstance(entry, dict):
+        return fallback_user, fallback_pw
+
+    return (
+        entry.get("username") or fallback_user,
+        entry.get("password_b64", fallback_pw),
+    )
+
+
+def firmware_credentials_map(
+    cfg: dict[str, Any],
+    firmware_types: Optional[list[str]] = None,
+) -> dict[str, dict[str, str]]:
+    """Return ``{firmware: {"username", "password_b64"}}`` for editing UIs.
+
+    Every firmware in *firmware_types* (default: all known types) gets an entry,
+    seeded from the legacy globals where no per-firmware value is stored yet.
+    """
+    types = firmware_types if firmware_types is not None else list(_KNOWN_FIRMWARE_TYPES)
+    out: dict[str, dict[str, str]] = {}
+    for fw in types:
+        username, password_b64 = resolve_firmware_credentials(cfg, fw)
+        out[fw] = {"username": username, "password_b64": password_b64}
+    return out
+
+
+def save_firmware_credentials(
+    cfg: dict[str, Any],
+    creds: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    """Merge *creds* into ``cfg["discovery"]["firmware_credentials"]`` in place.
+
+    Entries with an empty username *and* password are dropped so the firmware
+    falls back to the global defaults again.  An entry that omits the
+    ``password_b64`` key entirely is stored without one, keeping that firmware's
+    password on the global fallback (see ``resolve_firmware_credentials``).
+    Returns *cfg* for chaining.
+    """
+    disc = cfg.setdefault("discovery", {})
+    stored = disc.setdefault(FIRMWARE_CREDENTIALS_KEY, {})
+    for fw, entry in creds.items():
+        username = (entry.get("username") or "").strip()
+        password_b64 = entry.get("password_b64") or ""
+        if not username and not password_b64:
+            stored.pop(fw, None)
+            continue
+        new_entry: dict[str, str] = {"username": username or "root"}
+        if "password_b64" in entry:
+            new_entry["password_b64"] = password_b64
+        stored[fw] = new_entry
+    if not stored:
+        disc.pop(FIRMWARE_CREDENTIALS_KEY, None)
+    return cfg
 
 
 def print_config_summary(cfg: dict[str, Any], config_sent: Optional[bool] = None) -> None:
@@ -559,16 +643,36 @@ def _wizard_discovery(
         console.rule("[bold]Step 2 — Miner credentials[/]")
         console.print()
         console.print(
-            "  These credentials are applied to [bold]every[/] discovered miner.\n"
-            "  [dim]Leave blank if your miners have no password set.[/]"
+            "  Each firmware gets its own credentials, applied to every miner\n"
+            "  discovered with that firmware.\n"
+            "  [dim]Leave blank if your miners have no password set. An existing\n"
+            "  saved password is kept when you leave the field blank.[/]"
         )
-        console.print()
-        default_user   = _ask("Username", default=disc.get("default_username", "root"))
-        default_pw     = _ask_password("Password (hidden)")
-        default_pw_b64 = (
-            _encode_password(default_pw) if default_pw
-            else disc.get("default_password_b64", "")
-        )
+
+        existing_creds = firmware_credentials_map({"discovery": disc}, fw_labels)
+        fw_creds: dict[str, dict[str, str]] = {}
+        for fw_key in fw_labels:
+            prior = existing_creds[fw_key]
+            console.print()
+            console.print(f"  [bold cyan]{fw_key}[/]")
+            username = _ask("  Username", default=prior["username"])
+            pw = _ask_password("  Password (hidden)")
+            fw_creds[fw_key] = {
+                "username": username,
+                # blank input preserves whatever was already saved
+                "password_b64": _encode_password(pw) if pw else prior["password_b64"],
+            }
+
+        # Fold what was just typed into `disc` so it survives a "scan again"
+        # (which re-seeds the prompts from `disc`) and a "skip", which returns
+        # `disc` as-is.
+        save_firmware_credentials({"discovery": disc}, fw_creds)
+
+        # Legacy globals are left exactly as they were: they are the fallback
+        # for firmwares with no entry of their own, and deriving them from one
+        # firmware's secret would silently reuse it across the others.
+        default_user   = disc.get("default_username", "root")
+        default_pw_b64 = disc.get("default_password_b64", "")
 
         # ── Step 3: Expand subnets → host list ────────────────────────────────
         all_hosts: list[str] = []
@@ -668,6 +772,18 @@ def _wizard_discovery(
     if default_pw_b64:
         discovery_cfg["default_password_b64"] = default_pw_b64
 
+    # Carry over credentials for firmwares this run did not prompt for — the
+    # caller replaces the whole discovery section, so anything not seeded here
+    # would be dropped.
+    prior_creds = disc.get(FIRMWARE_CREDENTIALS_KEY)
+    if isinstance(prior_creds, dict) and prior_creds:
+        discovery_cfg[FIRMWARE_CREDENTIALS_KEY] = {
+            fw_key: dict(entry)
+            for fw_key, entry in prior_creds.items()
+            if isinstance(entry, dict)
+        }
+
+    save_firmware_credentials({"discovery": discovery_cfg}, fw_creds)
     return discovery_cfg
 
 
