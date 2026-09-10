@@ -42,6 +42,8 @@ config.json
 # Environment variables / secrets
 .env
 .env.*
+# ...but the committed template is safe and needs to ship
+!.env.example
 
 # Testing
 .pytest_cache/
