@@ -48,17 +48,32 @@ every POST.
 
 ---
 
-## Credentials are per-machine, not per-worktree
+## Credentials default to one global file — but you can split them
 
 The API key and facility ID come from redeeming an access key against the
-portal, and land in `~/.wright-telemetry/config.json` — a single global file.
-Entry is interactive only: the TUI prompt or the GUI's Access Key page. There
-is no CLI flag or env var.
+portal. *Entering* one is interactive only (the TUI prompt or the GUI's Access
+Key page), but *where it is stored* is configurable. `config.py` resolves in
+this order:
 
-So switching the agent between worktrees does **not** switch credentials. A key
-redeemed against one worktree's portal database won't be valid against
-another's, and you'll need to redeem again. Worth knowing before assuming the
-agent is broken.
+1. `$WRIGHT_CONFIG`
+2. `config.json` beside a frozen executable
+3. `~/.wright-telemetry/.config_path` (pointer file)
+4. `~/.wright-telemetry/config.json` (default)
+
+By default, then, every checkout shares one credential file — and a key
+redeemed against one worktree's portal database is **not** valid against
+another's, so switching worktrees means redeeming again and clobbering the
+previous key.
+
+Point `WRIGHT_CONFIG` at a per-worktree file to keep them separate:
+
+```bash
+export WRIGHT_CONFIG="$PWD/.wright-config.json"
+./scripts/dev.sh
+```
+
+(Add it to this worktree's `.env` to make it stick. `.wright-config.json` is
+not currently gitignored — put it outside the repo, or add the pattern first.)
 
 ---
 
